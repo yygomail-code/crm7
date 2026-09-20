@@ -1,0 +1,10 @@
+export const APP_NAME = 'CRM';
+export const APP_VERSION = '1.2';
+
+export const AUTHOR = 'Литвинов Антон';
+export const AUTHOR_LOCATION = 'Россия, г. Краснодар';
+
+export const CONTACTS: { label: string; value: string; href?: string }[] = [
+  { label: 'Телефон', value: '+7 909 498-13-22', href: 'tel:+79094981322' },
+  { label: 'E-mail', value: 's199266214@yandex.ru', href: 'mailto:s199266214@yandex.ru' }
+];

@@ -1,0 +1,33 @@
+# dependencies
+node_modules/
+
+# build output
+frontend/dist/
+frontend/.vite/
+
+# env / local config
+.env
+.env.*
+!**/.env.example
+**/conf/configuration.php
+
+# sensitive artifacts (audit)
+db-old/
+php_info/
+
+# uploaded production files
+site-old/back/upload_file/*
+!site-old/back/upload_file/.gitkeep
+
+# logs
+*.log
+api/var/
+api/storage/
+
+# os
+.DS_Store
+Thumbs.db
+
+# editors
+.idea/
+.vscode/
