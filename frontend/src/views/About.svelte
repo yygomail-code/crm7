@@ -1,6 +1,7 @@
 <script lang="ts">
   import { APP_NAME, APP_VERSION, AUTHOR, AUTHOR_LOCATION, CONTACTS } from '../lib/about';
   import Logo from '../lib/components/ui/Logo.svelte';
+  import { router } from '../lib/router.svelte';
 </script>
 
 <section class="page">
@@ -58,6 +59,27 @@
       <li>Корзина хранится на устройстве; после создания заявки она очищается.</li>
       <li>Главной страницы нет — сводная информация собрана в «Отчётах» (и в «Моих отчётах»).</li>
       <li>Программу можно добавить на главный экран телефона — она откроется как приложение.</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h2>Документы</h2>
+    <ul class="docs">
+      <li>
+        <button type="button" class="doc-link" onclick={() => router.navigate('/legal/privacy')}>
+          Политика обработки персональных данных
+        </button>
+      </li>
+      <li>
+        <button type="button" class="doc-link" onclick={() => router.navigate('/legal/terms')}>
+          Пользовательское соглашение
+        </button>
+      </li>
+      <li>
+        <button type="button" class="doc-link" onclick={() => router.navigate('/legal/consent')}>
+          Согласие на обработку персональных данных
+        </button>
+      </li>
     </ul>
   </div>
 
@@ -158,6 +180,30 @@
     flex-direction: column;
     gap: 6px;
     font-size: 14px;
+  }
+
+  .docs {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 14px;
+  }
+
+  .doc-link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .doc-link:hover {
+    text-decoration: underline;
   }
 
   .author {

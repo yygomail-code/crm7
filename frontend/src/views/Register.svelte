@@ -90,7 +90,9 @@
           Согласен с
           <button type="button" class="link" onclick={() => router.navigate('/legal/privacy')}>политикой обработки персональных данных</button>
           и
-          <button type="button" class="link" onclick={() => router.navigate('/legal/terms')}>пользовательским соглашением</button>
+          <button type="button" class="link" onclick={() => router.navigate('/legal/terms')}>пользовательским соглашением</button>,
+          даю
+          <button type="button" class="link" onclick={() => router.navigate('/legal/consent')}>согласие на обработку персональных данных</button>
         </span>
       </label>
 

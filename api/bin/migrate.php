@@ -34,9 +34,8 @@ foreach ($files as $file) {
     }
 
     $sql = (string) file_get_contents($file);
-    $statements = array_filter(array_map('trim', preg_split('/;\s*\n/', $sql) ?: []));
 
-    foreach ($statements as $statement) {
+    foreach (splitStatements($sql) as $statement) {
         $pdo->exec($statement);
     }
 
@@ -47,3 +46,75 @@ foreach ($files as $file) {
 }
 
 echo "migrations done\n";
+
+/**
+ * Разбирает SQL-файл на отдельные запросы, не трогая точки с запятой внутри
+ * строковых литералов и комментариев (тексты документов и шаблонов).
+ *
+ * @return array<int, string>
+ */
+function splitStatements(string $sql): array
+{
+    $statements = [];
+    $current = '';
+    $inString = false;
+    $length = strlen($sql);
+
+    for ($i = 0; $i < $length; $i++) {
+        $char = $sql[$i];
+
+        if ($inString) {
+            $current .= $char;
+
+            if ($char === '\\' && $i + 1 < $length) {
+                $current .= $sql[$i + 1];
+                $i++;
+            } elseif ($char === "'") {
+                if ($i + 1 < $length && $sql[$i + 1] === "'") {
+                    $current .= $sql[$i + 1];
+                    $i++;
+                } else {
+                    $inString = false;
+                }
+            }
+
+            continue;
+        }
+
+        if ($char === "'") {
+            $inString = true;
+            $current .= $char;
+            continue;
+        }
+
+        if ($char === '-' && $i + 1 < $length && $sql[$i + 1] === '-') {
+            while ($i < $length && $sql[$i] !== "\n") {
+                $i++;
+            }
+
+            $current .= "\n";
+            continue;
+        }
+
+        if ($char === ';') {
+            $statement = trim($current);
+
+            if ($statement !== '') {
+                $statements[] = $statement;
+            }
+
+            $current = '';
+            continue;
+        }
+
+        $current .= $char;
+    }
+
+    $statement = trim($current);
+
+    if ($statement !== '') {
+        $statements[] = $statement;
+    }
+
+    return $statements;
+}
