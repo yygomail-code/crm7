@@ -39,6 +39,7 @@
     border-radius: var(--radius-sm);
     font-size: 14px;
     font-weight: 500;
+    white-space: nowrap;
     cursor: pointer;
     transition: background 0.15s ease, border-color 0.15s ease;
   }

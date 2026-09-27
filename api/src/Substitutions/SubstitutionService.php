@@ -4,13 +4,17 @@ declare(strict_types=1);
 
 namespace App\Substitutions;
 
+use App\Core\Database;
 use App\Http\HttpException;
 use App\Notifications\NotificationService;
+use App\Repositories\ChatRepository;
+use App\Repositories\ClientManagerRepository;
 use App\Repositories\RequestAssignmentRepository;
 use App\Repositories\RequestHistoryRepository;
 use App\Repositories\RequestRepository;
 use App\Repositories\SubstitutionRepository;
 use App\Repositories\UserRepository;
+use Throwable;
 
 final class SubstitutionService
 {
@@ -20,13 +24,15 @@ final class SubstitutionService
         private readonly RequestAssignmentRepository $assignments = new RequestAssignmentRepository(),
         private readonly RequestHistoryRepository $history = new RequestHistoryRepository(),
         private readonly UserRepository $users = new UserRepository(),
+        private readonly ClientManagerRepository $managers = new ClientManagerRepository(),
+        private readonly ChatRepository $chat = new ChatRepository(),
         private readonly NotificationService $notifications = new NotificationService()
     ) {
     }
 
     public function list(array $user, array $capabilities): array
     {
-        $rows = in_array('clients.assign', $capabilities, true)
+        $rows = in_array('requests.view.all', $capabilities, true)
             ? $this->substitutions->all()
             : $this->substitutions->forParticipant((int) $user['ID']);
 
@@ -73,25 +79,52 @@ final class SubstitutionService
             throw new HttpException(422, 'validation_error', 'Дата начала позже даты окончания');
         }
 
-        if ($this->substitutions->hasOverlap($managerId, $from, $to)) {
-            throw new HttpException(409, 'substitution_overlap', 'У этого менеджера уже есть замещение на пересекающийся период');
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $this->substitutions->lockForManager($managerId);
+
+            if ($this->substitutions->hasOverlap($managerId, $from, $to)) {
+                throw new HttpException(409, 'substitution_overlap', 'У этого менеджера уже есть замещение на пересекающийся период');
+            }
+
+            $id = $this->substitutions->create([
+                'manager_id' => $managerId,
+                'substitute_id' => $substituteId,
+                'date_from' => $from,
+                'date_to' => $to,
+                'reason' => $reason !== '' ? mb_substr($reason, 0, 500) : null,
+                'created_by' => (int) $user['ID'],
+            ]);
+
+            $moved = $from <= date('Y-m-d') ? $this->moveOpenRequests($id, $managerId, $substituteId) : 0;
+
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+
+            throw $exception;
         }
-
-        $id = $this->substitutions->create([
-            'manager_id' => $managerId,
-            'substitute_id' => $substituteId,
-            'date_from' => $from,
-            'date_to' => $to,
-            'reason' => $reason !== '' ? mb_substr($reason, 0, 500) : null,
-            'created_by' => (int) $user['ID'],
-        ]);
-
-        $moved = $from <= date('Y-m-d') ? $this->moveOpenRequests($id, $managerId, $substituteId) : 0;
 
         $manager = $this->users->findById($managerId);
         $substitute = $this->users->findById($substituteId);
         $managerName = (string) ($manager['FULL_NAME'] ?? '');
         $substituteName = (string) ($substitute['FULL_NAME'] ?? '');
+
+        if ($from <= date('Y-m-d')) {
+            $this->syncClientChats($managerId, $substituteId);
+
+            foreach ($this->managers->clientIdsForManager($managerId) as $clientId) {
+                $this->notifications->notify(
+                    $clientId,
+                    'substitution.created',
+                    'Ваш менеджер: ' . $substituteName . ' (замещение)',
+                    $managerName . ' отсутствует с ' . $from . ' по ' . $to . '. Обращения ведёт ' . $substituteName . '.',
+                    null
+                );
+            }
+        }
 
         $this->notifications->notify(
             $substituteId,
@@ -199,6 +232,8 @@ final class SubstitutionService
         $managerId = (int) $substitution['manager_id'];
         $substituteId = (int) $substitution['substitute_id'];
 
+        $this->syncClientChats($managerId, $managerId);
+
         $manager = $this->users->findById($managerId);
         $managerName = (string) ($manager['FULL_NAME'] ?? '');
 
@@ -256,9 +291,21 @@ final class SubstitutionService
 
     private function requireAssign(array $capabilities): void
     {
-        if (!in_array('clients.assign', $capabilities, true)) {
+        if (!in_array('requests.view.all', $capabilities, true)) {
             throw new HttpException(403, 'forbidden', 'Недостаточно прав для управления замещениями');
         }
+    }
+
+    private function syncClientChats(int $managerId, int $chatManagerId): int
+    {
+        $synced = 0;
+
+        foreach ($this->managers->clientIdsForManager($managerId) as $clientId) {
+            $this->chat->syncManager($clientId, $chatManagerId);
+            $synced++;
+        }
+
+        return $synced;
     }
 
     private function assertManager(int $userId, string $message): void

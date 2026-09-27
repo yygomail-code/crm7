@@ -64,7 +64,9 @@ final class UserController extends ApiController
         [$user, $capabilities] = $this->context($request);
 
         $result = $this->admin->update($user, $capabilities, (int) ($params['id'] ?? 0), $request->bodyAll());
-        $this->audit($request, $user, 'user.update', 'user', (int) ($params['id'] ?? 0));
+        $this->audit($request, $user, 'user.update', 'user', (int) ($params['id'] ?? 0), [
+            'level' => $result['level'],
+        ]);
 
         return Response::ok($result);
     }
@@ -108,5 +110,17 @@ final class UserController extends ApiController
         }
 
         return Response::ok($this->admin->roles());
+    }
+
+    public function saveRole(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->admin->saveRole(
+            $user,
+            $capabilities,
+            (int) ($params['level'] ?? 0),
+            $request->bodyAll()
+        ));
     }
 }

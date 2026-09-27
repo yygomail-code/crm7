@@ -53,7 +53,7 @@ final class MailService
             'username' => (string) ($this->settings->get(self::KEYS['username']) ?? ''),
             'password' => $password,
             'from' => (string) ($this->settings->get(self::KEYS['from']) ?: $this->settings->get(self::KEYS['username']) ?? ''),
-            'from_name' => (string) ($this->settings->get(self::KEYS['from_name']) ?: 'CRM'),
+            'from_name' => (string) ($this->settings->get(self::KEYS['from_name']) ?: 'CRM7'),
         ];
     }
 
@@ -146,7 +146,7 @@ final class MailService
                 $config['from'],
                 $config['from_name'],
                 $to,
-                'Тестовое письмо CRM',
+                'Тестовое письмо CRM7',
                 "Это тестовое письмо.\nЕсли вы его получили, SMTP настроен корректно."
             );
         } catch (Throwable $exception) {
@@ -190,7 +190,7 @@ final class MailService
     {
         $template = $this->templates->findByCode($code);
 
-        $subject = (string) ($template['subject'] ?? 'Уведомление CRM');
+        $subject = (string) ($template['subject'] ?? 'Уведомление CRM7');
         $body = (string) ($template['body'] ?? "{title}\n\n{body}\n\n{link}");
 
         foreach ($vars as $key => $value) {
@@ -241,11 +241,12 @@ final class MailService
             return ['sent' => 0, 'failed' => 0, 'skipped' => true, 'reason' => 'Почта выключена'];
         }
 
+        $released = $this->queue->releaseStale();
         $sent = 0;
         $failed = 0;
         $errors = [];
 
-        foreach ($this->queue->pending($limit) as $item) {
+        foreach ($this->queue->claim($limit) as $item) {
             try {
                 (new SmtpMailer($config))->send(
                     $config['from'],
@@ -263,7 +264,7 @@ final class MailService
             }
         }
 
-        return ['sent' => $sent, 'failed' => $failed, 'errors' => $errors];
+        return ['sent' => $sent, 'failed' => $failed, 'released' => $released, 'errors' => $errors];
     }
 
     public function sendAttachment(

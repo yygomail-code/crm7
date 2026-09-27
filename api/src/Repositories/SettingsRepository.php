@@ -32,4 +32,24 @@ final class SettingsRepository
             $this->set((string) $key, $value === null ? null : (string) $value);
         }
     }
+
+    public function salesEnabled(): bool
+    {
+        return $this->get('sales.enabled') !== '0';
+    }
+
+    public function emailExportEnabled(): bool
+    {
+        return $this->get('mail.export_enabled') !== '0';
+    }
+
+    public function stockReserveEnabled(): bool
+    {
+        return $this->get('stock.reserve_enabled') === '1';
+    }
+
+    public function allowZeroStock(): bool
+    {
+        return $this->get('stock.allow_zero') === '1';
+    }
 }

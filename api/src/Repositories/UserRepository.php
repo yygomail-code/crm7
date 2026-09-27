@@ -91,12 +91,47 @@ final class UserRepository
         $stmt->execute([$id]);
     }
 
+    public function setActive(int $id, bool $active): void
+    {
+        $stmt = Database::pdo()->prepare('UPDATE users SET ACTIVE = ? WHERE ID = ?');
+        $stmt->execute([$active ? 'Y' : 'N', $id]);
+    }
+
+    public function updateContacts(int $id, array $data): void
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE users SET FULL_NAME = ?, COMPANY = ?, INN = ?, DOLGNOST = ?, PHONE = ?, EMAIL = ? WHERE ID = ?'
+        );
+        $stmt->execute([
+            $data['name'],
+            $data['company'] !== '' ? $data['company'] : null,
+            $data['inn'] !== '' ? $data['inn'] : null,
+            $data['position'] !== '' ? $data['position'] : null,
+            $data['phone'] !== '' ? $data['phone'] : null,
+            $data['email'] !== '' ? $data['email'] : null,
+            $id,
+        ]);
+    }
+
     public function findById(int $id): ?array
     {
         $stmt = Database::pdo()->prepare('SELECT * FROM users WHERE ID = ? LIMIT 1');
         $stmt->execute([$id]);
 
         return $stmt->fetch() ?: null;
+    }
+
+    public function countActiveAdmins(): int
+    {
+        $stmt = Database::pdo()->query(
+            "SELECT COUNT(*) FROM users
+             WHERE LEVEL >= 50
+               AND ACTIVE = 'Y'
+               AND STATUS = 'Y'
+               AND (reg_state IS NULL OR reg_state = 'active')"
+        );
+
+        return (int) $stmt->fetchColumn();
     }
 
     public function findByEmail(string $email): ?array
@@ -133,6 +168,20 @@ final class UserRepository
         $stmt->execute([$name, $id]);
     }
 
+    public function updateProfileContacts(int $id, array $data): void
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE users SET FULL_NAME = ?, DOLGNOST = ?, PHONE = ?, EMAIL = ? WHERE ID = ?'
+        );
+        $stmt->execute([
+            $data['name'],
+            $data['position'] !== '' ? $data['position'] : null,
+            $data['phone'] !== '' ? $data['phone'] : null,
+            $data['email'] !== '' ? $data['email'] : null,
+            $id,
+        ]);
+    }
+
     public function updateAvatar(int $id, ?string $path): void
     {
         $stmt = Database::pdo()->prepare('UPDATE users SET AVATAR_PATH = ? WHERE ID = ?');
@@ -152,16 +201,30 @@ final class UserRepository
         return $stmt->fetchAll() ?: [];
     }
 
-    public function listClients(string $query, ?array $managerIds, int $limit = 50, int $offset = 0): array
+    public function listClients(string $query, int $limit = 50, int $offset = 0, array $filters = []): array
     {
-        [$whereSql, $params] = $this->clientsWhere($query, $managerIds);
+        [$whereSql, $params] = $this->clientsWhere($query, $filters);
+
+        $order = match ((string) ($filters['sort'] ?? 'name_asc')) {
+            'name_desc' => 'u.FULL_NAME DESC',
+            'created_desc' => 'u.TIME_ADD DESC, u.FULL_NAME ASC',
+            'created_asc' => 'u.TIME_ADD ASC, u.FULL_NAME ASC',
+            'requests_desc' => 'requests_total DESC, u.FULL_NAME ASC',
+            'requests_asc' => 'requests_total ASC, u.FULL_NAME ASC',
+            default => 'u.FULL_NAME ASC',
+        };
 
         $sql = 'SELECT u.ID AS id, u.SID AS sid, u.LOGIN AS login, u.FULL_NAME AS name,
                        u.EMAIL AS email, u.PHONE AS phone, u.COMPANY AS company, u.INN AS inn,
-                       u.DOLGNOST AS position, u.LEVEL AS level
+                       u.DOLGNOST AS position, u.LEVEL AS level, u.ACTIVE AS active, u.reg_state AS reg_state,
+                       u.TIME_ADD AS registered_at,
+                       cm.manager_id AS manager_id, mu.FULL_NAME AS manager_name,
+                       (SELECT COUNT(*) FROM requests r WHERE r.client_id = u.ID) AS requests_total
                 FROM users u
+                LEFT JOIN client_managers cm ON cm.client_id = u.ID
+                LEFT JOIN users mu ON mu.ID = cm.manager_id
                 WHERE ' . $whereSql . '
-                ORDER BY u.FULL_NAME ASC
+                ORDER BY ' . $order . '
                 LIMIT ' . max(1, min(100, $limit)) . ' OFFSET ' . max(0, $offset);
 
         $stmt = Database::pdo()->prepare($sql);
@@ -170,38 +233,60 @@ final class UserRepository
         return $stmt->fetchAll() ?: [];
     }
 
-    public function countClients(string $query, ?array $managerIds): int
+    public function countClients(string $query, array $filters = []): int
     {
-        [$whereSql, $params] = $this->clientsWhere($query, $managerIds);
+        [$whereSql, $params] = $this->clientsWhere($query, $filters);
 
-        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM users u WHERE ' . $whereSql);
+        $stmt = Database::pdo()->prepare(
+            'SELECT COUNT(*) FROM users u
+             LEFT JOIN client_managers cm ON cm.client_id = u.ID
+             WHERE ' . $whereSql
+        );
         $stmt->execute($params);
 
         return (int) $stmt->fetchColumn();
     }
 
-    private function clientsWhere(string $query, ?array $managerIds): array
+    private function clientsWhere(string $query, array $filters = []): array
     {
-        $where = ["u.LEVEL = 5", "u.ACTIVE = 'Y'"];
+        $state = (string) ($filters['state'] ?? '');
+
+        $where = ['u.LEVEL = 5'];
         $params = [];
+
+        if ($state === 'active') {
+            $where[] = "u.reg_state = 'active' AND u.ACTIVE = 'Y'";
+        } elseif ($state === 'pending') {
+            $where[] = "u.reg_state = 'pending'";
+        } elseif ($state === 'blocked') {
+            $where[] = "u.reg_state = 'active' AND u.ACTIVE = 'N'";
+        } else {
+            $where[] = "u.reg_state IN ('active', 'pending')";
+        }
+
+        if (($filters['from'] ?? '') !== '') {
+            $where[] = 'u.TIME_ADD >= ?';
+            $params[] = (string) $filters['from'] . ' 00:00:00';
+        }
+
+        if (($filters['to'] ?? '') !== '') {
+            $where[] = 'u.TIME_ADD <= ?';
+            $params[] = (string) $filters['to'] . ' 23:59:59';
+        }
+
+        $manager = (string) ($filters['manager'] ?? '');
+
+        if ($manager === 'mine') {
+            $where[] = 'cm.manager_id = ?';
+            $params[] = (int) ($filters['manager_id'] ?? 0);
+        } elseif ($manager === 'none') {
+            $where[] = 'cm.client_id IS NULL';
+        }
 
         if ($query !== '') {
             $where[] = '(u.FULL_NAME LIKE ? OR u.EMAIL LIKE ? OR u.PHONE LIKE ? OR u.COMPANY LIKE ? OR u.LOGIN LIKE ? OR u.INN LIKE ?)';
             $like = '%' . $query . '%';
             array_push($params, $like, $like, $like, $like, $like, $like);
-        }
-
-        if ($managerIds !== null) {
-            if ($managerIds === []) {
-                $where[] = '1 = 0';
-            } else {
-                $placeholders = implode(',', array_fill(0, count($managerIds), '?'));
-                $where[] = 'EXISTS (SELECT 1 FROM manager_clients mc WHERE mc.client_id = u.ID AND mc.manager_id IN (' . $placeholders . '))';
-
-                foreach ($managerIds as $managerId) {
-                    $params[] = (int) $managerId;
-                }
-            }
         }
 
         return [implode(' AND ', $where), $params];

@@ -4,13 +4,18 @@ export interface CartItem {
   name: string;
   unit: string;
   quantity: number;
+  stockLevelId?: number | null;
 }
 
-const STORAGE_KEY = 'crm.cart';
+const STORAGE_PREFIX = 'crm.cart';
 
-function read(): CartItem[] {
+function storageKey(userId: number | null): string {
+  return userId === null ? `${STORAGE_PREFIX}.guest` : `${STORAGE_PREFIX}.${userId}`;
+}
+
+function read(userId: number | null): CartItem[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(storageKey(userId));
 
     if (!raw) {
       return [];
@@ -25,7 +30,18 @@ function read(): CartItem[] {
 }
 
 class CartStore {
-  items = $state<CartItem[]>(read());
+  private userId: number | null = null;
+
+  items = $state<CartItem[]>(read(null));
+
+  setUser(userId: number | null): void {
+    if (this.userId === userId) {
+      return;
+    }
+
+    this.userId = userId;
+    this.items = read(userId);
+  }
 
   get count(): number {
     return this.items.length;
@@ -115,7 +131,7 @@ class CartStore {
 
   private persist(): void {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.items));
+      localStorage.setItem(storageKey(this.userId), JSON.stringify(this.items));
     } catch {
       // приватный режим — корзина живёт до перезагрузки
     }

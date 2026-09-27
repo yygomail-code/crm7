@@ -2,14 +2,17 @@
   import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
   import {
+    getDatabaseSettings,
     getEmailSettings,
     getSystemSettings,
     listQueue,
     listTemplates,
+    saveDatabaseSettings,
     saveEmailSettings,
     saveSystemSettings,
     saveTemplate,
     sendTestEmail,
+    testDatabaseSettings,
     testEmailConnection
   } from '../lib/api/admin';
   import {
@@ -20,6 +23,7 @@
   } from '../lib/api/schedules';
   import { listManagers } from '../lib/api/requests';
   import type {
+    DatabaseSettings,
     EmailQueueItem,
     EmailSettings,
     EmailTemplate,
@@ -30,6 +34,8 @@
   import Button from '../lib/components/ui/Button.svelte';
   import Input from '../lib/components/ui/Input.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
+  import { appSettings } from '../lib/stores/app-settings.svelte';
+  import { emailTypeLabel, queueStatusLabel } from '../lib/labels';
   import { formatDateTime } from '../lib/format';
 
   let settings = $state<EmailSettings | null>(null);
@@ -51,6 +57,14 @@
   let slaReaction = $state('2');
   let slaResolution = $state('24');
   let spfDone = $state(false);
+  let salesEnabled = $state(true);
+  let emailExportEnabled = $state(true);
+  let stockReserveEnabled = $state(false);
+  let stockAllowZero = $state(false);
+
+  let db = $state<DatabaseSettings | null>(null);
+  let dbPort = $state('3306');
+  let dbPassword = $state('');
 
   let schedules = $state<ReportSchedule[]>([]);
   let managers = $state<ManagerItem[]>([]);
@@ -81,6 +95,16 @@
       slaReaction = String(system.sla_reaction_hours);
       slaResolution = String(system.sla_resolution_hours);
       spfDone = system.spf_checklist;
+      salesEnabled = system.sales_enabled;
+      emailExportEnabled = system.email_export_enabled;
+      stockReserveEnabled = system.stock_reserve_enabled;
+      stockAllowZero = system.stock_allow_zero;
+
+      db = await getDatabaseSettings();
+
+      if (db) {
+        dbPort = String(db.port);
+      }
 
       templates = await listTemplates();
       queue = await listQueue();
@@ -128,11 +152,25 @@ async function saveSystem(): Promise<void> {
     system = await saveSystemSettings({
       sla_reaction_hours: Number(slaReaction) || 2,
       sla_resolution_hours: Number(slaResolution) || 24,
-      spf_checklist: spfDone
+      spf_checklist: spfDone,
+      sales_enabled: salesEnabled,
+      email_export_enabled: emailExportEnabled,
+      stock_reserve_enabled: stockReserveEnabled,
+      stock_allow_zero: stockAllowZero
     });
 
     slaReaction = String(system.sla_reaction_hours);
     slaResolution = String(system.sla_resolution_hours);
+    salesEnabled = system.sales_enabled;
+    emailExportEnabled = system.email_export_enabled;
+    stockReserveEnabled = system.stock_reserve_enabled;
+    stockAllowZero = system.stock_allow_zero;
+    appSettings.set(
+      system.sales_enabled,
+      system.email_export_enabled,
+      system.stock_reserve_enabled,
+      system.stock_allow_zero
+    );
     notice = 'Настройки системы сохранены';
   } catch (cause) {
     error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить настройки';
@@ -178,6 +216,62 @@ async function saveSettings(): Promise<void> {
       notice = 'Соединение с SMTP установлено';
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось подключиться';
+    } finally {
+      busy = false;
+    }
+  }
+
+  function databasePayload(): {
+    host: string;
+    port: number;
+    database: string;
+    user: string;
+    password?: string;
+  } {
+    return {
+      host: db?.host ?? '',
+      port: Number(dbPort) || 0,
+      database: db?.database ?? '',
+      user: db?.user ?? '',
+      ...(dbPassword !== '' ? { password: dbPassword } : {})
+    };
+  }
+
+  async function checkDatabase(): Promise<void> {
+    busy = true;
+    error = '';
+    notice = '';
+
+    try {
+      const result = await testDatabaseSettings(databasePayload());
+      notice = `Подключение установлено (сервер ${result.server})`;
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : 'Не удалось подключиться к базе данных';
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function saveDatabase(): Promise<void> {
+    busy = true;
+    error = '';
+    notice = '';
+
+    try {
+      db = await saveDatabaseSettings(databasePayload());
+
+      if (db) {
+        dbPort = String(db.port);
+        dbPassword = '';
+
+        const warnings = db.warnings ?? [];
+        notice = [
+          'Настройки базы данных сохранены. При необходимости войдите заново — сессии прежней базы не действуют.',
+          ...warnings
+        ].join(' ');
+      }
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить настройки базы данных';
     } finally {
       busy = false;
     }
@@ -323,6 +417,41 @@ async function saveSettings(): Promise<void> {
     <div class="center"><Spinner size={26} /></div>
   {:else if settings}
     <div class="card">
+      <h2>База данных</h2>
+
+      {#if db}
+        <p class="hint">
+          Источник настроек:
+          {db.source === 'file' ? 'файл database.json (задан в этой форме)' : '.env и переменные окружения'} ·
+          <span class="mono">{db.file}</span>
+        </p>
+
+        <div class="grid">
+          <Input label="Сервер" bind:value={db.host} placeholder="127.0.0.1" />
+          <Input label="Порт" type="number" bind:value={dbPort} />
+          <Input label="База данных" bind:value={db.database} placeholder="crm_prod" />
+          <Input label="Пользователь" bind:value={db.user} placeholder="crm_app" />
+          <Input
+            label={db.has_password ? 'Пароль (задан, оставьте пустым чтобы не менять)' : 'Пароль'}
+            type="password"
+            bind:value={dbPassword}
+            autocomplete="new-password"
+          />
+        </div>
+
+        <div class="actions">
+          <Button loading={busy} onclick={saveDatabase}>Сохранить</Button>
+          <Button variant="ghost" loading={busy} onclick={checkDatabase}>Проверить подключение</Button>
+        </div>
+
+        <p class="hint">
+          Сохранение сначала проверяет подключение, затем пишет файл рядом с .env (прежний файл сохраняется как
+          database.json.bak). После смены базы данных войдите заново: сессии хранятся в базе.
+        </p>
+      {/if}
+    </div>
+
+    <div class="card">
       <h2>SMTP</h2>
 
       <label class="checkbox">
@@ -388,6 +517,56 @@ async function saveSettings(): Promise<void> {
         SPF/DKIM/DMARC для домена настроены
       </label>
 
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={salesEnabled} />
+        Продажи включены (оформление заявок и черновиков)
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={emailExportEnabled} />
+        Разрешить экспорт на электронную почту
+      </label>
+
+      {#if !emailExportEnabled}
+        <p class="hint">
+          В модалках экспорта не будет варианта «Отправить на почту» — доступно только скачивание файла.
+        </p>
+      {/if}
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={stockReserveEnabled} />
+        Уменьшать остатки складов при оформлении заявки (резервировать)
+      </label>
+
+      {#if stockReserveEnabled}
+        <p class="hint">
+          Остатки складов уменьшаются при создании заявки и изменении состава; при удалении позиции
+          или отмене заявки остаток возвращается.
+        </p>
+      {/if}
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={stockAllowZero} />
+        Разрешать позиции с нулевым или отрицательным остатком
+      </label>
+
+      {#if stockAllowZero}
+        <p class="hint">
+          В выборе позиций показываются позиции с нулевым остатком, их можно добавлять в заявку.
+        </p>
+      {:else}
+        <p class="hint">
+          Позиции с нулевым остатком скрыты в выборе; нельзя запросить больше, чем есть на складе.
+        </p>
+      {/if}
+
+      {#if !salesEnabled}
+        <p class="hint">
+          При выключенных продажах сотрудники и клиенты могут только просматривать остатки складов;
+          создание и правка заявок и черновиков недоступны.
+        </p>
+      {/if}
+
       {#if system}
         <ul class="steps">
           {#each system.spf_steps as step}
@@ -411,9 +590,10 @@ async function saveSettings(): Promise<void> {
             type="button"
             class="template-item"
             class:active={template.code === templateCode}
+            title={template.code}
             onclick={() => selectTemplate(template)}
           >
-            {template.code}
+            {emailTypeLabel(template.code)}
           </button>
         {/each}
       </div>
@@ -569,7 +749,7 @@ async function saveSettings(): Promise<void> {
               <span class="q-to">{item.to}</span>
               <span class="q-subject">{item.subject}</span>
               <span class="q-status" class:failed={item.status === 'failed'} class:pending={item.status === 'pending'}>
-                {item.status}
+                {queueStatusLabel(item.status)}
               </span>
               <span class="q-date">{formatDateTime(item.sent_at ?? item.created_at)}</span>
             </div>
@@ -589,6 +769,7 @@ async function saveSettings(): Promise<void> {
     flex-direction: column;
     gap: var(--space-4);
     max-width: 900px;
+    margin: 0 auto;
   }
 
   h1 {
@@ -713,11 +894,24 @@ async function saveSettings(): Promise<void> {
   }
 
   .s-del {
-    border: none;
-    background: none;
+    padding: 9px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
     color: var(--danger);
     cursor: pointer;
-    font-size: 13px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .s-del:hover:not(:disabled) {
+    border-color: var(--danger);
+    background: rgba(220, 38, 38, 0.06);
+  }
+
+  .s-del:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .template-item {
@@ -789,6 +983,12 @@ async function saveSettings(): Promise<void> {
     color: var(--muted);
     font-size: 13px;
     margin: 0;
+  }
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    word-break: break-all;
   }
 
   .alert {

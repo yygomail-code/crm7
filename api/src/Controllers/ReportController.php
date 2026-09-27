@@ -61,6 +61,37 @@ final class ReportController extends ApiController
         return new DownloadResponse($result['content'], $result['file_name'], $result['mime']);
     }
 
+    public function warehouses(Request $request): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+        $this->requireReports($capabilities);
+
+        return Response::ok($this->service->warehouses(
+            ReportsService::scopeFor($user, $capabilities),
+            $request->queryParam('from'),
+            $request->queryParam('to')
+        ));
+    }
+
+    public function warehousesExport(Request $request): Response|DownloadResponse
+    {
+        [$user, $capabilities] = $this->context($request);
+        $this->requireReports($capabilities);
+
+        $result = $this->service->warehousesExport(
+            ReportsService::scopeFor($user, $capabilities),
+            $request->queryParam('from'),
+            $request->queryParam('to'),
+            (string) $request->queryParam('format', 'csv')
+        );
+
+        if ($request->queryParam('email', '') === '1') {
+            return Response::ok(ExportMailer::send($user, $result));
+        }
+
+        return new DownloadResponse($result['content'], $result['file_name'], $result['mime']);
+    }
+
     public function export(Request $request): Response|DownloadResponse
     {
         [$user, $capabilities] = $this->context($request);

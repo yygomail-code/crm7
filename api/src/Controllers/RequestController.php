@@ -6,66 +6,14 @@ namespace App\Controllers;
 
 use App\Http\Request;
 use App\Http\Response;
-use App\Repositories\SavedFilterRepository;
 use App\Requests\RequestService;
 
 final class RequestController extends ApiController
 {
     public function __construct(
-        private readonly RequestService $service = new RequestService(),
-        private readonly SavedFilterRepository $filters = new SavedFilterRepository()
+        private readonly RequestService $service = new RequestService()
     ) {
         parent::__construct();
-    }
-
-    public function bulk(Request $request): Response
-    {
-        [$user, $capabilities] = $this->context($request);
-
-        return Response::ok($this->service->bulk($user, $capabilities, $request->bodyAll()));
-    }
-
-    public function savedFilters(Request $request): Response
-    {
-        [$user] = $this->context($request);
-
-        $items = array_map(static fn (array $row): array => [
-            'id' => (int) $row['id'],
-            'name' => (string) $row['name'],
-            'params' => json_decode((string) $row['params_json'], true) ?? [],
-            'created_at' => (string) $row['created_at'],
-        ], $this->filters->listForUser((int) $user['ID']));
-
-        return Response::ok(['items' => $items]);
-    }
-
-    public function saveFilter(Request $request): Response
-    {
-        [$user] = $this->context($request);
-
-        $name = trim((string) $request->input('name', ''));
-        $params = $request->input('params', []);
-
-        if ($name === '') {
-            throw new \App\Http\HttpException(422, 'validation_error', 'Укажите название фильтра');
-        }
-
-        if (!is_array($params)) {
-            $params = [];
-        }
-
-        $id = $this->filters->create((int) $user['ID'], $name, $params);
-
-        return Response::ok(['id' => $id, 'name' => $name, 'params' => $params], 201);
-    }
-
-    public function deleteFilter(Request $request, array $params): Response
-    {
-        [$user] = $this->context($request);
-
-        return Response::ok([
-            'deleted' => $this->filters->delete((int) ($params['id'] ?? 0), (int) $user['ID']),
-        ]);
     }
 
     public function statuses(Request $request): Response
@@ -123,6 +71,39 @@ final class RequestController extends ApiController
         $this->audit($request, $user, 'request.transition', 'request', (int) ($params['id'] ?? 0), [
             'to_status' => (string) $request->input('to_status', ''),
         ]);
+
+        return Response::ok($result);
+    }
+
+    public function edit(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        $result = $this->service->updateRequest($user, $capabilities, (int) ($params['id'] ?? 0), $request->bodyAll());
+        $this->audit($request, $user, 'request.edit', 'request', (int) ($params['id'] ?? 0));
+
+        return Response::ok($result);
+    }
+
+    public function meta(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        $result = $this->service->updateMeta($user, $capabilities, (int) ($params['id'] ?? 0), $request->bodyAll());
+        $this->audit($request, $user, 'request.meta', 'request', (int) ($params['id'] ?? 0), [
+            'priority' => $request->input('priority'),
+            'due_at' => $request->input('due_at'),
+        ]);
+
+        return Response::ok($result);
+    }
+
+    public function items(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        $result = $this->service->updateItems($user, $capabilities, (int) ($params['id'] ?? 0), $request->bodyAll());
+        $this->audit($request, $user, 'request.items', 'request', (int) ($params['id'] ?? 0));
 
         return Response::ok($result);
     }

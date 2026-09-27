@@ -2,10 +2,12 @@ import { apiRequest } from './client';
 import type {
   AdminUser,
   AuditEntry,
+  DatabaseSettings,
   EmailQueueItem,
   EmailSettings,
   EmailTemplate,
-  RoleInfo,
+  ReportSchedule,
+  RolesResponse,
   SystemSettings
 } from './types';
 
@@ -72,8 +74,42 @@ export function saveSystemSettings(payload: {
   sla_reaction_hours: number;
   sla_resolution_hours: number;
   spf_checklist: boolean;
+  sales_enabled: boolean;
+  email_export_enabled: boolean;
+  stock_reserve_enabled: boolean;
+  stock_allow_zero: boolean;
 }): Promise<SystemSettings> {
   return apiRequest<SystemSettings>('/admin/settings/system', {
+    method: 'POST',
+    auth: true,
+    body: payload
+  });
+}
+
+export interface DatabaseSettingsPayload {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password?: string;
+}
+
+export function getDatabaseSettings(): Promise<DatabaseSettings> {
+  return apiRequest<DatabaseSettings>('/admin/settings/database', { auth: true });
+}
+
+export function testDatabaseSettings(
+  payload: DatabaseSettingsPayload
+): Promise<{ ok: boolean; server: string }> {
+  return apiRequest<{ ok: boolean; server: string }>('/admin/settings/database/test', {
+    method: 'POST',
+    auth: true,
+    body: payload
+  });
+}
+
+export function saveDatabaseSettings(payload: DatabaseSettingsPayload): Promise<DatabaseSettings> {
+  return apiRequest<DatabaseSettings>('/admin/settings/database', {
     method: 'POST',
     auth: true,
     body: payload
@@ -154,8 +190,16 @@ export function resetUserPassword(id: number): Promise<{ id: number; password: s
   });
 }
 
-export function listRoles(): Promise<{ items: RoleInfo[] }> {
-  return apiRequest<{ items: RoleInfo[] }>('/roles', { auth: true });
+export function listRoles(): Promise<RolesResponse> {
+  return apiRequest<RolesResponse>('/roles', { auth: true });
+}
+
+export function saveRole(level: number, capabilities: string[]): Promise<RolesResponse> {
+  return apiRequest<RolesResponse>(`/roles/${level}`, {
+    method: 'POST',
+    auth: true,
+    body: { capabilities }
+  });
 }
 
 export function listAudit(params: {

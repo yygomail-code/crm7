@@ -1,24 +1,33 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { ApiError, apiRequest } from '../lib/api/client';
-  import { invalidateAvatar, loadAvatarUrl, updateProfile, uploadAvatar } from '../lib/api/profile';
+  import { deleteAvatar, updateProfile, uploadAvatar } from '../lib/api/profile';
+  import { avatarColor, avatarLetter, avatarName } from '../lib/avatar';
   import {
     getNotificationSettings,
     saveNotificationSettings,
     type NotificationSettingItem
   } from '../lib/api/notifications';
   import { auth } from '../lib/stores/auth.svelte';
+  import { avatars } from '../lib/stores/avatar.svelte';
   import Button from '../lib/components/ui/Button.svelte';
   import Input from '../lib/components/ui/Input.svelte';
 
-  let tab = $state<'profile' | 'notifications' | 'security'>('profile');
+  let tab = $state<'profile' | 'notifications' | 'security' | 'logout'>('profile');
+  let logoutBusy = $state('');
+  let logoutNotice = $state('');
+  let logoutError = $state('');
 
   let name = $state(auth.name);
+  let position = $state(auth.user?.position ?? '');
+  let phone = $state(auth.user?.phone ?? '');
+  let email = $state(auth.user?.email ?? '');
+  const isStaff = $derived(auth.level >= 10);
   let profileBusy = $state(false);
   let profileNotice = $state('');
   let profileError = $state('');
 
-  let avatarUrl = $state<string | null>(null);
+  const avatarUrl = $derived(avatars.url(auth.user?.id));
   let avatarBusy = $state(false);
   let avatarInput: HTMLInputElement | null = $state(null);
 
@@ -33,20 +42,13 @@
   let success = $state('');
   let loading = $state(false);
 
-  const initials = $derived(
-    (name || '')
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .join('')
-  );
+  const avatarSeed = $derived(avatarName(auth.user?.name, auth.user?.login ?? 'guest'));
+  const letter = $derived(avatarLetter(avatarSeed));
+  const avatarBg = $derived(avatarColor(avatarSeed));
 
   onMount(() => {
     if (auth.user) {
-      void loadAvatarUrl(auth.user.id).then((url) => {
-        avatarUrl = url;
-      });
+      void avatars.load(auth.user.id);
     }
 
     void getNotificationSettings()
@@ -64,15 +66,27 @@
     profileError = '';
 
     try {
-      const result = await updateProfile(name.trim());
+      const result = await updateProfile(
+        isStaff
+          ? {
+              name: name.trim(),
+              position: position.trim(),
+              phone: phone.trim(),
+              email: email.trim()
+            }
+          : { name: name.trim() }
+      );
 
       if (auth.user) {
         auth.user.name = result.name;
+        auth.user.position = result.position;
+        auth.user.phone = result.phone;
+        auth.user.email = result.email;
       }
 
-      profileNotice = 'Имя сохранено';
+      profileNotice = 'Данные сохранены';
     } catch (cause) {
-      profileError = cause instanceof ApiError ? cause.message : 'Не удалось сохранить имя';
+      profileError = cause instanceof ApiError ? cause.message : 'Не удалось сохранить данные';
     } finally {
       profileBusy = false;
     }
@@ -92,8 +106,7 @@
 
     try {
       await uploadAvatar(file);
-      invalidateAvatar(auth.user.id);
-      avatarUrl = await loadAvatarUrl(auth.user.id);
+      await avatars.refresh(auth.user.id);
       profileNotice = 'Фото обновлено';
     } catch (cause) {
       profileError = cause instanceof ApiError ? cause.message : 'Не удалось загрузить фото';
@@ -103,6 +116,26 @@
       if (avatarInput) {
         avatarInput.value = '';
       }
+    }
+  }
+
+  async function removeAvatar(): Promise<void> {
+    if (!auth.user || !confirm('Удалить фото профиля?')) {
+      return;
+    }
+
+    avatarBusy = true;
+    profileError = '';
+    profileNotice = '';
+
+    try {
+      await deleteAvatar();
+      await avatars.refresh(auth.user.id);
+      profileNotice = 'Фото удалено';
+    } catch (cause) {
+      profileError = cause instanceof ApiError ? cause.message : 'Не удалось удалить фото';
+    } finally {
+      avatarBusy = false;
     }
   }
 
@@ -118,6 +151,44 @@
     } finally {
       settingsBusy = false;
     }
+  }
+
+  async function logoutCurrent(): Promise<void> {
+    if (!confirm('Выйти из текущей сессии?')) {
+      return;
+    }
+
+    logoutBusy = 'current';
+    await auth.logout();
+    logoutBusy = '';
+  }
+
+  async function logoutOthers(): Promise<void> {
+    logoutBusy = 'others';
+    logoutNotice = '';
+    logoutError = '';
+
+    try {
+      const revoked = await auth.logoutOthers();
+
+      logoutNotice = revoked > 0
+        ? `Завершено других сессий: ${revoked}`
+        : 'Других активных сессий не было';
+    } catch (cause) {
+      logoutError = cause instanceof ApiError ? cause.message : 'Не удалось завершить другие сессии';
+    } finally {
+      logoutBusy = '';
+    }
+  }
+
+  async function logoutAll(): Promise<void> {
+    if (!confirm('Выйти из всех сессий на всех устройствах?')) {
+      return;
+    }
+
+    logoutBusy = 'all';
+    await auth.logoutAll();
+    logoutBusy = '';
   }
 
   async function submitPassword(event: SubmitEvent): Promise<void> {
@@ -151,10 +222,10 @@
   }
 </script>
 
-<section class="page">
+<section class="page" class:profile-layout={tab === 'profile'}>
   <h1>Профиль</h1>
 
-  <div class="tabs">
+  <div class="tabs tab-scroll">
     <button type="button" class:active={tab === 'profile'} onclick={() => (tab = 'profile')}>
       Профиль
     </button>
@@ -168,6 +239,9 @@
     <button type="button" class:active={tab === 'security'} onclick={() => (tab = 'security')}>
       Безопасность
     </button>
+    <button type="button" class:active={tab === 'logout'} onclick={() => (tab = 'logout')}>
+      Сессии
+    </button>
   </div>
 
   {#if tab === 'profile'}
@@ -179,7 +253,7 @@
         {#if avatarUrl}
           <img src={avatarUrl} alt="" />
         {:else}
-          <span>{initials || '•'}</span>
+          <span style:background={avatarBg}>{letter}</span>
         {/if}
       </div>
 
@@ -194,6 +268,9 @@
           />
           <span>{avatarBusy ? 'Загрузка…' : avatarUrl ? 'Заменить фото' : 'Добавить фото'}</span>
         </label>
+        {#if avatarUrl}
+          <Button variant="ghost" disabled={avatarBusy} onclick={() => void removeAvatar()}>Удалить фото</Button>
+        {/if}
         <p class="hint">jpg, png или webp, до 5 МБ</p>
       </div>
     </div>
@@ -209,12 +286,27 @@
 
       <Input label="Имя" bind:value={name} autocomplete="name" />
 
-      <div class="readonly">
-        <div><span>Логин</span><strong>{auth.user?.login ?? '—'}</strong></div>
-        <div><span>E-mail</span><strong>{auth.user?.email || '—'}</strong></div>
-        <div><span>Телефон</span><strong>{auth.user?.phone || '—'}</strong></div>
-        <div><span>Компания</span><strong>{auth.user?.company || '—'}</strong></div>
-      </div>
+      {#if isStaff}
+        <Input label="Должность" bind:value={position} autocomplete="organization-title" />
+        <Input label="Телефон" bind:value={phone} autocomplete="tel" />
+        <Input label="E-mail" type="email" bind:value={email} autocomplete="email" />
+
+        <div class="readonly">
+          <div><span>Логин</span><strong>{auth.user?.login ?? '—'}</strong></div>
+          <div><span>Компания</span><strong>{auth.user?.company || '—'}</strong></div>
+        </div>
+      {:else}
+        <div class="readonly">
+          <div><span>Логин</span><strong>{auth.user?.login ?? '—'}</strong></div>
+          <div><span>E-mail</span><strong>{auth.user?.email || '—'}</strong></div>
+          <div><span>Телефон</span><strong>{auth.user?.phone || '—'}</strong></div>
+          <div><span>Компания</span><strong>{auth.user?.company || '—'}</strong></div>
+        </div>
+        <p class="hint">
+          E-mail, телефон и компанию меняет ваш менеджер — напишите ему в чат или попросите в
+          комментарии к заявке.
+        </p>
+      {/if}
 
       <Button type="submit" loading={profileBusy} disabled={name.trim().length < 3}>Сохранить</Button>
     </form>
@@ -275,6 +367,31 @@
       </Button>
     </form>
   {/if}
+
+  {#if tab === 'logout'}
+    <div class="card">
+      <h2>Сессии и выход</h2>
+      <p class="hint">
+        Если вы работали с нескольких устройств, можно завершить только текущую сессию, все сессии кроме
+        текущей или все сразу — например, если входили с чужого компьютера.
+      </p>
+
+      {#if logoutNotice}<div class="alert success">{logoutNotice}</div>{/if}
+      {#if logoutError}<div class="alert error">{logoutError}</div>{/if}
+
+      <div class="logout-actions">
+        <Button variant="ghost" loading={logoutBusy === 'current'} onclick={() => void logoutCurrent()}>
+          Выйти из текущей сессии
+        </Button>
+        <Button variant="ghost" loading={logoutBusy === 'others'} onclick={() => void logoutOthers()}>
+          Выйти из всех сессий, кроме текущей
+        </Button>
+        <Button variant="danger" loading={logoutBusy === 'all'} onclick={() => void logoutAll()}>
+          Выйти из всех сессий
+        </Button>
+      </div>
+    </div>
+  {/if}
 </section>
 
 <style>
@@ -282,6 +399,23 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
+  }
+
+  @media (min-width: 900px) {
+    .page.profile-layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      align-items: start;
+    }
+
+    .page.profile-layout > h1,
+    .page.profile-layout > .tabs,
+    .page.profile-layout > .alert {
+      grid-column: 1 / -1;
+    }
   }
 
   h1 {
@@ -351,6 +485,14 @@
     object-fit: cover;
   }
 
+  .avatar-big span {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    color: #fff;
+  }
+
   .avatar-actions {
     display: flex;
     flex-direction: column;
@@ -377,7 +519,6 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
-    max-width: 520px;
   }
 
   .readonly {
@@ -418,6 +559,13 @@
     color: #047857;
   }
 
+  .logout-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
   .hint {
     margin: 0;
     color: var(--muted);
@@ -431,7 +579,6 @@
     border-radius: var(--radius-md);
     overflow: hidden;
     background: var(--surface);
-    max-width: 520px;
     margin-bottom: var(--space-3);
   }
 

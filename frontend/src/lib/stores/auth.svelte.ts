@@ -1,5 +1,7 @@
-import { apiRequest, setTokenProvider, setUnauthorizedHandler } from '../api/client';
+import { ApiError, apiRequest, setTokenProvider, setUnauthorizedHandler } from '../api/client';
 import type { LoginResponse, MeResponse, UserProfile } from '../api/types';
+import { clearHistory } from '../search-history';
+import { cart } from './cart.svelte';
 
 const TOKEN_KEY = 'crm_token';
 const USER_KEY = 'crm_user';
@@ -48,8 +50,12 @@ class AuthStore {
       try {
         const data = await apiRequest<MeResponse>('/auth/me', { auth: true });
         this.apply(data);
-      } catch {
-        this.clearSession();
+      } catch (cause) {
+        if (cause instanceof ApiError && cause.status === 401) {
+          this.clearSession();
+        } else {
+          cart.setUser(this.user?.id ?? null);
+        }
       }
     }
 
@@ -77,18 +83,40 @@ class AuthStore {
     this.clearSession();
   }
 
+  async logoutOthers(): Promise<number> {
+    const data = await apiRequest<{ revoked: number }>('/auth/logout-others', {
+      method: 'POST',
+      auth: true
+    });
+
+    return data.revoked;
+  }
+
+  async logoutAll(): Promise<void> {
+    try {
+      await apiRequest('/auth/logout-all', { method: 'POST', auth: true });
+    } catch {
+      // серверная сессия могла уже истечь
+    }
+
+    this.clearSession();
+  }
+
   clearSession(): void {
     this.token = null;
     this.user = null;
     this.capabilities = [];
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem(USER_KEY);
+    cart.setUser(null);
+    clearHistory();
   }
 
   private apply(data: MeResponse): void {
     this.user = data.user;
     this.capabilities = data.capabilities;
     localStorage.setItem(USER_KEY, JSON.stringify(data.user));
+    cart.setUser(data.user.id);
   }
 }
 

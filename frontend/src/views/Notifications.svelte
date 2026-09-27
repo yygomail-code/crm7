@@ -21,14 +21,19 @@
     'substitution.ended': '⇄',
     'user.pending': '☺',
     'user.approved': '☺',
-    'user.rejected': '☺'
+    'user.rejected': '☺',
+    'client.assigned': '☺',
+    'client.unassigned': '☺',
+    'client.transfer': '⇄',
+    'client.manager': '☺',
+    'chat.message': '✉'
   };
 
   let items = $state<NotificationItem[]>([]);
   let unread = $state(0);
   let total = $state(0);
   let page = $state(1);
-  const perPage = 20;
+  let perPage = $state(20);
   let loading = $state(true);
   let error = $state('');
   let busy = $state(false);
@@ -66,6 +71,12 @@
 
   function goToPage(next: number): void {
     page = next;
+    void load();
+  }
+
+  function changePerPage(value: number): void {
+    perPage = value;
+    page = 1;
     void load();
   }
 
@@ -138,7 +149,15 @@
   {#if loading}
     <div class="center"><Spinner size={26} /></div>
   {:else if items.length === 0}
-    <div class="empty">{filter === 'unread' ? 'Непрочитанных нет' : 'Уведомлений пока нет'}</div>
+    <div class="empty">
+      <p class="empty-title">
+        {filter === 'unread' ? 'Непрочитанных нет' : 'Уведомлений пока нет'}
+      </p>
+      <p class="empty-hint">
+        Здесь появятся события по вашим заявкам: смена статуса, комментарии менеджера,
+        назначение исполнителя и сообщения в чате.
+      </p>
+    </div>
   {:else}
     <div class="list">
       {#each items as item (item.id)}
@@ -158,7 +177,15 @@
       {/each}
     </div>
 
-    <Pagination page={page} perPage={perPage} total={total} loading={loading} onchange={goToPage} />
+    <Pagination
+    page={page}
+    perPage={perPage}
+    total={total}
+    loading={loading}
+    perPageOptions={[20, 50, 100]}
+    onchange={goToPage}
+    onperpage={changePerPage}
+  />
   {/if}
 </section>
 
@@ -305,6 +332,18 @@
     background: var(--surface);
     border: 1px dashed var(--border);
     border-radius: var(--radius-md);
+  }
+
+  .empty-title {
+    margin: 0;
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .empty-hint {
+    max-width: 460px;
+    margin: var(--space-2) auto 0;
+    font-size: 13px;
   }
 
   .center {

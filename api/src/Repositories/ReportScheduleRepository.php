@@ -89,4 +89,15 @@ final class ReportScheduleRepository
         $stmt = Database::pdo()->prepare('UPDATE report_schedules SET last_sent_at = NOW() WHERE ID = ?');
         $stmt->execute([$id]);
     }
+
+    public function claim(int $id, string $today): bool
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE report_schedules SET last_sent_at = NOW()
+             WHERE ID = ? AND (last_sent_at IS NULL OR DATE(last_sent_at) < ?)'
+        );
+        $stmt->execute([$id, $today]);
+
+        return $stmt->rowCount() > 0;
+    }
 }

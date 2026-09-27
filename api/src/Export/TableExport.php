@@ -52,8 +52,130 @@ final class TableExport
         ];
     }
 
-    private static function buildCsv(array $sections, array $meta): string
+    /**
+     * Как build(), но для XLS/XLSX каждый раздел пишется на отдельный лист.
+     * Форматы без листов (CSV/TXT/PDF) собираются как обычно.
+     *
+     * @param array<int, array{title?: string, headers: array<int, string>, rows: array<int, array<int, string>>}> $sections
+     * @param array<int, string> $meta
+     * @return array{content: string, file_name: string, mime: string}
+     */
+    public static function buildPerSheet(string $baseName, string $format, array $sections, array $meta = []): array
     {
+        $format = self::normalizeFormat($format);
+
+        if (!in_array($format, ['xls', 'xlsx'], true) || count($sections) <= 1) {
+            return self::build($baseName, $format, $sections, $meta);
+        }
+
+        $content = self::buildSpreadsheetPerSheet($sections, $meta, $format === 'xls' ? 'Xls' : 'Xlsx');
+
+        return [
+            'content' => $content,
+            'file_name' => $baseName . '.' . $format,
+            'mime' => self::MIME[$format],
+        ];
+    }
+
+    private static function buildSpreadsheetPerSheet(array $sections, array $meta, string $writerType): string
+    {
+        $spreadsheet = self::newSpreadsheet();
+        $spreadsheet->removeSheetByIndex(0);
+
+        $used = [];
+
+        foreach ($sections as $index => $section) {
+            $title = self::sheetTitle((string) ($section['title'] ?? ''), $index, $used);
+            $sheet = $spreadsheet->createSheet();
+            $sheet->setTitle($title);
+
+            $row = 1;
+
+            if ($index === 0 && $meta !== []) {
+                foreach ($meta as $line) {
+                    $sheet->setCellValue('A' . $row, (string) $line);
+                    $sheet->getStyle('A' . $row)->getFont()->setSize(9)->setColor(
+                        new \PhpOffice\PhpSpreadsheet\Style\Color('FF6B7280')
+                    );
+                    $row++;
+                }
+
+                $row++;
+            }
+
+            $headers = array_map('strval', $section['headers']);
+            $lastColumn = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex(max(1, count($headers)));
+
+            self::writeSpreadsheetRow($sheet, $headers, $row);
+            $sheet->getStyle('A' . $row . ':' . $lastColumn . $row)->getFont()->setBold(true);
+            $row++;
+
+            foreach ($section['rows'] as $data) {
+                self::writeSpreadsheetRow($sheet, array_map('strval', $data), $row);
+                $row++;
+            }
+
+            foreach (range('A', $lastColumn) as $column) {
+                $sheet->getColumnDimension($column)->setAutoSize(true);
+            }
+        }
+
+        if ($spreadsheet->getSheetCount() === 0) {
+            $spreadsheet->createSheet();
+        }
+
+        $spreadsheet->setActiveSheetIndex(0);
+
+        $writerClass = 'PhpOffice\\PhpSpreadsheet\\Writer\\' . $writerType;
+
+        ob_start();
+        (new $writerClass($spreadsheet))->save('php://output');
+        $content = (string) ob_get_clean();
+
+        $spreadsheet->disconnectWorksheets();
+
+        return $content;
+    }
+
+    private static function sheetTitle(string $title, int $index, array &$used): string
+    {
+        $title = trim(preg_replace('/[\\\\\\/\\*\\?\\:\\[\\]]/u', ' ', $title) ?? '');
+
+        if ($title === '') {
+            $title = 'Лист ' . ($index + 1);
+        }
+
+        $title = mb_substr($title, 0, 31, 'UTF-8');
+
+        if (isset($used[$title])) {
+            $used[$title]++;
+            $suffix = ' (' . $used[$title] . ')';
+            $title = mb_substr($title, 0, 31 - mb_strlen($suffix, 'UTF-8'), 'UTF-8') . $suffix;
+        } else {
+            $used[$title] = 1;
+        }
+
+        return $title;
+    }
+
+    private static function newSpreadsheet(): \PhpOffice\PhpSpreadsheet\Spreadsheet
+    {
+        $vendor = (string) Config::get('LEGACY_VENDOR', dirname(__DIR__, 3) . '/site-old/back/vendor/autoload.php');
+
+        if (!is_file($vendor)) {
+            throw new HttpException(422, 'excel_unavailable', 'Excel недоступен: библиотека не найдена, выберите CSV, TXT или PDF');
+        }
+
+        require_once $vendor;
+
+        if (!class_exists('PhpOffice\\PhpSpreadsheet\\Spreadsheet')) {
+            throw new HttpException(422, 'excel_unavailable', 'Excel недоступен: библиотека не найдена, выберите CSV, TXT или PDF');
+        }
+
+        return new \PhpOffice\PhpSpreadsheet\Spreadsheet();
+    }
+
+    private static function buildCsv(array $sections, array $meta): string    {
         $lines = [];
 
         foreach ($meta as $line) {
@@ -183,12 +305,12 @@ final class TableExport
                 $row++;
             }
 
-            $sheet->fromArray($headers, null, 'A' . $row);
+            self::writeSpreadsheetRow($sheet, $headers, $row);
             $sheet->getStyle('A' . $row . ':' . $lastColumn . $row)->getFont()->setBold(true);
             $row++;
 
             foreach ($section['rows'] as $data) {
-                $sheet->fromArray(array_map('strval', $data), null, 'A' . $row);
+                self::writeSpreadsheetRow($sheet, array_map('strval', $data), $row);
                 $row++;
             }
 
@@ -221,9 +343,47 @@ final class TableExport
         }
     }
 
+    private static function writeSpreadsheetRow(
+        \PhpOffice\PhpSpreadsheet\Worksheet\Worksheet $sheet,
+        array $values,
+        int $row
+    ): void {
+        $column = 1;
+
+        foreach ($values as $value) {
+            $text = (string) $value;
+            $coordinate = \PhpOffice\PhpSpreadsheet\Cell\Coordinate::stringFromColumnIndex($column) . $row;
+
+            if (self::looksLikeFormula($text)) {
+                $sheet->setCellValueExplicit(
+                    $coordinate,
+                    $text,
+                    \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING
+                );
+            } else {
+                $sheet->setCellValue($coordinate, $text);
+            }
+
+            $column++;
+        }
+    }
+
+    private static function looksLikeFormula(string $value): bool
+    {
+        if ($value === '' || !in_array($value[0], ['=', '+', '-', '@'], true)) {
+            return false;
+        }
+
+        return preg_match('/^[+-]?\d+(?:[.,]\d+)?$/', $value) !== 1;
+    }
+
     private static function csvCell(string $value): string
     {
         $value = str_replace(['"', "\r", "\n"], ['""', ' ', ' '], $value);
+
+        if (self::looksLikeFormula($value)) {
+            $value = "'" . $value;
+        }
 
         return str_contains($value, ';') ? '"' . $value . '"' : $value;
     }

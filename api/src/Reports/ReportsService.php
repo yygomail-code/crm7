@@ -40,7 +40,7 @@ final class ReportsService
         [$scopeSql, $scopeParams] = $this->scopeSql($scope);
 
         $totals = $this->reports->totals($scopeSql, $scopeParams, $fromDate, $toDate);
-        $totals['unassigned'] = $this->reports->unassigned($scopeSql, $scopeParams);
+        $totals['unassigned'] = $this->reports->unassigned();
 
         $byStatus = array_map(static fn (array $row): array => [
             'code' => (string) $row['status_id'],
@@ -94,7 +94,7 @@ final class ReportsService
             'query' => (string) $row['meta'],
             'count' => (int) $row['cnt'],
             'zero_results' => (int) $row['zero_results'],
-        ], $this->reports->stockSearches($fromDate, $toDate));
+        ], $this->reports->stockSearches($fromDate, $toDate, $managerIds));
 
         $zeroResults = array_values(array_filter($searches, static fn (array $row): bool => $row['zero_results'] > 0));
         usort($zeroResults, static fn (array $a, array $b): int => $b['zero_results'] <=> $a['zero_results']);
@@ -112,7 +112,7 @@ final class ReportsService
                 'views' => (int) $row['views'],
                 'searches' => (int) $row['searches'],
                 'exports' => (int) $row['exports'],
-            ], $this->reports->stockActivityByWarehouse($fromDate, $toDate)),
+            ], $this->reports->stockActivityByWarehouse($fromDate, $toDate, $managerIds)),
             'clients' => array_map(static fn (array $row): array => [
                 'client_id' => (int) $row['client_id'],
                 'client_name' => (string) $row['client_name'],
@@ -130,7 +130,7 @@ final class ReportsService
                 'user_level' => (int) $row['user_level'],
                 'warehouse_name' => (string) ($row['warehouse_name'] ?? ''),
                 'created_at' => (string) $row['created_at'],
-            ], $this->reports->stockRecentActivity($fromDate, $toDate)),
+            ], $this->reports->stockRecentActivity($fromDate, $toDate, $managerIds)),
         ];
     }
 
@@ -173,6 +173,146 @@ final class ReportsService
             $sections,
             $meta
         );
+    }
+
+    public function warehouses(array $scope, string $from, string $to): array
+    {
+        [$fromDate, $toDate] = $this->normalizePeriod($from, $to);
+        [$scopeSql, $scopeParams] = $this->scopeSql($scope);
+
+        $rows = [];
+
+        foreach ($this->reports->warehouseStock() as $row) {
+            $rows[(int) $row['warehouse_id']] = [
+                'warehouse_id' => (int) $row['warehouse_id'],
+                'warehouse_name' => (string) $row['warehouse_name'],
+                'positions' => (int) $row['positions'],
+                'zero_positions' => (int) $row['zero_positions'],
+                'stock_quantity' => (float) $row['stock_quantity'],
+                'requests_count' => 0,
+                'clients_count' => 0,
+                'requested_quantity' => 0.0,
+            ];
+        }
+
+        foreach ($this->reports->warehouseRequests($scopeSql, $scopeParams, $fromDate, $toDate) as $row) {
+            $id = $row['warehouse_id'] !== null ? (int) $row['warehouse_id'] : 0;
+
+            if (!isset($rows[$id])) {
+                $rows[$id] = [
+                    'warehouse_id' => $id,
+                    'warehouse_name' => (string) ($row['warehouse_name'] ?? '') !== ''
+                        ? (string) $row['warehouse_name']
+                        : 'Без склада',
+                    'positions' => 0,
+                    'zero_positions' => 0,
+                    'stock_quantity' => 0.0,
+                    'requests_count' => 0,
+                    'clients_count' => 0,
+                    'requested_quantity' => 0.0,
+                ];
+            }
+
+            $rows[$id]['requests_count'] = (int) $row['requests_count'];
+            $rows[$id]['clients_count'] = (int) $row['clients_count'];
+            $rows[$id]['requested_quantity'] = (float) $row['requested_quantity'];
+        }
+
+        $topItems = array_map(static fn (array $row): array => [
+            'name' => (string) $row['name'],
+            'total_quantity' => (float) $row['total_quantity'],
+            'requests_count' => (int) $row['requests_count'],
+            'by_warehouse' => [],
+        ], $this->reports->warehouseTopItems($scopeSql, $scopeParams, $fromDate, $toDate));
+
+        if ($topItems !== []) {
+            $index = [];
+
+            foreach ($topItems as $position => $item) {
+                $index[$item['name']] = $position;
+            }
+
+            $breakdown = $this->reports->warehouseTopItemsBreakdown(
+                array_keys($index),
+                $scopeSql,
+                $scopeParams,
+                $fromDate,
+                $toDate
+            );
+
+            foreach ($breakdown as $row) {
+                $position = $index[(string) $row['name']] ?? null;
+
+                if ($position === null) {
+                    continue;
+                }
+
+                $topItems[$position]['by_warehouse'][] = [
+                    'warehouse_id' => $row['warehouse_id'] !== null ? (int) $row['warehouse_id'] : 0,
+                    'warehouse_name' => (string) ($row['warehouse_name'] ?? ''),
+                    'quantity' => (float) $row['quantity'],
+                ];
+            }
+        }
+
+        return [
+            'period' => [
+                'from' => $fromDate,
+                'to' => (new DateTimeImmutable($toDate))->modify('-1 day')->format('Y-m-d'),
+            ],
+            'warehouses' => array_values($rows),
+            'top_items' => $topItems,
+        ];
+    }
+
+    public function warehousesExport(array $scope, string $from, string $to, string $format): array
+    {
+        $report = $this->warehouses($scope, $from, $to);
+
+        $sections = [
+            [
+                'title' => 'Склады',
+                'headers' => ['Склад', 'Позиций', 'Нулевых', 'Остаток', 'Заявок', 'Клиентов', 'Запрошено'],
+                'rows' => array_map(static fn (array $row): array => [
+                    (string) $row['warehouse_name'],
+                    (string) $row['positions'],
+                    (string) $row['zero_positions'],
+                    self::numberText((float) $row['stock_quantity']),
+                    (string) $row['requests_count'],
+                    (string) $row['clients_count'],
+                    self::numberText((float) $row['requested_quantity']),
+                ], $report['warehouses']),
+            ],
+        ];
+
+        if ($report['top_items'] !== []) {
+            $sections[] = [
+                'title' => 'Топ позиций по заявкам',
+                'headers' => ['Позиция', 'Запрошено', 'Заявок', 'По складам'],
+                'rows' => array_map(static fn (array $row): array => [
+                    (string) $row['name'],
+                    self::numberText((float) $row['total_quantity']),
+                    (string) $row['requests_count'],
+                    implode('; ', array_map(
+                        static fn (array $item): string => $item['warehouse_name'] . ': '
+                            . self::numberText((float) $item['quantity']),
+                        $row['by_warehouse']
+                    )),
+                ], $report['top_items']),
+            ];
+        }
+
+        $meta = [
+            'Период: ' . $report['period']['from'] . ' - ' . $report['period']['to'],
+            'Сформирован: ' . date('d.m.Y H:i'),
+        ];
+
+        return TableExport::build('Склады ' . $report['period']['from'], $format, $sections, $meta);
+    }
+
+    private static function numberText(float $value): string
+    {
+        return rtrim(rtrim(number_format($value, 3, ',', ' '), '0'), ',');
     }
 
     public function export(array $scope, string $from, string $to, string $format): array
@@ -322,7 +462,7 @@ final class ReportsService
             throw new HttpException(404, 'not_found', 'Расписание не найдено');
         }
 
-        $sent = $this->sendSchedule($schedule);
+        $sent = $this->sendSchedule($schedule, null, true);
 
         return ['sent' => $sent];
     }
@@ -352,9 +492,14 @@ final class ReportsService
         return $processed;
     }
 
-    private function sendSchedule(array $schedule, ?DateTimeImmutable $now = null): int
+    private function sendSchedule(array $schedule, ?DateTimeImmutable $now = null, bool $force = false): int
     {
         $now ??= new DateTimeImmutable('now');
+
+        if (!$force && !$this->schedules->claim((int) $schedule['ID'], $now->format('Y-m-d'))) {
+            return 0;
+        }
+
         [$from, $to] = $this->periodFor($schedule, $now);
 
         $text = $this->buildTextReport((string) $schedule['report_type'], $from, $to);
@@ -387,7 +532,9 @@ final class ReportsService
             }
         }
 
-        $this->schedules->markSent((int) $schedule['ID']);
+        if ($force) {
+            $this->schedules->markSent((int) $schedule['ID']);
+        }
 
         return $sent;
     }

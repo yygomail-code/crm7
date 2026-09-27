@@ -58,8 +58,9 @@ export interface RequestItem {
   body: string;
   status: { code: string; title: string; color: string; is_final: boolean };
   priority: number;
-  client: { id: number; name: string; email: string; phone: string };
+  client: { id: number; name: string; email: string; phone: string; inn: string };
   manager: { id: number; name: string } | null;
+  items_count: number;
   due_at: string | null;
   is_overdue: boolean;
   first_response_at: string | null;
@@ -72,7 +73,7 @@ export interface RequestItem {
 
 export interface RequestHistoryItem {
   id: number;
-  user: { id: number; name: string; level: number };
+  user: { id: number; name: string; level: number; position: string };
   from: { code: string; title: string } | null;
   to: { code: string; title: string } | null;
   comment: string;
@@ -281,7 +282,7 @@ export interface ActivityType {
 export interface RequestActivity {
   id: number;
   type: { code: string; title: string };
-  user: { id: number; name: string; level: number };
+  user: { id: number; name: string; level: number; position: string };
   body: string;
   created_at: string;
 }
@@ -306,13 +307,20 @@ export interface RequestDetail {
   previous_manager: { id: number; name: string } | null;
   can: {
     transition: boolean;
+    transition_to: string[];
     cancel: boolean;
     claim: boolean;
     assign: boolean;
     comment: boolean;
     comment_internal: boolean;
     activity: boolean;
+    edit: boolean;
+    priority: boolean;
+    meta: boolean;
+    edit_text: boolean;
+    edit_items: boolean;
   };
+  chat: { thread_id: number; can_post: boolean; unread: number };
 }
 
 export interface RequestListResponse {
@@ -340,7 +348,12 @@ export interface ClientItem {
   company: string;
   inn: string;
   position: string;
-  manager: { manager_id: number; manager_name: string; is_primary: boolean } | null;
+  active: boolean;
+  reg_state: string;
+  registered_at: string;
+  requests_total: number;
+  manager: { id: number; name: string } | null;
+  transfer_to_me: { id: number; from_name: string; date_from: string | null; date_to: string | null } | null;
 }
 
 export interface ManagerItem {
@@ -355,7 +368,22 @@ export interface SystemSettings {
   sla_reaction_hours: number;
   sla_resolution_hours: number;
   spf_checklist: boolean;
+  sales_enabled: boolean;
+  email_export_enabled: boolean;
+  stock_reserve_enabled: boolean;
+  stock_allow_zero: boolean;
   spf_steps: string[];
+}
+
+export interface DatabaseSettings {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  has_password: boolean;
+  source: 'file' | 'env';
+  file: string;
+  warnings?: string[];
 }
 
 export interface AdminUser {
@@ -378,6 +406,40 @@ export interface RoleInfo {
   level: number;
   title: string;
   capabilities: string[];
+}
+
+export interface WarehouseReportRow {
+  warehouse_id: number;
+  warehouse_name: string;
+  positions: number;
+  zero_positions: number;
+  stock_quantity: number;
+  requests_count: number;
+  clients_count: number;
+  requested_quantity: number;
+}
+
+export interface WarehouseReportTopItem {
+  name: string;
+  total_quantity: number;
+  requests_count: number;
+  by_warehouse: { warehouse_id: number; warehouse_name: string; quantity: number }[];
+}
+
+export interface WarehouseReport {
+  period: { from: string; to: string };
+  warehouses: WarehouseReportRow[];
+  top_items: WarehouseReportTopItem[];
+}
+
+export interface RoleCapability {
+  code: string;
+  title: string;
+}
+
+export interface RolesResponse {
+  items: RoleInfo[];
+  catalog: RoleCapability[];
 }
 
 export interface AuditEntry {
@@ -405,7 +467,15 @@ export interface StockLevel {
   name: string;
   unit: string;
   quantity: number;
+  description: string;
   actual_date: string | null;
+}
+
+export interface StockItemPayload {
+  name: string;
+  unit: string;
+  quantity: number;
+  description: string;
 }
 
 export interface StockImportJob {
@@ -433,8 +503,11 @@ export interface StockUpdate {
 
 export interface ChatThread {
   id: number;
+  kind: 'client' | 'staff';
+  can_post: boolean;
   client: { id: number; name: string };
   manager: { id: number; name: string } | null;
+  peer: { id: number; name: string } | null;
   last_message: { body: string; created_at: string; user: { id: number; name: string } } | null;
   last_message_at: string;
   unread: number;
@@ -452,6 +525,7 @@ export interface ChatMessage {
   body: string;
   created_at: string;
   user: { id: number; name: string; level: number };
+  request: { id: number; number: string } | null;
   is_mine: boolean;
   attachments: ChatAttachment[];
 }
@@ -490,8 +564,10 @@ export interface RequestItemRow {
   id: number;
   warehouse_id: number | null;
   warehouse_name: string;
+  stock_level_id: number | null;
   name: string;
   unit: string;
+  description: string;
   quantity: number;
 }
 
@@ -500,6 +576,33 @@ export interface ViewEntry {
   action: string;
   user: { id: number; name: string; level: number };
   created_at: string;
+}
+
+export interface ClientManagerInfo {
+  id: number;
+  name: string;
+  level: number;
+  assigned_at: string;
+  assigned_by: { id: number; name: string } | null;
+  temporary_until: string | null;
+}
+
+export interface ClientTransferInfo {
+  id: number;
+  client_id: number;
+  client_name: string;
+  from: { id: number; name: string } | null;
+  to: { id: number; name: string } | null;
+  date_from: string | null;
+  date_to: string | null;
+  started_at: string | null;
+  status: string;
+  comment: string;
+  created_by: { id: number; name: string };
+  created_at: string;
+  incoming: boolean;
+  can_accept: boolean;
+  can_cancel: boolean;
 }
 
 export interface ClientCard {
@@ -516,12 +619,31 @@ export interface ClientCard {
     reg_state: string;
     registered_at: string;
     last_seen_at: string | null;
-    manager: { manager_id: number; manager_name: string; is_primary: boolean } | null;
   };
-  stats: { total: number; open: number; closed: number; overdue: number };
+  manager: ClientManagerInfo | null;
+  transfer: ClientTransferInfo | null;
+  can: { manage: boolean; assign: boolean; claim: boolean; accept: boolean; cancel: boolean };
+  stats: {
+    total: number;
+    open: number;
+    closed: number;
+    overdue: number;
+    by_status: Record<string, number>;
+  };
+  interests: ClientInterest[];
   history: ClientHistoryItem[];
   views: ViewEntry[];
   requests: ClientCardRequest[];
+}
+
+export interface ClientInterest {
+  name: string;
+  unit: string;
+  description: string;
+  warehouse_name: string;
+  orders: number;
+  total_qty: number;
+  last_at: string;
 }
 
 export interface Substitution {

@@ -23,6 +23,17 @@ final class ChatController extends ApiController
         return Response::ok($this->service->threads($user, $capabilities));
     }
 
+    public function start(Request $request): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->start(
+            $user,
+            $capabilities,
+            (int) $request->input('peer_id', 0)
+        ));
+    }
+
     public function messages(Request $request, array $params): Response
     {
         [$user, $capabilities] = $this->context($request);
@@ -31,7 +42,8 @@ final class ChatController extends ApiController
             $user,
             $capabilities,
             (int) ($params['id'] ?? 0),
-            (int) $request->queryParam('after_id', '0')
+            (int) $request->queryParam('after_id', '0'),
+            (int) $request->queryParam('request_id', '0') > 0 ? (int) $request->queryParam('request_id', '0') : null
         ));
     }
 
@@ -40,13 +52,15 @@ final class ChatController extends ApiController
         [$user, $capabilities] = $this->context($request);
 
         $attachmentIds = $request->input('attachment_ids', []);
+        $requestId = (int) $request->input('request_id', 0);
 
         return Response::ok($this->service->post(
             $user,
             $capabilities,
             (int) ($params['id'] ?? 0),
             (string) $request->input('body', ''),
-            is_array($attachmentIds) ? array_map('intval', $attachmentIds) : []
+            is_array($attachmentIds) ? array_map('intval', $attachmentIds) : [],
+            $requestId > 0 ? $requestId : null
         ), 201);
     }
 
@@ -78,7 +92,14 @@ final class ChatController extends ApiController
     {
         [$user, $capabilities] = $this->context($request);
 
-        return Response::ok($this->service->markRead($user, $capabilities, (int) ($params['id'] ?? 0)));
+        $upTo = (int) ($request->bodyAll()['up_to'] ?? 0);
+
+        return Response::ok($this->service->markRead(
+            $user,
+            $capabilities,
+            (int) ($params['id'] ?? 0),
+            $upTo > 0 ? $upTo : null
+        ));
     }
 
     public function unread(Request $request): Response

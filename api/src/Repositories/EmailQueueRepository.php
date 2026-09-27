@@ -20,21 +20,45 @@ final class EmailQueueRepository
         return (int) $pdo->lastInsertId();
     }
 
-    public function pending(int $limit): array
+    public function claim(int $limit): array
     {
-        $sql = 'SELECT ID AS id, to_email, subject, body, attempts
-                FROM email_queue
-                WHERE status = \'pending\' AND attempts < 3
-                ORDER BY created_at ASC, ID ASC
-                LIMIT ' . max(1, min(200, $limit));
+        $token = bin2hex(random_bytes(8));
 
-        return Database::pdo()->query($sql)->fetchAll() ?: [];
+        $stmt = Database::pdo()->prepare(
+            'UPDATE email_queue
+             SET status = \'processing\', claimed_at = NOW(), claim_token = ?
+             WHERE status = \'pending\' AND attempts < 3
+             ORDER BY created_at ASC, ID ASC
+             LIMIT ' . max(1, min(200, $limit))
+        );
+        $stmt->execute([$token]);
+
+        $stmt = Database::pdo()->prepare(
+            'SELECT ID AS id, to_email, subject, body, attempts
+             FROM email_queue
+             WHERE status = \'processing\' AND claim_token = ?'
+        );
+        $stmt->execute([$token]);
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    public function releaseStale(int $minutes = 10): int
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE email_queue SET status = \'pending\', claimed_at = NULL, claim_token = NULL
+             WHERE status = \'processing\' AND claimed_at IS NOT NULL
+               AND claimed_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)'
+        );
+        $stmt->execute([max(1, $minutes)]);
+
+        return $stmt->rowCount();
     }
 
     public function markSent(int $id): void
     {
         $stmt = Database::pdo()->prepare(
-            'UPDATE email_queue SET status = \'sent\', sent_at = NOW(), attempts = attempts + 1, last_error = NULL
+            'UPDATE email_queue SET status = \'sent\', sent_at = NOW(), attempts = attempts + 1, last_error = NULL, claimed_at = NULL, claim_token = NULL
              WHERE ID = ?'
         );
         $stmt->execute([$id]);
@@ -44,7 +68,7 @@ final class EmailQueueRepository
     {
         $stmt = Database::pdo()->prepare(
             'UPDATE email_queue
-             SET attempts = attempts + 1, last_error = ?, status = IF(attempts + 1 >= 3, \'failed\', \'pending\')
+             SET attempts = attempts + 1, last_error = ?, status = IF(attempts + 1 >= 3, \'failed\', \'pending\'), claimed_at = NULL, claim_token = NULL
              WHERE ID = ?'
         );
         $stmt->execute([mb_substr($error, 0, 500), $id]);

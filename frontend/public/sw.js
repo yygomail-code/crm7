@@ -1,4 +1,4 @@
-const CACHE = 'crm-shell-v1';
+const CACHE = 'crm-shell-v1:' + self.location.pathname.replace(/\/[^/]*$/, '');
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -28,7 +28,7 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
-  if (url.origin !== self.location.origin || url.pathname.startsWith('/api/')) {
+  if (url.origin !== self.location.origin || url.pathname.includes('/api/')) {
     return;
   }
 

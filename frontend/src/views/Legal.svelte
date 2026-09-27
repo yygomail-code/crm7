@@ -3,6 +3,8 @@
   import { ApiError } from '../lib/api/client';
   import { getLegalDocument, type LegalDocument } from '../lib/api/legal';
   import { router } from '../lib/router.svelte';
+  import { formatDate } from '../lib/format';
+  import Button from '../lib/components/ui/Button.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
 
   interface Props {
@@ -43,7 +45,9 @@
 
 <div class="wrap">
   <div class="card">
-    <button type="button" class="back" onclick={back}>← Назад</button>
+    <div class="back-row">
+      <Button variant="ghost" onclick={back}>← Назад</Button>
+    </div>
 
     {#if loading}
       <div class="center"><Spinner size={24} /></div>
@@ -51,7 +55,7 @@
       <p class="error">{error}</p>
     {:else if document}
       <h1>{document.title}</h1>
-      <p class="updated">Обновлено: {document.updated_at}</p>
+      <p class="updated">Обновлено: {formatDate(document.updated_at)}</p>
       <div class="body">{document.body}</div>
     {/if}
   </div>
@@ -78,14 +82,9 @@
     box-shadow: var(--shadow-md);
   }
 
-  .back {
+  .back-row {
+    display: flex;
     align-self: flex-start;
-    border: none;
-    background: none;
-    color: var(--primary);
-    cursor: pointer;
-    font-size: 13px;
-    padding: 0;
   }
 
   h1 {

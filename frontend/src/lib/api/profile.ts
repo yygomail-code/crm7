@@ -4,6 +4,7 @@ import { apiRequest, apiUpload } from './client';
 
 export interface UserProfile {
   id: number;
+  login: string;
   name: string;
   level: number;
   is_staff: boolean;
@@ -14,11 +15,26 @@ export interface UserProfile {
   has_avatar: boolean;
 }
 
-export function updateProfile(name: string): Promise<{ id: number; name: string }> {
-  return apiRequest<{ id: number; name: string }>('/profile', {
+export interface ProfileUpdatePayload {
+  name: string;
+  position?: string;
+  phone?: string;
+  email?: string;
+}
+
+export interface ProfileUpdateResult {
+  id: number;
+  name: string;
+  position: string;
+  phone: string;
+  email: string;
+}
+
+export function updateProfile(payload: ProfileUpdatePayload): Promise<ProfileUpdateResult> {
+  return apiRequest<ProfileUpdateResult>('/profile', {
     method: 'PATCH',
     auth: true,
-    body: { name }
+    body: payload
   });
 }
 
@@ -27,6 +43,13 @@ export function uploadAvatar(file: File): Promise<{ has_avatar: boolean }> {
   form.append('file', file);
 
   return apiUpload<{ has_avatar: boolean }>('/profile/avatar', form);
+}
+
+export function deleteAvatar(): Promise<{ has_avatar: boolean }> {
+  return apiRequest<{ has_avatar: boolean }>('/profile/avatar', {
+    method: 'DELETE',
+    auth: true
+  });
 }
 
 export function getUserProfile(id: number): Promise<UserProfile> {

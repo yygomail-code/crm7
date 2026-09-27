@@ -6,9 +6,8 @@ namespace App\Clients;
 
 use App\Http\HttpException;
 use App\Notifications\NotificationService;
-use App\Repositories\ManagerClientRepository;
+use App\Support\Validator;
 use App\Repositories\RequestRepository;
-use App\Repositories\SubstitutionRepository;
 use App\Repositories\UserHistoryRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\ViewLogRepository;
@@ -18,9 +17,8 @@ final class ClientService
     public function __construct(
         private readonly UserRepository $users = new UserRepository(),
         private readonly UserHistoryRepository $history = new UserHistoryRepository(),
-        private readonly ManagerClientRepository $managerClients = new ManagerClientRepository(),
-        private readonly SubstitutionRepository $substitutions = new SubstitutionRepository(),
         private readonly RequestRepository $requests = new RequestRepository(),
+        private readonly ClientManagerService $managers = new ClientManagerService(),
         private readonly NotificationService $notifications = new NotificationService(),
         private readonly ViewLogRepository $views = new ViewLogRepository()
     ) {
@@ -92,6 +90,127 @@ final class ClientService
         ];
     }
 
+    public function setBlocked(array $actor, array $capabilities, int $clientId, bool $blocked, string $comment): array
+    {
+        $client = $this->assertClient($clientId);
+        $this->managers->assertCanManage($actor, $capabilities, $clientId);
+
+        if (($client['reg_state'] ?? 'active') !== 'active') {
+            throw new HttpException(422, 'not_active', 'Регистрация клиента ещё не подтверждена');
+        }
+
+        $isActive = ($client['ACTIVE'] ?? 'N') === 'Y';
+
+        if ($blocked && !$isActive) {
+            throw new HttpException(422, 'already_blocked', 'Клиент уже заблокирован');
+        }
+
+        if (!$blocked && $isActive) {
+            throw new HttpException(422, 'not_blocked', 'Клиент не заблокирован');
+        }
+
+        $this->users->setActive($clientId, !$blocked);
+        $this->history->add(
+            $clientId,
+            $blocked ? 'blocked' : 'unblocked',
+            (int) $actor['ID'],
+            $comment !== '' ? $comment : ($blocked ? 'Доступ заблокирован' : 'Доступ восстановлен')
+        );
+
+        return ['id' => $clientId, 'active' => !$blocked];
+    }
+
+    public function updateContacts(array $actor, array $capabilities, int $clientId, array $input): array
+    {
+        $client = $this->assertClient($clientId);
+
+        if (($client['reg_state'] ?? 'active') === 'pending') {
+            $this->requireConfirm($capabilities);
+        } else {
+            $this->managers->assertCanManage($actor, $capabilities, $clientId);
+        }
+
+        $name = trim((string) ($input['name'] ?? ''));
+        $company = trim((string) ($input['company'] ?? ''));
+        $inn = preg_replace('/\s+/', '', (string) ($input['inn'] ?? '')) ?? '';
+        $position = trim((string) ($input['position'] ?? ''));
+        $phone = trim((string) ($input['phone'] ?? ''));
+        $email = mb_strtolower(trim((string) ($input['email'] ?? '')));
+
+        if (mb_strlen($name) < 2) {
+            throw new HttpException(422, 'validation_error', 'Укажите имя клиента');
+        }
+
+        if ($email !== '' && !Validator::email($email)) {
+            throw new HttpException(422, 'validation_error', 'Некорректный e-mail');
+        }
+
+        if ($inn !== '' && !preg_match('/^\d{10}(\d{2})?$/', $inn)) {
+            throw new HttpException(422, 'validation_error', 'ИНН — 10 или 12 цифр');
+        }
+
+        if ($email !== '') {
+            $existing = $this->users->findAnyByEmail($email);
+
+            if ($existing !== null && (int) $existing['ID'] !== $clientId) {
+                throw new HttpException(422, 'email_taken', 'Пользователь с таким e-mail уже зарегистрирован');
+            }
+        }
+
+        if ($phone !== '') {
+            $existing = $this->users->findAnyByPhone($phone);
+
+            if ($existing !== null && (int) $existing['ID'] !== $clientId) {
+                throw new HttpException(422, 'phone_taken', 'Пользователь с таким телефоном уже зарегистрирован');
+            }
+        }
+
+        $before = [
+            'Имя' => (string) ($client['FULL_NAME'] ?? ''),
+            'Компания' => (string) ($client['COMPANY'] ?? ''),
+            'ИНН' => (string) ($client['INN'] ?? ''),
+            'Должность' => (string) ($client['DOLGNOST'] ?? ''),
+            'Телефон' => (string) ($client['PHONE'] ?? ''),
+            'E-mail' => (string) ($client['EMAIL'] ?? ''),
+        ];
+        $after = [
+            'Имя' => mb_substr($name, 0, 255),
+            'Компания' => mb_substr($company, 0, 255),
+            'ИНН' => mb_substr($inn, 0, 12),
+            'Должность' => mb_substr($position, 0, 255),
+            'Телефон' => mb_substr($phone, 0, 255),
+            'E-mail' => mb_substr($email, 0, 255),
+        ];
+
+        $this->users->updateContacts($clientId, [
+            'name' => $after['Имя'],
+            'company' => $after['Компания'],
+            'inn' => $after['ИНН'],
+            'position' => $after['Должность'],
+            'phone' => $after['Телефон'],
+            'email' => $after['E-mail'],
+        ]);
+
+        $changes = [];
+
+        foreach ($before as $label => $oldValue) {
+            $newValue = $after[$label];
+
+            if ($oldValue !== $newValue) {
+                $changes[] = $label . ': «' . ($oldValue !== '' ? $oldValue : '—') . '» → «' . ($newValue !== '' ? $newValue : '—') . '»';
+            }
+        }
+
+        $this->history->add(
+            $clientId,
+            'updated',
+            (int) $actor['ID'],
+            $changes !== [] ? implode('; ', $changes) : 'Изменений нет'
+        );
+
+        return ['id' => $clientId];
+    }
+
     public function card(array $actor, array $capabilities, int $clientId): array
     {
         $client = $this->users->findById($clientId);
@@ -153,22 +272,6 @@ final class ClientService
             'is_overdue' => (bool) $row['is_overdue'],
         ], $requestRows);
 
-        $open = 0;
-        $closed = 0;
-        $overdue = 0;
-
-        foreach ($requestRows as $row) {
-            if ((bool) $row['status_is_final']) {
-                $closed++;
-            } else {
-                $open++;
-            }
-
-            if ((bool) $row['is_overdue']) {
-                $overdue++;
-            }
-        }
-
         return [
             'client' => [
                 'id' => $clientId,
@@ -183,27 +286,61 @@ final class ClientService
                 'reg_state' => (string) ($client['reg_state'] ?? 'active'),
                 'registered_at' => (string) ($client['TIME_ADD'] ?? ''),
                 'last_seen_at' => $client['TIME_ACTIVE'] !== null ? (string) $client['TIME_ACTIVE'] : null,
-                'manager' => $this->managerClients->forClients([$clientId])[$clientId] ?? null,
             ],
-            'stats' => [
-                'total' => count($requestRows),
-                'open' => $open,
-                'closed' => $closed,
-                'overdue' => $overdue,
-            ],
+            'manager' => $this->managerInfo($clientId),
+            'transfer' => $this->transferInfo($actor, $capabilities, $clientId),
+            'can' => $this->permissions($actor, $capabilities, $clientId, $client),
+            'stats' => $this->requests->statsForClient($clientId),
+            'interests' => array_map(static fn (array $row): array => [
+                'name' => (string) $row['name'],
+                'unit' => (string) ($row['unit'] ?? ''),
+                'warehouse_name' => (string) ($row['warehouse_name'] ?? ''),
+                'orders' => (int) $row['orders'],
+                'total_qty' => (float) $row['total_qty'],
+                'last_at' => (string) $row['last_at'],
+            ], $this->requests->clientInterests($clientId, '', 'qty_desc', 20, 0)),
             'history' => $history,
             'views' => $views,
             'requests' => $requests,
         ];
     }
 
-    private function assertPendingClient(int $clientId): array
+    public function interests(array $actor, array $capabilities, int $clientId, array $filters): array
     {
         $client = $this->users->findById($clientId);
 
         if ($client === null || (int) $client['LEVEL'] !== 5) {
             throw new HttpException(404, 'not_found', 'Клиент не найден');
         }
+
+        $this->assertCanView($actor, $capabilities, $clientId);
+
+        $query = trim((string) ($filters['q'] ?? ''));
+        $sort = (string) ($filters['sort'] ?? 'qty_desc');
+        $page = max(1, (int) ($filters['page'] ?? 1));
+        $perPage = max(10, min(100, (int) ($filters['per_page'] ?? 20)));
+
+        $items = array_map(static fn (array $row): array => [
+            'name' => (string) $row['name'],
+            'unit' => (string) ($row['unit'] ?? ''),
+            'description' => (string) ($row['description'] ?? ''),
+            'warehouse_name' => (string) ($row['warehouse_name'] ?? ''),
+            'orders' => (int) $row['orders'],
+            'total_qty' => (float) $row['total_qty'],
+            'last_at' => (string) $row['last_at'],
+        ], $this->requests->clientInterests($clientId, $query, $sort, $perPage, ($page - 1) * $perPage));
+
+        return [
+            'items' => $items,
+            'total' => $this->requests->countClientInterests($clientId, $query),
+            'page' => $page,
+            'per_page' => $perPage,
+        ];
+    }
+
+    private function assertPendingClient(int $clientId): array
+    {
+        $client = $this->assertClient($clientId);
 
         if (($client['reg_state'] ?? 'active') !== 'pending') {
             throw new HttpException(422, 'not_pending', 'Заявка на регистрацию уже обработана');
@@ -212,21 +349,92 @@ final class ClientService
         return $client;
     }
 
+    private function managerInfo(int $clientId): ?array
+    {
+        $row = $this->managers->managerFor($clientId);
+
+        if ($row === null) {
+            return null;
+        }
+
+        $temporary = $this->managers->activeTemporary($clientId);
+
+        return [
+            'id' => (int) $row['manager_id'],
+            'name' => (string) $row['manager_name'],
+            'level' => (int) ($row['manager_level'] ?? 0),
+            'assigned_at' => (string) $row['assigned_at'],
+            'assigned_by' => $row['assigned_by'] !== null
+                ? ['id' => (int) $row['assigned_by'], 'name' => (string) ($row['assigned_by_name'] ?? '')]
+                : null,
+            'temporary_until' => $temporary !== null ? (string) $temporary['date_to'] : null,
+        ];
+    }
+
+    private function transferInfo(array $actor, array $capabilities, int $clientId): ?array
+    {
+        $transfer = $this->managers->currentForClient($clientId);
+
+        if ($transfer === null) {
+            return null;
+        }
+
+        $isPending = $transfer['status'] === 'pending';
+        $isScheduled = $transfer['status'] === 'scheduled';
+
+        $transfer['incoming'] = $isPending
+            && $transfer['to'] !== null
+            && (int) $transfer['to']['id'] === (int) $actor['ID'];
+        $transfer['can_accept'] = $transfer['incoming'];
+        $transfer['can_cancel'] = ($isPending || $isScheduled)
+            && ((int) $transfer['created_by']['id'] === (int) $actor['ID']
+                || in_array('clients.assign', $capabilities, true));
+
+        return $transfer;
+    }
+
+    private function permissions(array $actor, array $capabilities, int $clientId, array $client): array
+    {
+        $managerRow = $this->managers->managerFor($clientId);
+        $transferRow = $this->managers->currentForClient($clientId);
+        $isStaff = (int) $actor['LEVEL'] >= 10;
+        $canAssign = in_array('clients.assign', $capabilities, true);
+
+        return [
+            'manage' => $this->managers->canManage($actor, $capabilities, $clientId),
+            'assign' => $canAssign,
+            'claim' => $isStaff
+                && $managerRow === null
+                && ($client['ACTIVE'] ?? 'N') === 'Y',
+            'accept' => $transferRow !== null
+                && $transferRow['status'] === 'pending'
+                && $transferRow['to'] !== null
+                && (int) $transferRow['to']['id'] === (int) $actor['ID'],
+            'cancel' => $transferRow !== null
+                && in_array($transferRow['status'], ['pending', 'scheduled'], true)
+                && ((int) $transferRow['created_by']['id'] === (int) $actor['ID'] || $canAssign),
+        ];
+    }
+
+    private function assertClient(int $clientId): array
+    {
+        $client = $this->users->findById($clientId);
+
+        if ($client === null || (int) $client['LEVEL'] !== 5) {
+            throw new HttpException(404, 'not_found', 'Клиент не найден');
+        }
+
+        return $client;
+    }
+
     private function assertCanView(array $actor, array $capabilities, int $clientId): void
     {
-        if (in_array('clients.view.all', $capabilities, true)) {
+        if ((int) $actor['LEVEL'] >= 10) {
             return;
         }
 
-        $managerIds = array_merge(
-            [(int) $actor['ID']],
-            $this->substitutions->activeSubstitutedIds((int) $actor['ID'])
-        );
-
-        foreach ($managerIds as $managerId) {
-            if ($this->managerClients->isManagerOf($clientId, (int) $managerId)) {
-                return;
-            }
+        if ($clientId === (int) $actor['ID']) {
+            return;
         }
 
         throw new HttpException(403, 'forbidden', 'Нет доступа к клиенту');

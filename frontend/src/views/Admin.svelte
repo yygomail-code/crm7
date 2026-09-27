@@ -8,18 +8,23 @@
     listRoles,
     listUsers,
     resetUserPassword,
+    saveRole,
     unblockUser,
     updateUser
   } from '../lib/api/admin';
   import { listLegalDocuments, saveLegalDocument, type LegalDocument } from '../lib/api/legal';
-  import type { AdminUser, AuditEntry, RoleInfo } from '../lib/api/types';
+  import type { AdminUser, AuditEntry, RoleCapability, RoleInfo } from '../lib/api/types';
   import { auth } from '../lib/stores/auth.svelte';
   import { router } from '../lib/router.svelte';
   import { addHistory } from '../lib/search-history';
+  import { clearFilters, countActive, loadFilters, saveFilters } from '../lib/filters';
+  import { clampDates, todayIso } from '../lib/period';
   import Button from '../lib/components/ui/Button.svelte';
+  import FiltersModal from '../lib/components/ui/FiltersModal.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
   import { formatDateTime } from '../lib/format';
+  import { auditLabel, entityLabel } from '../lib/labels';
 
   const levelTitles: Record<number, string> = {
     90: 'Сисадмин',
@@ -29,14 +34,20 @@
     1: 'Гость'
   };
 
+  const adminCoreCapabilities = ['users.manage', 'roles.manage', 'settings.manage'];
+
+  const userFilterDefaults = { level: 0, state: '' };
+  const auditFilterDefaults = { from: '', to: '' };
+
   let tab = $state<'users' | 'audit' | 'roles' | 'refs' | 'docs'>('users');
 
   let users = $state<AdminUser[]>([]);
   let usersTotal = $state(0);
   let usersPage = $state(1);
   let userQuery = $state('');
-  let userLevel = $state(0);
-  let userState = $state('');
+  const initialUserFilters = loadFilters('admin-users', userFilterDefaults);
+  let userFilters = $state({ ...initialUserFilters });
+  let userDraft = $state({ ...initialUserFilters });
   let usersLoading = $state(true);
 
   let editing = $state<AdminUser | null>(null);
@@ -57,15 +68,20 @@
   let auditTotal = $state(0);
   let auditPage = $state(1);
   let auditAction = $state('');
-  let auditFrom = $state('');
-  let auditTo = $state('');
+  const initialAuditFilters = loadFilters('admin-audit', auditFilterDefaults);
+  let auditFilters = $state({ ...initialAuditFilters });
+  let auditDraft = $state({ ...initialAuditFilters });
   let auditLoading = $state(false);
 
   let roles = $state<RoleInfo[]>([]);
+  let roleCatalog = $state<RoleCapability[]>([]);
+  let roleDraft = $state<Record<number, string[]>>({});
+  let roleBusy = $state(0);
+  let roleNotice = $state('');
+  let roleError = $state('');
   let statuses = $state<{ code: string; title: string; sort: number; color: string; is_final: boolean }[]>([]);
   let activityTypes = $state<{ code: string; title: string; audience: string; sort: number }[]>([]);
-  let docs = $state<LegalDocument[]>([]);
-  let docCode = $state('');
+  let docs = $state<LegalDocument[]>([]);  let docCode = $state('');
   let docTitle = $state('');
   let docBody = $state('');
   let docBusy = $state(false);
@@ -95,8 +111,8 @@
     try {
       const data = await listUsers({
         q: userQuery,
-        level: userLevel,
-        state: userState,
+        level: userFilters.level,
+        state: userFilters.state,
         page: usersPage,
         per_page: 50
       });
@@ -116,9 +132,47 @@
     void loadUsers();
   }
 
-  function applyAuditFilters(): void {
+  function applyUserFilterDraft(): void {
+    userFilters = { ...userDraft };
+    saveFilters('admin-users', userFilters);
+    usersPage = 1;
+    void loadUsers();
+  }
+
+  function resetUserFilters(): void {
+    userDraft = { ...userFilterDefaults };
+    userFilters = { ...userFilterDefaults };
+    clearFilters('admin-users');
+    usersPage = 1;
+    void loadUsers();
+  }
+
+  function clampAuditDates(): void {
+    const dates = clampDates(auditDraft.from, auditDraft.to);
+
+    auditDraft.from = dates.from;
+    auditDraft.to = dates.to;
+  }
+
+  function applyAuditDraft(): void {
+    clampAuditDates();
+    auditFilters = { ...auditDraft };
+    saveFilters('admin-audit', auditFilters);
+    auditPage = 1;
+    void loadAudit();
+  }
+
+  function applyAuditSearch(): void {
     auditPage = 1;
     addHistory('admin-audit', auditAction);
+    void loadAudit();
+  }
+
+  function resetAuditFilters(): void {
+    auditDraft = { ...auditFilterDefaults };
+    auditFilters = { ...auditFilterDefaults };
+    clearFilters('admin-audit');
+    auditPage = 1;
     void loadAudit();
   }
 
@@ -225,8 +279,8 @@
     try {
       const data = await listAudit({
         action: auditAction,
-        from: auditFrom,
-        to: auditTo,
+      from: auditFilters.from,
+      to: auditFilters.to,
         page: auditPage,
         per_page: 50
       });
@@ -246,6 +300,8 @@
     docBody = document.body;
     docNotice = '';
   }
+
+  const docPlaceholders = $derived([...new Set(docBody.match(/\[[^\]]+\]/g) ?? [])]);
 
   async function saveDoc(): Promise<void> {
     docBusy = true;
@@ -282,12 +338,8 @@
       await loadAudit();
     }
 
-    if (next === 'roles' && roles.length === 0) {
-      try {
-        roles = (await listRoles()).items;
-      } catch {
-        // некритично
-      }
+    if (next === 'roles') {
+      await loadRoles();
     }
 
     if (next === 'refs' && statuses.length === 0) {
@@ -298,6 +350,132 @@
       } catch {
         // некритично
       }
+    }
+  }
+
+  async function loadRoles(): Promise<void> {
+    roleError = '';
+    roleNotice = '';
+
+    try {
+      const data = await listRoles();
+      roles = data.items;
+      roleCatalog = data.catalog;
+      roleDraft = Object.fromEntries(data.items.map((role) => [role.level, [...role.capabilities]]));
+    } catch (cause) {
+      roleError = cause instanceof ApiError ? cause.message : 'Не удалось загрузить роли';
+    }
+  }
+
+  function roleSelected(role: RoleInfo): string[] {
+    return roleDraft[role.level] ?? role.capabilities;
+  }
+
+  function isRoleDirty(role: RoleInfo): boolean {
+    const selected = roleDraft[role.level];
+
+    if (!selected) {
+      return false;
+    }
+
+    const next = [...selected].sort();
+    const current = [...role.capabilities].sort();
+
+    return next.length !== current.length || next.some((code, index) => code !== current[index]);
+  }
+
+  function toggleCapability(role: RoleInfo, code: string): void {
+    const selected = roleSelected(role);
+    const next = selected.includes(code)
+      ? selected.filter((item) => item !== code)
+      : [...selected, code];
+
+    roleDraft = { ...roleDraft, [role.level]: next };
+  }
+
+  const capabilityGroupTitles: Record<string, string> = {
+    requests: 'Заявки',
+    clients: 'Клиенты',
+    stocks: 'Склады',
+    reports: 'Отчёты',
+    chat: 'Чат',
+    users: 'Пользователи',
+    roles: 'Роли',
+    audit: 'Аудит',
+    settings: 'Настройки'
+  };
+
+  const capabilityGroupOrder = Object.keys(capabilityGroupTitles);
+
+  const catalogGroups = $derived.by(() => {
+    const groups = new Map<string, RoleCapability[]>();
+
+    for (const capability of roleCatalog) {
+      const key = capability.code.split('.')[0];
+      const bucket = groups.get(key) ?? [];
+      bucket.push(capability);
+      groups.set(key, bucket);
+    }
+
+    return [...groups.entries()]
+      .map(([key, items]) => ({
+        key,
+        title: capabilityGroupTitles[key] ?? key,
+        items: [...items].sort((a, b) => a.title.localeCompare(b.title, 'ru'))
+      }))
+      .sort(
+        (a, b) => capabilityGroupOrder.indexOf(a.key) - capabilityGroupOrder.indexOf(b.key)
+      );
+  });
+
+  let openGroups = $state<Record<string, boolean>>({});
+
+  function groupKey(level: number, key: string): string {
+    return `${level}:${key}`;
+  }
+
+  function toggleGroup(level: number, key: string): void {
+    const id = groupKey(level, key);
+    openGroups = { ...openGroups, [id]: !(openGroups[id] ?? false) };
+  }
+
+  function allGroupsOpen(level: number): boolean {
+    return catalogGroups.every((group) => openGroups[groupKey(level, group.key)] ?? false);
+  }
+
+  function toggleAllGroups(level: number): void {
+    const next = !allGroupsOpen(level);
+    const updated = { ...openGroups };
+
+    for (const group of catalogGroups) {
+      updated[groupKey(level, group.key)] = next;
+    }
+
+    openGroups = updated;
+  }
+
+  function resetRole(role: RoleInfo): void {
+    roleDraft = { ...roleDraft, [role.level]: [...role.capabilities] };
+  }
+
+  async function saveRoleDraft(role: RoleInfo): Promise<void> {
+    roleBusy = role.level;
+    roleError = '';
+    roleNotice = '';
+
+    try {
+      const data = await saveRole(role.level, roleSelected(role));
+      roles = data.items;
+      roleCatalog = data.catalog;
+      roleDraft = {
+        ...roleDraft,
+        [role.level]: [...(data.items.find((item) => item.level === role.level)?.capabilities ?? [])]
+      };
+      roleNotice = `Права роли «${role.title}» сохранены`;
+    } catch (cause) {
+      roleError = cause instanceof ApiError ? cause.message : 'Не удалось сохранить права роли';
+    } finally {
+      roleBusy = 0;
     }
   }
 
@@ -315,7 +493,7 @@
     <h1>Администрирование</h1>
   </div>
 
-  <div class="tabs">
+  <div class="tabs tab-scroll">
     {#if canManageUsers}
       <button type="button" class:active={tab === 'users'} onclick={() => void openTab('users')}>Пользователи</button>
     {/if}
@@ -354,20 +532,33 @@
         <Button type="submit" variant="ghost">Найти</Button>
       </form>
 
-      <select bind:value={userLevel} onchange={() => { usersPage = 1; void loadUsers(); }}>
-        <option value={0}>Все роли</option>
-        <option value={90}>Сисадмин</option>
-        <option value={50}>Администратор</option>
-        <option value={10}>Менеджер</option>
-        <option value={5}>Клиент</option>
-      </select>
+      <FiltersModal
+        count={countActive(userFilters, userFilterDefaults)}
+        onopen={() => (userDraft = { ...userFilters })}
+        onapply={applyUserFilterDraft}
+        onreset={resetUserFilters}
+      >
+        <label class="filter-field">
+          <span>Роль</span>
+          <select bind:value={userDraft.level}>
+            <option value={0}>Все роли</option>
+            <option value={90}>Сисадмин</option>
+            <option value={50}>Администратор</option>
+            <option value={10}>Менеджер</option>
+            <option value={5}>Клиент</option>
+          </select>
+        </label>
 
-      <select bind:value={userState} onchange={() => { usersPage = 1; void loadUsers(); }}>
-        <option value="">Все состояния</option>
-        <option value="active">Активные</option>
-        <option value="blocked">Заблокированные</option>
-        <option value="pending">Ожидают подтверждения</option>
-      </select>
+        <label class="filter-field">
+          <span>Состояние</span>
+          <select bind:value={userDraft.state}>
+            <option value="">Все состояния</option>
+            <option value="active">Активные</option>
+            <option value="blocked">Заблокированные</option>
+            <option value="pending">Ожидают подтверждения</option>
+          </select>
+        </label>
+      </FiltersModal>
 
       <Button onclick={() => (showCreate = !showCreate)}>
         {showCreate ? 'Отменить' : 'Создать пользователя'}
@@ -482,13 +673,27 @@
       <SearchInput
         bind:value={auditAction}
         historyKey="admin-audit"
-        placeholder="Действие (например, request.transition)"
-        onclear={applyAuditFilters}
-        onpick={applyAuditFilters}
+        placeholder="Действие по коду (например, request.transition)"
+        onclear={applyAuditSearch}
+        onpick={applyAuditSearch}
       />
-      <label class="date"><span>с</span><input type="date" bind:value={auditFrom} /></label>
-      <label class="date"><span>по</span><input type="date" bind:value={auditTo} /></label>
-      <Button variant="ghost" onclick={applyAuditFilters}>Показать</Button>
+      <Button variant="ghost" onclick={applyAuditSearch}>Показать</Button>
+
+      <FiltersModal
+        count={countActive(auditFilters, auditFilterDefaults)}
+        onopen={() => (auditDraft = { ...auditFilters })}
+        onapply={applyAuditDraft}
+        onreset={resetAuditFilters}
+      >
+        <label class="filter-field">
+          <span>Период с</span>
+          <input type="date" bind:value={auditDraft.from} max={auditDraft.to || todayIso()} />
+        </label>
+        <label class="filter-field">
+          <span>Период по</span>
+          <input type="date" bind:value={auditDraft.to} min={auditDraft.from} max={todayIso()} />
+        </label>
+      </FiltersModal>
     </div>
 
     {#if auditLoading}
@@ -500,13 +705,14 @@
         {#each audit as entry (entry.id)}
           <div class="entry">
             <div class="row">
-              <span class="action">{entry.action}</span>
+              <span class="action">{auditLabel(entry.action)}</span>
               <span class="when">{formatDateTime(entry.created_at)}</span>
             </div>
             <div class="meta">
               {#if entry.user}<span>{entry.user.name}</span>{/if}
-              {#if entry.entity}<span>{entry.entity} #{entry.entity_id}</span>{/if}
+              {#if entry.entity}<span>{entityLabel(entry.entity)} #{entry.entity_id}</span>{/if}
               {#if entry.ip}<span>{entry.ip}</span>{/if}
+              <span class="action-code">{entry.action}</span>
             </div>
             {#if Object.keys(entry.data).length > 0}
               <div class="data">
@@ -537,7 +743,7 @@
 
   {#if tab === 'docs'}
     <div class="docs">
-      <div class="doc-tabs">
+      <div class="doc-tabs tab-scroll">
         {#each docs as document (document.code)}
           <button
             type="button"
@@ -556,6 +762,13 @@
             <span>Текст документа (редактируется администратором)</span>
             <textarea bind:value={docBody} rows="18"></textarea>
           </label>
+          {#if docPlaceholders.length > 0}
+            <div class="alert">
+              В документе остались незаполненные реквизиты:
+              {docPlaceholders.join(', ')}. Замените их данными оператора — для 152-ФЗ политика
+              должна содержать наименование, адрес и контакты.
+            </div>
+          {/if}
           {#if docNotice}<div class="notice">{docNotice}</div>{/if}
           <div class="actions">
             <Button loading={docBusy} onclick={() => void saveDoc()}>Сохранить</Button>
@@ -580,7 +793,7 @@
     </div>
 
     <div class="card">
-      <h2>Типы активностей</h2>
+      <h2>Типы действий</h2>
       <div class="refs">
         {#each activityTypes as type (type.code)}
           <div class="ref">
@@ -593,15 +806,83 @@
   {/if}
 
   {#if tab === 'roles'}
+    {#if roleError}
+      <div class="alert">{roleError}</div>
+    {/if}
+    {#if roleNotice}
+      <div class="notice">{roleNotice}</div>
+    {/if}
+
     <div class="roles">
       {#each roles as role (role.level)}
+        {@const selected = roleSelected(role)}
         <div class="card">
-          <h2>{role.title} <span class="level">уровень {role.level}</span></h2>
-          <div class="caps">
-            {#each role.capabilities as capability (capability)}
-              <span class="cap">{capability}</span>
-            {/each}
+          <div class="role-head">
+            <h2>{role.title} <span class="level">уровень {role.level}</span></h2>
+            {#if canManageRoles}
+              <div class="role-actions">
+                <span class="role-count">{selected.length} из {roleCatalog.length}</span>
+                <Button variant="ghost" onclick={() => toggleAllGroups(role.level)}>
+                  {allGroupsOpen(role.level) ? 'Свернуть всё' : 'Развернуть всё'}
+                </Button>
+                <Button variant="ghost" disabled={!isRoleDirty(role)} onclick={() => resetRole(role)}>
+                  Сбросить
+                </Button>
+                <Button
+                  loading={roleBusy === role.level}
+                  disabled={!isRoleDirty(role)}
+                  onclick={() => void saveRoleDraft(role)}
+                >
+                  Сохранить
+                </Button>
+              </div>
+            {/if}
           </div>
+
+          {#if canManageRoles}
+            <div class="caps-edit">
+              {#each catalogGroups as group (group.key)}
+                {@const isOpen = openGroups[groupKey(role.level, group.key)] ?? false}
+                {@const groupSelected = group.items.filter((item) => selected.includes(item.code)).length}
+                <div class="cap-group" class:open={isOpen}>
+                  <button
+                    type="button"
+                    class="cap-group-head"
+                    aria-expanded={isOpen}
+                    onclick={() => toggleGroup(role.level, group.key)}
+                  >
+                    <span class="chev" class:open={isOpen} aria-hidden="true"></span>
+                    <span class="cap-group-title">{group.title}</span>
+                    <span class="cap-group-count">{groupSelected} из {group.items.length}</span>
+                  </button>
+
+                  {#if isOpen}
+                    <div class="cap-group-body">
+                      {#each group.items as capability (capability.code)}
+                        {@const core = role.level >= 90 && adminCoreCapabilities.includes(capability.code)}
+                        <label class="cap-check" class:core title={core ? 'Обязательное право администратора' : ''}>
+                          <input
+                            type="checkbox"
+                            checked={selected.includes(capability.code)}
+                            disabled={core}
+                            onchange={() => toggleCapability(role, capability.code)}
+                          />
+                          <span class="cap-title">{capability.title}</span>
+                          <code>{capability.code}</code>
+                        </label>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <div class="caps">
+              {#each role.capabilities as capability (capability)}
+                <span class="cap">{capability}</span>
+              {/each}
+            </div>
+          {/if}
         </div>
       {/each}
     </div>
@@ -657,10 +938,18 @@
 
   .search {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
-    flex: 1;
-    min-width: 220px;
+    flex: 1 1 260px;
+    min-width: 0;
     max-width: 420px;
+  }
+
+  @media (max-width: 720px) {
+    .search {
+      flex: 1 1 100%;
+      max-width: none;
+    }
   }
 
   .filters select {
@@ -671,20 +960,6 @@
     font: inherit;
   }
 
-  .date {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  .date input {
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    font: inherit;
-  }
 
   .card {
     padding: var(--space-4);
@@ -761,6 +1036,7 @@
 
   .actions {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
   }
 
@@ -780,6 +1056,12 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+
+  .user:hover {
+    background: var(--bg);
+    border-color: var(--primary);
   }
 
   .user.blocked {
@@ -840,11 +1122,22 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
+    transition: background 0.12s ease;
+  }
+
+  .entry:hover {
+    background: var(--bg);
   }
 
   .entry .action {
     font-weight: 500;
     font-size: 14px;
+  }
+
+  .entry .action-code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    opacity: 0.75;
   }
 
   .entry .when {
@@ -909,6 +1202,117 @@
     padding: 2px 8px;
     border: 1px solid var(--border);
     border-radius: 999px;
+    color: var(--muted);
+  }
+
+  .role-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+    margin-bottom: var(--space-2);
+  }
+
+  .role-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .role-count {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .caps-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .cap-group {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .cap-group:last-child {
+    border-bottom: none;
+  }
+
+  .cap-group-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px 0;
+    border: none;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .cap-group-head:hover {
+    color: var(--primary);
+  }
+
+  .cap-group-title {
+    flex: 1;
+    font-weight: 500;
+    font-size: 13px;
+  }
+
+  .cap-group-count {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .chev {
+    width: 7px;
+    height: 7px;
+    border: solid currentColor;
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(-45deg);
+    transition: transform 0.15s ease;
+  }
+
+  .chev.open {
+    transform: rotate(45deg);
+  }
+
+  .cap-group-body {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 6px 16px;
+    padding: 2px 0 10px 17px;
+  }
+
+  .cap-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    padding: 4px 0;
+    cursor: pointer;
+  }
+
+  .cap-check.core {
+    cursor: not-allowed;
+    opacity: 0.75;
+  }
+
+  .cap-check input {
+    flex: none;
+  }
+
+  .cap-title {
+    flex: 1;
+  }
+
+  .cap-check code {
+    font-size: 11px;
     color: var(--muted);
   }
 

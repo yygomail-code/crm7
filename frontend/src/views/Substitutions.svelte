@@ -26,7 +26,7 @@
   let error = $state('');
   let message = $state('');
 
-  const canAssign = $derived(auth.can('clients.assign'));
+  const canAssign = $derived(auth.can('requests.view.all'));
 
   let managerId = $state<number | null>(null);
   let substituteId = $state<number | null>(null);
@@ -319,6 +319,12 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+
+  .item:hover {
+    background: var(--bg);
+    border-color: var(--primary);
   }
 
   .item.inactive {

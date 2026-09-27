@@ -10,10 +10,14 @@ frontend/.vite/
 .env.*
 !**/.env.example
 **/conf/configuration.php
+api/config/database.json
+api/config/database.json.bak
+api/config/database.json.tmp
 
 # sensitive artifacts (audit)
 db-old/
 php_info/
+api/db/backups/
 
 # uploaded production files
 site-old/back/upload_file/*
@@ -31,3 +35,4 @@ Thumbs.db
 # editors
 .idea/
 .vscode/
+frontend/artifacts/

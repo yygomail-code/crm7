@@ -4,21 +4,26 @@ declare(strict_types=1);
 
 namespace App\Users;
 
+use App\Audit\AuditService;
 use App\Core\Database;
 use App\Http\HttpException;
 use App\Repositories\TokenRepository;
 use App\Repositories\UserHistoryRepository;
 use App\Repositories\UserRepository;
 use App\Support\Validator;
+use Throwable;
 
 final class UserAdminService
 {
     private const LEVELS = [5, 10, 50, 90];
 
+    private const ADMIN_CORE_CAPABILITIES = ['users.manage', 'roles.manage', 'settings.manage'];
+
     public function __construct(
         private readonly UserRepository $users = new UserRepository(),
         private readonly UserHistoryRepository $history = new UserHistoryRepository(),
-        private readonly TokenRepository $tokens = new TokenRepository()
+        private readonly TokenRepository $tokens = new TokenRepository(),
+        private readonly AuditService $audit = new AuditService()
     ) {
     }
 
@@ -210,6 +215,10 @@ final class UserAdminService
             if (!in_array($level, self::LEVELS, true)) {
                 throw new HttpException(422, 'validation_error', 'Неизвестная роль');
             }
+
+            if ((int) $user['LEVEL'] >= 50 && $level < 50) {
+                $this->assertKeepsAdmin($user, 'понизить');
+            }
         }
 
         $stmt = Database::pdo()->prepare(
@@ -248,6 +257,10 @@ final class UserAdminService
             throw new HttpException(403, 'forbidden', 'Нельзя блокировать пользователя с равной или большей ролью');
         }
 
+        if ($block) {
+            $this->assertKeepsAdmin($user, 'заблокировать');
+        }
+
         $stmt = Database::pdo()->prepare("UPDATE users SET ACTIVE = ? WHERE ID = ?");
         $stmt->execute([$block ? 'N' : 'Y', $userId]);
 
@@ -273,6 +286,14 @@ final class UserAdminService
 
         if ($user === null) {
             throw new HttpException(404, 'not_found', 'Пользователь не найден');
+        }
+
+        if ($userId === (int) $actor['ID']) {
+            throw new HttpException(422, 'validation_error', 'Нельзя сбросить пароль себе — используйте смену пароля');
+        }
+
+        if ((int) $user['LEVEL'] >= (int) $actor['LEVEL'] && (int) $actor['LEVEL'] < 90) {
+            throw new HttpException(403, 'forbidden', 'Нельзя сбросить пароль пользователю с равной или большей ролью');
         }
 
         $password = bin2hex(random_bytes(5)) . 'Aa1';
@@ -312,13 +333,109 @@ final class UserAdminService
             ];
         }
 
-        return ['items' => $items];
+        return ['items' => $items, 'catalog' => $this->capabilityCatalog()];
+    }
+
+    public function saveRole(array $actor, array $capabilities, int $level, array $input): array
+    {
+        if (!in_array('roles.manage', $capabilities, true)) {
+            throw new HttpException(403, 'forbidden', 'Менять права ролей может только сисадмин');
+        }
+
+        $levels = array_map(
+            static fn (array $row): int => (int) $row['level'],
+            Database::pdo()->query('SELECT DISTINCT level FROM level_capabilities')->fetchAll() ?: []
+        );
+
+        if (!in_array($level, $levels, true)) {
+            throw new HttpException(404, 'not_found', 'Роль не найдена');
+        }
+
+        $requested = $input['capabilities'] ?? [];
+
+        if (!is_array($requested)) {
+            throw new HttpException(422, 'validation_error', 'Некорректный список прав');
+        }
+
+        $catalog = $this->capabilityCatalog();
+        $known = array_column($catalog, 'code');
+        $codes = array_values(array_unique(array_map(static fn ($code): string => (string) $code, $requested)));
+
+        foreach ($codes as $code) {
+            if (!in_array($code, $known, true)) {
+                throw new HttpException(422, 'validation_error', 'Неизвестное право: ' . $code);
+            }
+        }
+
+        if ($level >= 90) {
+            foreach (self::ADMIN_CORE_CAPABILITIES as $core) {
+                if (!in_array($core, $codes, true)) {
+                    throw new HttpException(
+                        422,
+                        'admin_core',
+                        'У сисадмина нельзя убирать ключевые права: управление пользователями, ролями и настройками'
+                    );
+                }
+            }
+        }
+
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $pdo->prepare('DELETE FROM level_capabilities WHERE level = ?')->execute([$level]);
+
+            $insert = $pdo->prepare('INSERT INTO level_capabilities (level, capability_code) VALUES (?, ?)');
+
+            foreach ($codes as $code) {
+                $insert->execute([$level, $code]);
+            }
+
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+
+            throw $exception;
+        }
+
+        $this->audit->log($actor, 'role.update', 'roles', $level, ['capabilities' => $codes], null);
+
+        return $this->roles();
+    }
+
+    private function capabilityCatalog(): array
+    {
+        $rows = Database::pdo()->query('SELECT code, title FROM capabilities ORDER BY title ASC')->fetchAll() ?: [];
+
+        return array_map(static fn (array $row): array => [
+            'code' => (string) $row['code'],
+            'title' => (string) $row['title'],
+        ], $rows);
     }
 
     private function requireManage(array $capabilities): void
     {
         if (!in_array('users.manage', $capabilities, true)) {
             throw new HttpException(403, 'forbidden', 'Недостаточно прав для управления пользователями');
+        }
+    }
+
+    private function assertKeepsAdmin(array $target, string $action): void
+    {
+        $active = ($target['ACTIVE'] ?? 'N') === 'Y'
+            && ($target['STATUS'] ?? 'N') === 'Y'
+            && (($target['reg_state'] ?? 'active') === 'active');
+
+        if ((int) $target['LEVEL'] < 50 || !$active) {
+            return;
+        }
+
+        if ($this->users->countActiveAdmins() <= 1) {
+            throw new HttpException(
+                422,
+                'last_admin',
+                'Нельзя ' . $action . ' последнего администратора — в системе не останется ни одного администратора'
+            );
         }
     }
 }

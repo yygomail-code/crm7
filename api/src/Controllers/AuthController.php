@@ -41,6 +41,22 @@ final class AuthController
         return Response::ok(['revoked' => true]);
     }
 
+    public function logoutOthers(Request $request): Response
+    {
+        [$user, $tokenRow] = $this->auth->authenticate($request->bearerToken());
+        $revoked = $this->auth->logoutOthers($user, $tokenRow);
+
+        return Response::ok(['revoked' => $revoked]);
+    }
+
+    public function logoutAll(Request $request): Response
+    {
+        [$user] = $this->auth->authenticate($request->bearerToken());
+        $revoked = $this->auth->logoutAll($user);
+
+        return Response::ok(['revoked' => $revoked]);
+    }
+
     public function me(Request $request): Response
     {
         [$user] = $this->auth->authenticate($request->bearerToken());

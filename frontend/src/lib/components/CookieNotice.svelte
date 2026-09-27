@@ -13,6 +13,12 @@
     }
   });
 
+  $effect(() => {
+    document.documentElement.classList.toggle('cookie-visible', visible);
+
+    return () => document.documentElement.classList.remove('cookie-visible');
+  });
+
   function accept(): void {
     try {
       localStorage.setItem(STORAGE_KEY, '1');

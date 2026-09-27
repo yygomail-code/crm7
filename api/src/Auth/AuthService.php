@@ -7,13 +7,13 @@ namespace App\Auth;
 use App\Audit\AuditService;
 use App\Core\Config;
 use App\Http\HttpException;
+use App\Mail\MailService;
 use App\Notifications\NotificationService;
 use App\Repositories\AttemptRepository;
 use App\Repositories\ResetRepository;
 use App\Repositories\TokenRepository;
 use App\Repositories\UserHistoryRepository;
 use App\Repositories\UserRepository;
-use App\Support\Mailer;
 use App\Support\Validator;
 
 final class AuthService
@@ -37,7 +37,8 @@ final class AuthService
         private readonly ResetRepository $resets = new ResetRepository(),
         private readonly UserHistoryRepository $history = new UserHistoryRepository(),
         private readonly NotificationService $notifications = new NotificationService(),
-        private readonly AuditService $audit = new AuditService()
+        private readonly AuditService $audit = new AuditService(),
+        private readonly MailService $mail = new MailService()
     ) {
     }
 
@@ -204,7 +205,7 @@ final class AuthService
         $user = $this->users->findById((int) $tokenRow['user_id']);
 
         if ($user === null || ($user['ACTIVE'] ?? 'N') !== 'Y') {
-            throw new HttpException(401, 'unauthorized', 'Пользователь недоступен');
+            throw new HttpException(401, 'unauthorized', 'Доступ запрещён');
         }
 
         $this->tokens->touch((int) $tokenRow['id']);
@@ -228,6 +229,16 @@ final class AuthService
     public function logout(array $tokenRow): void
     {
         $this->tokens->revoke((int) $tokenRow['id']);
+    }
+
+    public function logoutOthers(array $user, array $tokenRow): int
+    {
+        return $this->tokens->revokeAllForUser((int) $user['ID'], (int) $tokenRow['id']);
+    }
+
+    public function logoutAll(array $user): int
+    {
+        return $this->tokens->revokeAllForUser((int) $user['ID']);
     }
 
     public function changePassword(array $user, array $tokenRow, string $current, string $new): void
@@ -298,7 +309,7 @@ final class AuthService
         $appUrl = rtrim((string) Config::get('APP_URL', 'http://localhost:5173'), '/');
         $link = $appUrl . '/#/reset?token=' . $token;
 
-        Mailer::send(
+        $this->mail->enqueue(
             (string) $user['EMAIL'],
             'Восстановление пароля',
             "Здравствуйте!\n\nСсылка для установки нового пароля (действует 60 минут):\n$link\n\nЕсли вы не запрашивали сброс пароля, просто проигнорируйте это письмо."

@@ -27,7 +27,7 @@
 
 <div class="wrap">
   <form class="card" onsubmit={submit}>
-    <h1>CRM</h1>
+    <h1>CRM7</h1>
     <p class="hint">Вход в систему</p>
 
     <Input label="Логин" bind:value={login} autocomplete="username" name="login" />

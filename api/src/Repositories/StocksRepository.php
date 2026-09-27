@@ -12,7 +12,7 @@ final class StocksRepository
     public function warehousesForUser(int $level, string $sid, bool $all): array
     {
         $base = 'SELECT s.*,
-                    (SELECT COUNT(*) FROM stock_levels l WHERE l.STOCK_SID = s.SID) AS positions,
+                    (SELECT COUNT(*) FROM stock_levels l WHERE l.STOCK_SID = s.SID AND l.QUANTITY > 0) AS positions,
                     (SELECT MAX(l.ACTUAL_DATE) FROM stock_levels l WHERE l.STOCK_SID = s.SID) AS actual_date,
                     EXISTS (
                         SELECT 1 FROM user_level_stock uls2
@@ -51,13 +51,15 @@ final class StocksRepository
     public function levels(string $stockSid, array $filters, int $page, int $perPage): array
     {
         $params = [$stockSid];
-        $where = 'STOCK_SID = ?' . $this->filterSql($filters, $params);
+        $where = 'l.STOCK_SID = ?' . $this->filterSql($filters, $params);
 
         $offset = max(0, ($page - 1) * $perPage);
 
         $stmt = Database::pdo()->prepare(
-            'SELECT ID AS id, NAME AS name, UNIT AS unit, QUANTITY AS quantity, ACTUAL_DATE AS actual_date
-             FROM stock_levels
+            'SELECT l.ID AS id, l.NAME AS name, l.UNIT AS unit, l.QUANTITY AS quantity,
+                    l.ACTUAL_DATE AS actual_date, n.DESCRIPTION AS description
+             FROM stock_levels l
+             LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
              WHERE ' . $where . '
              ' . $this->orderSql((string) ($filters['sort'] ?? '')) . '
              LIMIT ' . max(1, min(200, $perPage)) . ' OFFSET ' . $offset
@@ -70,9 +72,9 @@ final class StocksRepository
     public function levelsCount(string $stockSid, array $filters): int
     {
         $params = [$stockSid];
-        $where = 'STOCK_SID = ?' . $this->filterSql($filters, $params);
+        $where = 'l.STOCK_SID = ?' . $this->filterSql($filters, $params);
 
-        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM stock_levels WHERE ' . $where);
+        $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM stock_levels l WHERE ' . $where);
         $stmt->execute($params);
 
         return (int) $stmt->fetchColumn();
@@ -86,10 +88,10 @@ final class StocksRepository
 
         $placeholders = implode(',', array_fill(0, count($stockSids), '?'));
         $params = array_values($stockSids);
-        $where = 'STOCK_SID IN (' . $placeholders . ')' . $this->filterSql($filters, $params);
+        $where = 'l.STOCK_SID IN (' . $placeholders . ')' . $this->filterSql($filters, $params);
 
         $stmt = Database::pdo()->prepare(
-            'SELECT STOCK_SID, COUNT(*) AS cnt FROM stock_levels WHERE ' . $where . ' GROUP BY STOCK_SID'
+            'SELECT l.STOCK_SID, COUNT(*) AS cnt FROM stock_levels l WHERE ' . $where . ' GROUP BY l.STOCK_SID'
         );
         $stmt->execute($params);
 
@@ -105,11 +107,13 @@ final class StocksRepository
     public function levelsAll(string $stockSid, array $filters, int $limit = 5000): array
     {
         $params = [$stockSid];
-        $where = 'STOCK_SID = ?' . $this->filterSql($filters, $params);
+        $where = 'l.STOCK_SID = ?' . $this->filterSql($filters, $params);
 
         $stmt = Database::pdo()->prepare(
-            'SELECT NAME AS name, UNIT AS unit, QUANTITY AS quantity, ACTUAL_DATE AS actual_date
-             FROM stock_levels
+            'SELECT l.NAME AS name, l.UNIT AS unit, l.QUANTITY AS quantity, l.ACTUAL_DATE AS actual_date,
+                    n.DESCRIPTION AS description
+             FROM stock_levels l
+             LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
              WHERE ' . $where . '
              ' . $this->orderSql((string) ($filters['sort'] ?? '')) . '
              LIMIT ' . max(1, min(20000, $limit))
@@ -124,13 +128,17 @@ final class StocksRepository
         $sql = '';
 
         if (($filters['q'] ?? '') !== '') {
-            $sql .= ' AND NAME LIKE ?';
+            $sql .= ' AND l.NAME LIKE ?';
             $params[] = '%' . $filters['q'] . '%';
         }
 
         if (($filters['qty_op'] ?? '') !== '' && isset($filters['qty'])) {
-            $sql .= ' AND QUANTITY ' . ($filters['qty_op'] === 'lt' ? '<' : '>') . ' ?';
+            $sql .= ' AND l.QUANTITY ' . ($filters['qty_op'] === 'lt' ? '<' : '>') . ' ?';
             $params[] = $filters['qty'];
+        }
+
+        if (!($filters['show_zero'] ?? false)) {
+            $sql .= ' AND l.QUANTITY > 0';
         }
 
         return $sql;
@@ -139,11 +147,45 @@ final class StocksRepository
     private function orderSql(string $sort): string
     {
         return match ($sort) {
-            'name_desc' => 'ORDER BY NAME DESC',
-            'qty_asc' => 'ORDER BY QUANTITY ASC, NAME ASC',
-            'qty_desc' => 'ORDER BY QUANTITY DESC, NAME ASC',
-            default => 'ORDER BY NAME ASC',
+            'name_desc' => 'ORDER BY l.NAME DESC',
+            'qty_asc' => 'ORDER BY l.QUANTITY ASC, l.NAME ASC',
+            'qty_desc' => 'ORDER BY l.QUANTITY DESC, l.NAME ASC',
+            default => 'ORDER BY l.NAME ASC',
         };
+    }
+
+    public function warehouseExists(string $name): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT ID FROM stocks WHERE NAME_1C = ? LIMIT 1');
+        $stmt->execute([$name]);
+
+        return $stmt->fetch() !== false;
+    }
+
+    public function findWarehouseById(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM stocks WHERE ID = ? LIMIT 1');
+        $stmt->execute([$id]);
+
+        return $stmt->fetch() ?: null;
+    }
+
+    public function warehouseNameTaken(string $name, string $sid): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT ID FROM stocks WHERE NAME = ? AND SID <> ? LIMIT 1');
+        $stmt->execute([$name, $sid]);
+
+        return $stmt->fetch() !== false;
+    }
+
+    public function renameWarehouse(string $sid, string $name): void
+    {
+        $pdo = Database::pdo();
+
+        $pdo->prepare('UPDATE stocks SET NAME = ?, LAST_ACTIVITY_DATE = NOW() WHERE SID = ?')
+            ->execute([$name, $sid]);
+        $pdo->prepare('UPDATE stock_levels SET STOCK = ? WHERE STOCK_SID = ?')
+            ->execute([$name, $sid]);
     }
 
     public function upsertWarehouse(string $name): ?array
@@ -167,17 +209,117 @@ final class StocksRepository
         $stmt->execute([$updateSid, $sid]);
     }
 
-    public function upsertNomenclature(string $name, string $unit): ?array
+    public function upsertNomenclature(string $name, string $unit, ?string $description = null): ?array
     {
         $pdo = Database::pdo();
 
-        $pdo->prepare('INSERT IGNORE INTO nomenclature (NAME, NAME_1C, UNIT) VALUES (?, ?, ?)')
-            ->execute([$name, $name, $unit !== '' ? $unit : null]);
+        $pdo->prepare('INSERT IGNORE INTO nomenclature (NAME, NAME_1C, UNIT, DESCRIPTION) VALUES (?, ?, ?, ?)')
+            ->execute([$name, $name, $unit !== '' ? $unit : null, $description]);
+
+        if ($description !== null) {
+            $pdo->prepare('UPDATE nomenclature SET DESCRIPTION = ? WHERE NAME_1C = ?')->execute([$description, $name]);
+        }
 
         $stmt = $pdo->prepare('SELECT * FROM nomenclature WHERE NAME_1C = ? LIMIT 1');
         $stmt->execute([$name]);
 
         return $stmt->fetch() ?: null;
+    }
+
+    public function findLevel(int $id): ?array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT l.ID AS id, l.STOCK_SID AS stock_sid, l.NAME AS name, l.NAME_SID AS name_sid, l.UNIT AS unit,
+                    l.QUANTITY AS quantity, l.ACTUAL_DATE AS actual_date, n.DESCRIPTION AS description
+             FROM stock_levels l
+             LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
+             WHERE l.ID = ? LIMIT 1'
+        );
+        $stmt->execute([$id]);
+
+        return $stmt->fetch() ?: null;
+    }
+
+    public function findWarehouseBySid(string $sid): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM stocks WHERE SID = ? LIMIT 1');
+        $stmt->execute([$sid]);
+
+        return $stmt->fetch() ?: null;
+    }
+
+    public function levelExists(string $stockSid, string $nameSid, ?int $excludeId = null): bool
+    {
+        $sql = 'SELECT COUNT(*) FROM stock_levels WHERE STOCK_SID = ? AND NAME_SID = ?';
+        $params = [$stockSid, $nameSid];
+
+        if ($excludeId !== null && $excludeId > 0) {
+            $sql .= ' AND ID <> ?';
+            $params[] = $excludeId;
+        }
+
+        $stmt = Database::pdo()->prepare($sql);
+        $stmt->execute($params);
+
+        return (int) $stmt->fetchColumn() > 0;
+    }
+
+    public function createLevel(array $data): int
+    {
+        $pdo = Database::pdo();
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO stock_levels (LAST_STOCK_UPDATE_SID, ACTUAL_DATE, STOCK, STOCK_SID, NAME, NAME_SID, UNIT, QUANTITY)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        $stmt->execute([
+            $data['update_sid'] ?? null,
+            $data['actual_date'],
+            $data['stock'],
+            $data['stock_sid'],
+            $data['name'],
+            $data['name_sid'],
+            $data['unit'] !== '' ? $data['unit'] : null,
+            $data['quantity'],
+        ]);
+
+        return (int) $pdo->lastInsertId();
+    }
+
+    public function updateLevel(int $id, string $name, string $nameSid, string $unit, float $quantity): void
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE stock_levels SET NAME = ?, NAME_SID = ?, UNIT = ?, QUANTITY = ?, ACTUAL_DATE = CURDATE() WHERE ID = ?'
+        );
+        $stmt->execute([$name, $nameSid, $unit !== '' ? $unit : null, $quantity, $id]);
+    }
+
+    public function levelsIndex(): array
+    {
+        $rows = Database::pdo()->query('SELECT ID, STOCK_SID, NAME_SID, QUANTITY FROM stock_levels')->fetchAll() ?: [];
+        $index = [];
+
+        foreach ($rows as $row) {
+            $index[(string) $row['STOCK_SID'] . '|' . (string) $row['NAME_SID']] = [
+                'id' => (int) $row['ID'],
+                'quantity' => (float) $row['QUANTITY'],
+            ];
+        }
+
+        return $index;
+    }
+
+    public function zeroAllLevels(): void
+    {
+        Database::pdo()->exec('UPDATE stock_levels SET QUANTITY = 0');
+    }
+
+    public function updateLevelFromImport(int $id, string $updateSid, string $actualDate, string $unit, float $quantity): void
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE stock_levels SET LAST_STOCK_UPDATE_SID = ?, ACTUAL_DATE = ?, UNIT = ?, QUANTITY = ? WHERE ID = ?'
+        );
+        $stmt->execute([$updateSid, $actualDate, $unit !== '' ? $unit : null, $quantity, $id]);
     }
 
     public function insertUpdate(string $sid, string $actualDate, string $fileName): int
@@ -195,6 +337,31 @@ final class StocksRepository
     public function deleteAllLevels(): void
     {
         Database::pdo()->exec('DELETE FROM stock_levels');
+    }
+
+    public function snapshotLevels(): void
+    {
+        $pdo = Database::pdo();
+
+        $pdo->exec('DELETE FROM stock_levels_backup');
+        $pdo->exec(
+            'INSERT INTO stock_levels_backup
+                (ID, ACTIVE, TIME_ADD, SID, LAST_STOCK_UPDATE_SID, ACTUAL_DATE, STOCK, STOCK_SID, NAME, NAME_SID, UNIT, QUANTITY, backup_at)
+             SELECT ID, ACTIVE, TIME_ADD, SID, LAST_STOCK_UPDATE_SID, ACTUAL_DATE, STOCK, STOCK_SID, NAME, NAME_SID, UNIT, QUANTITY, NOW()
+             FROM stock_levels'
+        );
+    }
+
+    public function failStuckJobs(int $minutes = 30): int
+    {
+        $stmt = Database::pdo()->prepare(
+            "UPDATE stock_import_jobs
+             SET STATUS = 'failed', ERRORS = ?, finished_at = NOW()
+             WHERE STATUS = 'processing' AND created_at < DATE_SUB(NOW(), INTERVAL ? MINUTE)"
+        );
+        $stmt->execute(['Импорт прерван: превышено время обработки', max(1, $minutes)]);
+
+        return $stmt->rowCount();
     }
 
     public function prepareLevelInsert(): PDOStatement

@@ -1,7 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
-  import { getUserProfile, loadAvatarUrl, type UserProfile } from '../lib/api/profile';
+  import { getUserProfile, type UserProfile } from '../lib/api/profile';
+  import { startThread } from '../lib/api/chat';
+  import { avatarColor, avatarLetter, avatarName } from '../lib/avatar';
+  import { avatars } from '../lib/stores/avatar.svelte';
+  import { auth } from '../lib/stores/auth.svelte';
   import { router } from '../lib/router.svelte';
   import Button from '../lib/components/ui/Button.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
@@ -13,22 +17,35 @@
   let { id }: Props = $props();
 
   let profile = $state<UserProfile | null>(null);
-  let avatarUrl = $state<string | null>(null);
+  const avatarUrl = $derived(avatars.url(id));
   let loading = $state(true);
   let error = $state('');
+  let chatBusy = $state(false);
 
   const roleTitle = $derived(
     profile === null ? '' : profile.level >= 50 ? 'Администратор' : profile.is_staff ? 'Менеджер' : 'Клиент'
   );
 
-  const initials = $derived(
-    (profile?.name ?? '')
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .join('')
-  );
+  const avatarSeed = $derived(avatarName(profile?.name, profile?.login ?? id));
+  const letter = $derived(avatarLetter(avatarSeed));
+  const avatarBg = $derived(avatarColor(avatarSeed));
+
+  const isSelf = $derived(auth.user?.id === id);
+  const canChat = $derived((auth.user?.level ?? 0) >= 10 && !isSelf && (profile?.is_staff ?? false));
+
+  async function openChat(): Promise<void> {
+    chatBusy = true;
+    error = '';
+
+    try {
+      const thread = await startThread(id);
+      router.navigate(`/chat?thread=${thread.id}`);
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : 'Не удалось открыть чат';
+    } finally {
+      chatBusy = false;
+    }
+  }
 
   onMount(() => {
     void load();
@@ -40,7 +57,7 @@
 
     try {
       profile = await getUserProfile(id);
-      avatarUrl = await loadAvatarUrl(id);
+      await avatars.load(id);
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить профиль';
     } finally {
@@ -64,7 +81,7 @@
         {#if avatarUrl}
           <img src={avatarUrl} alt="" />
         {:else}
-          <span>{initials || '•'}</span>
+          <span style:background={avatarBg}>{letter}</span>
         {/if}
       </div>
 
@@ -99,9 +116,13 @@
         {/if}
       </dl>
 
-      <div class="actions">
-        <Button variant="ghost" onclick={() => router.navigate('/chat')}>Написать в чат</Button>
-      </div>
+      {#if canChat}
+        <div class="actions">
+          <Button variant="ghost" loading={chatBusy} onclick={() => void openChat()}>
+            Написать в чат
+          </Button>
+        </div>
+      {/if}
     </div>
   {/if}
 </section>
@@ -111,6 +132,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    width: 100%;
+    max-width: 720px;
+    margin: 0 auto;
   }
 
   .head {
@@ -153,6 +177,14 @@
     object-fit: cover;
   }
 
+  .avatar span {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    color: #fff;
+  }
+
   h1 {
     margin: 0;
     font-size: 22px;
@@ -183,7 +215,7 @@
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
     gap: var(--space-3);
-    margin: 0 0 var(--space-3);
+    margin: 0;
   }
 
   .contacts dt {
@@ -204,6 +236,7 @@
   .actions {
     display: flex;
     gap: var(--space-2);
+    margin-top: var(--space-3);
   }
 
   .alert {

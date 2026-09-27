@@ -11,7 +11,22 @@ const item = {
 
 describe('cart store', () => {
   beforeEach(() => {
+    cart.setUser(null);
     cart.clear();
+  });
+
+  it('keeps carts of different users apart', () => {
+    cart.setUser(1);
+    cart.clear();
+    cart.add(item);
+
+    expect(cart.count).toBe(1);
+
+    cart.setUser(2);
+    expect(cart.count).toBe(0);
+
+    cart.setUser(1);
+    expect(cart.count).toBe(1);
   });
 
   it('adds items and merges duplicates', () => {

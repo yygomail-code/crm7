@@ -16,17 +16,19 @@ final class Database
             return self::$pdo;
         }
 
+        $settings = DatabaseSettings::current();
+
         $dsn = sprintf(
-            'mysql:host=%s;port=%s;dbname=%s;charset=utf8mb4',
-            Config::get('DB_HOST', '127.0.0.1'),
-            Config::get('DB_PORT', '3306'),
-            Config::get('DB_NAME', 'crm_local')
+            'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
+            $settings['host'],
+            $settings['port'],
+            $settings['database']
         );
 
         self::$pdo = new PDO(
             $dsn,
-            (string) Config::get('DB_USER', 'root'),
-            (string) Config::get('DB_PASS', ''),
+            $settings['user'],
+            $settings['password'],
             [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,

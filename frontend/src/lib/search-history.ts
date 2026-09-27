@@ -1,6 +1,24 @@
 const PREFIX = 'crm.search.';
 const LIMIT = 10;
 
+export function clearHistory(): void {
+  try {
+    const keys: string[] = [];
+
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index);
+
+      if (key !== null && key.startsWith(PREFIX)) {
+        keys.push(key);
+      }
+    }
+
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // приватный режим — истории нет
+  }
+}
+
 export function pushQuery(list: string[], query: string): string[] {
   const value = query.trim();
 

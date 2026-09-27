@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace App\Requests;
 
+use App\Clients\ClientManagerService;
+use App\Chat\ChatService;
 use App\Core\Config;
 use App\Core\Database;
+use App\Core\RateLimiter;
 use App\Http\HttpException;
 use App\Repositories\ActivityTypeRepository;
-use App\Repositories\ManagerClientRepository;
 use App\Repositories\RequestActivityRepository;
 use App\Repositories\RequestAssignmentRepository;
 use App\Repositories\RequestCommentRepository;
@@ -20,18 +22,21 @@ use App\Repositories\SubstitutionRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\ViewLogRepository;
 use App\Notifications\NotificationService;
+use App\Stocks\StockReservationService;
 use Throwable;
 
 final class RequestService
 {
     private const PRIORITIES = [1, 2, 3];
 
+    private const ITEMS_BRIEF_LIMIT = 15;
+
     public function __construct(
         private readonly RequestRepository $requests = new RequestRepository(),
         private readonly RequestStatusRepository $statuses = new RequestStatusRepository(),
         private readonly RequestHistoryRepository $history = new RequestHistoryRepository(),
         private readonly RequestCommentRepository $comments = new RequestCommentRepository(),
-        private readonly ManagerClientRepository $managerClients = new ManagerClientRepository(),
+        private readonly ClientManagerService $clientManagers = new ClientManagerService(),
         private readonly UserRepository $users = new UserRepository(),
         private readonly RequestAssignmentRepository $assignments = new RequestAssignmentRepository(),
         private readonly ActivityTypeRepository $activityTypes = new ActivityTypeRepository(),
@@ -39,7 +44,9 @@ final class RequestService
         private readonly NotificationService $notifications = new NotificationService(),
         private readonly SubstitutionRepository $substitutions = new SubstitutionRepository(),
         private readonly SettingsRepository $settings = new SettingsRepository(),
-        private readonly ViewLogRepository $views = new ViewLogRepository()
+        private readonly ViewLogRepository $views = new ViewLogRepository(),
+        private readonly ChatService $chat = new ChatService(),
+        private readonly StockReservationService $reservations = new StockReservationService()
     ) {
     }
 
@@ -79,54 +86,154 @@ final class RequestService
 
     private function normalizeItems(mixed $raw): array
     {
-        if (!is_array($raw)) {
-            return [];
-        }
-
-        $items = [];
-
-        foreach (array_slice($raw, 0, 50) as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-
-            $name = trim((string) ($row['name'] ?? ''));
-
-            if ($name === '') {
-                continue;
-            }
-
-            $quantity = (float) ($row['quantity'] ?? 0);
-
-            if ($quantity <= 0) {
-                continue;
-            }
-
-            $warehouseId = (int) ($row['warehouse_id'] ?? 0);
-
-            $items[] = [
-                'warehouse_id' => $warehouseId > 0 ? $warehouseId : null,
-                'warehouse_name' => mb_substr(trim((string) ($row['warehouse_name'] ?? '')), 0, 255),
-                'name' => mb_substr($name, 0, 255),
-                'unit' => mb_substr(trim((string) ($row['unit'] ?? '')), 0, 50),
-                'quantity' => $quantity,
-            ];
-        }
-
-        return $items;
+        return RequestItems::normalize($raw);
     }
 
     private function itemsText(array $items): string
     {
-        $lines = array_map(static function (array $item): string {
-            $quantity = rtrim(rtrim(number_format($item['quantity'], 3, ',', ' '), '0'), ',');
-            $unit = $item['unit'] !== '' ? ' ' . $item['unit'] : '';
-            $warehouse = $item['warehouse_name'] !== '' ? ' (' . $item['warehouse_name'] . ')' : '';
-
-            return '— ' . $item['name'] . ': ' . $quantity . $unit . $warehouse;
-        }, $items);
+        $lines = array_map(fn (array $item): string => $this->itemLine($item), $items);
 
         return "Позиции со склада:\n" . implode("\n", $lines);
+    }
+
+    private function itemLine(array $item): string
+    {
+        $unit = (string) ($item['unit'] ?? '') !== '' ? ' ' . $item['unit'] : '';
+        $warehouse = (string) ($item['warehouse_name'] ?? '') !== '' ? ' (' . $item['warehouse_name'] . ')' : '';
+
+        return '— ' . $item['name'] . ': ' . $this->quantityText((float) $item['quantity']) . $unit . $warehouse;
+    }
+
+    private function quantityText(float $quantity): string
+    {
+        return rtrim(rtrim(number_format($quantity, 3, ',', ' '), '0'), ',');
+    }
+
+    private function itemsCountText(int $count): string
+    {
+        $mod100 = $count % 100;
+        $mod10 = $count % 10;
+
+        if ($mod100 >= 11 && $mod100 <= 14) {
+            return $count . ' позиций';
+        }
+
+        return match ($mod10) {
+            1 => $count . ' позиция',
+            2, 3, 4 => $count . ' позиции',
+            default => $count . ' позиций',
+        };
+    }
+
+    private function defaultSubject(array $items): string
+    {
+        $date = date('d.m.Y');
+
+        if ($items === []) {
+            return 'Заявка от ' . $date;
+        }
+
+        return 'Заявка на ' . $this->itemsCountText(count($items)) . ' от ' . $date;
+    }
+
+    private function itemsBrief(array $items): string
+    {
+        $limit = self::ITEMS_BRIEF_LIMIT;
+        $lines = [];
+
+        foreach (array_slice($items, 0, $limit) as $item) {
+            $lines[] = $this->itemLine($item);
+        }
+
+        if (count($items) > $limit) {
+            $lines[] = '— и ещё ' . (count($items) - $limit) . ' поз.';
+        }
+
+        return implode("\n", $lines);
+    }
+
+    private function itemsMap(array $items): array
+    {
+        $map = [];
+
+        foreach ($items as $item) {
+            $key = ((int) ($item['warehouse_id'] ?? 0)) . '|' . mb_strtolower(trim((string) $item['name']));
+            $map[$key] = $item;
+        }
+
+        return $map;
+    }
+
+    private function itemsAddedText(array $items): string
+    {
+        return 'Добавлено ' . $this->itemsCountText(count($items)) . ":\n" . $this->itemsBrief($items);
+    }
+
+    private function itemsDiffText(array $before, array $after): string
+    {
+        $beforeMap = $this->itemsMap($before);
+        $afterMap = $this->itemsMap($after);
+
+        $added = [];
+        $changed = [];
+        $removed = [];
+
+        foreach ($afterMap as $key => $item) {
+            if (!isset($beforeMap[$key])) {
+                $added[] = $item;
+
+                continue;
+            }
+
+            if (abs((float) $beforeMap[$key]['quantity'] - (float) $item['quantity']) > 0.00001) {
+                $changed[] = ['before' => $beforeMap[$key], 'after' => $item];
+            }
+        }
+
+        foreach ($beforeMap as $key => $item) {
+            if (!isset($afterMap[$key])) {
+                $removed[] = $item;
+            }
+        }
+
+        if ($added === [] && $changed === [] && $removed === []) {
+            return '';
+        }
+
+        $parts = [];
+
+        if ($added !== []) {
+            $parts[] = "Добавлено:\n" . $this->itemsBrief($added);
+        }
+
+        if ($removed !== []) {
+            $parts[] = "Убрано:\n" . $this->itemsBrief($removed);
+        }
+
+        if ($changed !== []) {
+            $lines = [];
+
+            foreach (array_slice($changed, 0, self::ITEMS_BRIEF_LIMIT) as $pair) {
+                $unit = (string) ($pair['after']['unit'] ?? '') !== '' ? ' ' . $pair['after']['unit'] : '';
+                $warehouse = (string) ($pair['after']['warehouse_name'] ?? '') !== '' ? ' (' . $pair['after']['warehouse_name'] . ')' : '';
+
+                $lines[] = '— ' . $pair['after']['name'] . ': '
+                    . $this->quantityText((float) $pair['before']['quantity']) . ' → '
+                    . $this->quantityText((float) $pair['after']['quantity']) . $unit . $warehouse;
+            }
+
+            if (count($changed) > self::ITEMS_BRIEF_LIMIT) {
+                $lines[] = '— и ещё ' . (count($changed) - self::ITEMS_BRIEF_LIMIT) . ' поз.';
+            }
+
+            $parts[] = "Изменено:\n" . implode("\n", $lines);
+        }
+
+        $parts[] = $after === []
+            ? 'Осталось: позиций нет'
+            : 'Осталось ' . $this->itemsCountText(count($after)) . ":\n" . $this->itemsBrief($after);
+
+        return $this->limitText(implode("\n\n", $parts));
     }
 
     public function statuses(): array
@@ -145,11 +252,17 @@ final class RequestService
         $page = max(1, (int) ($filters['page'] ?? 1));
         $perPage = min(100, max(5, (int) ($filters['per_page'] ?? 20)));
 
+        $managerScope = (string) ($filters['manager_scope'] ?? '');
+        $state = (string) ($filters['state'] ?? '');
+
         $result = $this->requests->list([
             'status' => trim((string) ($filters['status'] ?? '')),
             'q' => trim((string) ($filters['q'] ?? '')),
+            'manager_scope' => in_array($managerScope, ['all', 'none', 'mine', 'others'], true) ? $managerScope : '',
+            'manager_scope_user' => (int) $user['ID'],
             'manager_id' => $filters['manager_id'] ?? null,
             'client_id' => $filters['client_id'] ?? null,
+            'state' => in_array($state, ['open', 'closed', 'overdue'], true) ? $state : '',
             'warehouse_id' => $filters['warehouse_id'] ?? null,
             'from' => trim((string) ($filters['from'] ?? '')),
             'to' => trim((string) ($filters['to'] ?? '')),
@@ -193,6 +306,7 @@ final class RequestService
         $isFinal = $status !== null && (bool) $status['is_final'];
         $managerId = $request['manager_id'] !== null ? (int) $request['manager_id'] : null;
         $previousManager = $managerId !== null ? $this->assignments->previousManager($id, $managerId) : null;
+        $chat = $this->chat->threadForClient($user, $capabilities, (int) $request['client_id'], $id);
 
         return [
             'request' => $this->mapRequest($request),
@@ -202,7 +316,10 @@ final class RequestService
                 ? array_map([$this, 'mapComment'], $this->comments->listByRequest($id, true))
                 : [],
             'assignments' => array_map([$this, 'mapAssignment'], $this->assignments->listByRequest($id)),
-            'activities' => array_map([$this, 'mapActivity'], $this->activities->listByRequest($id)),
+            'activities' => array_map([$this, 'mapActivity'], array_values(array_filter(
+                $this->activities->listByRequest($id),
+                static fn (array $row): bool => $isStaff || (string) ($row['audience'] ?? 'all') !== 'manager'
+            ))),
             'views' => $isStaff
                 ? array_map(static fn (array $row): array => [
                     'id' => (int) $row['id'],
@@ -220,13 +337,20 @@ final class RequestService
                 : null,
             'can' => [
                 'transition' => $isStaff && $this->canTransition($user, $capabilities, $request),
+                'transition_to' => $this->transitionTargets($user, $capabilities, $request, $isManager),
                 'cancel' => !$isStaff && $this->canTransition($user, $capabilities, $request),
                 'claim' => $this->canClaim($user, $capabilities, $request),
                 'assign' => $isManager && !$isFinal,
                 'comment' => $isStaff,
                 'comment_internal' => $isManager,
                 'activity' => true,
+                'edit' => $this->canEdit($user, $capabilities, $request),
+                'priority' => $isStaff && $this->canEdit($user, $capabilities, $request),
+                'meta' => $isStaff && !$isFinal && $this->canTransition($user, $capabilities, $request),
+                'edit_text' => $isStaff && $this->canTransition($user, $capabilities, $request),
+                'edit_items' => $this->canEditItems($user, $capabilities, $request),
             ],
+            'chat' => $chat,
         ];
     }
 
@@ -234,18 +358,23 @@ final class RequestService
     {
         $this->requireCapability($capabilities, 'requests.create');
 
+        if (!$this->settings->salesEnabled()) {
+            throw new HttpException(403, 'sales_disabled', 'Продажи отключены: оформление заявок недоступно');
+        }
+
+        RateLimiter::hit('request.create', 'user:' . (int) $user['ID'], 60, 3600);
+
+        $body = trim((string) ($input['body'] ?? ''));
+        $items = $this->normalizeItems($input['items'] ?? []);
         $subject = trim((string) ($input['subject'] ?? ''));
 
-        if (mb_strlen($subject) < 3) {
-            throw new HttpException(422, 'validation_error', 'Укажите тему заявки (минимум 3 символа)');
+        if ($subject === '') {
+            $subject = $this->defaultSubject($items);
         }
 
         if (mb_strlen($subject) > 255) {
             $subject = mb_substr($subject, 0, 255);
         }
-
-        $body = trim((string) ($input['body'] ?? ''));
-        $items = $this->normalizeItems($input['items'] ?? []);
 
         if ($items !== []) {
             $body = trim($body === '' ? $this->itemsText($items) : $body . "\n\n" . $this->itemsText($items));
@@ -265,23 +394,22 @@ final class RequestService
         $requestedClientId = (int) ($input['client_id'] ?? 0);
 
         if ($requestedClientId > 0 && $requestedClientId !== $clientId) {
-            $allowed = in_array('requests.view.all', $capabilities, true)
-                || $this->managerClients->isManagerOf($requestedClientId, (int) $user['ID']);
-
-            if (!$allowed) {
-                throw new HttpException(403, 'forbidden', 'Можно создавать заявки только для своих клиентов');
+            if ((int) $user['LEVEL'] < 10) {
+                throw new HttpException(403, 'forbidden', 'Можно создавать заявки только от своего имени');
             }
 
             $client = $this->users->findById($requestedClientId);
 
-            if ($client === null || ($client['ACTIVE'] ?? 'N') !== 'Y') {
+            if ($client === null || ($client['ACTIVE'] ?? 'N') !== 'Y' || (int) $client['LEVEL'] !== 5) {
                 throw new HttpException(422, 'validation_error', 'Клиент не найден');
             }
 
             $clientId = $requestedClientId;
+        } elseif ((int) $user['LEVEL'] >= 10) {
+            throw new HttpException(422, 'client_required', 'Выберите клиента, к которому привязать заявку');
         }
 
-        $managerId = $this->managerClients->primaryManagerForClient($clientId);
+        $managerId = (int) $user['LEVEL'] >= 10 ? (int) $user['ID'] : null;
         $substitutionId = null;
 
         if ($managerId !== null) {
@@ -290,6 +418,14 @@ final class RequestService
             if ($substitution !== null) {
                 $substitutionId = (int) $substitution['ID'];
                 $managerId = (int) $substitution['substitute_id'];
+            }
+        } else {
+            $boundManagerId = $this->clientManagers->managerIdFor($clientId);
+
+            if ($boundManagerId !== null) {
+                $effective = $this->clientManagers->effectiveForManager($boundManagerId);
+                $managerId = $effective['id'];
+                $substitutionId = $effective['substitution_id'];
             }
         }
 
@@ -313,7 +449,18 @@ final class RequestService
 
             $number = $this->requests->setNumber($id);
             $this->requests->createItems($id, $items);
+            $this->reservations->apply($id, $items);
             $this->history->add($id, (int) $user['ID'], null, 'new', 'Заявка создана');
+
+            if ($items !== []) {
+                $this->activities->add(
+                    $id,
+                    (int) $user['ID'],
+                    'items',
+                    'Состав заявки',
+                    $this->itemsAddedText($items)
+                );
+            }
 
             if ($managerId !== null) {
                 $this->assignments->add(
@@ -321,7 +468,7 @@ final class RequestService
                     null,
                     $managerId,
                     (int) $user['ID'],
-                    $substitutionId !== null ? 'Замещение: менеджер в отпуске' : 'Автоназначение по клиенту'
+                    $substitutionId !== null ? 'Замещение: менеджер в отпуске' : 'Заявка создана менеджером'
                 );
                 $this->notifications->notify(
                     $managerId,
@@ -342,18 +489,111 @@ final class RequestService
         return $this->detail($user, $capabilities, $id);
     }
 
-    public function transition(array $user, array $capabilities, int $id, array $input): array
+    public function updateItems(array $user, array $capabilities, int $id, array $input): array
     {
-        $toStatus = trim((string) ($input['to_status'] ?? ''));
-        $comment = trim((string) ($input['comment'] ?? ''));
         $version = isset($input['version']) ? (int) $input['version'] : null;
+        $items = $this->normalizeItems($input['items'] ?? []);
+        $comment = trim((string) ($input['comment'] ?? ''));
 
-        if (!$this->statuses->exists($toStatus)) {
-            throw new HttpException(422, 'validation_error', 'Неизвестный статус');
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $request = $this->requests->findByIdForUpdate($id);
+
+            if ($request === null) {
+                throw new HttpException(404, 'not_found', 'Заявка не найдена');
+            }
+
+            $this->assertCanView($user, $capabilities, $request);
+
+            if (!$this->canEditItems($user, $capabilities, $request)) {
+                throw new HttpException(403, 'forbidden', 'Изменять состав можно только у активной заявки');
+            }
+
+            $this->assertVersion($version, $request);
+
+            $before = $this->requests->itemsForRequests([$id])[$id] ?? [];
+
+            $this->requests->replaceItems($id, $items);
+            $this->reservations->apply($id, $items);
+
+            $diff = $this->itemsDiffText($before, $items);
+
+            if ($comment !== '') {
+                $comment = mb_substr($comment, 0, 500);
+                $diff = $diff !== '' ? $diff . "\n" . $comment : $comment;
+            }
+
+            if ($diff !== '') {
+                $this->activities->add($id, (int) $user['ID'], 'items', 'Состав заявки изменён', $diff);
+            }
+
+            $this->notifications->notifyParticipants(
+                $request,
+                (int) $user['ID'],
+                'request.items',
+                'Заявка ' . (string) $request['number'] . ': изменён состав',
+                $items === []
+                    ? 'Позиции убраны из заявки'
+                    : 'В заявке ' . $this->itemsCountText(count($items)) . '. Подробности — в истории заявки',
+                ['request_number' => (string) $request['number']]
+            );
+
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+            throw $exception;
         }
 
-        if (mb_strlen($comment) < 3) {
-            throw new HttpException(422, 'comment_required', 'Смена статуса требует комментария');
+        return $this->detail($user, $capabilities, $id);
+    }
+
+    private function canEdit(array $user, array $capabilities, array $request): bool
+    {
+        if ((string) $request['status_id'] !== 'new') {
+            return false;
+        }
+
+        if ((int) $request['client_id'] === (int) $user['ID']) {
+            return true;
+        }
+
+        return $this->canManage($user, $capabilities, $request);
+    }
+
+    private function canEditItems(array $user, array $capabilities, array $request): bool
+    {
+        if ($this->canEdit($user, $capabilities, $request)) {
+            return true;
+        }
+
+        if ((int) ($user['LEVEL'] ?? 0) < 10) {
+            return false;
+        }
+
+        $status = $this->statuses->map()[(string) $request['status_id']] ?? null;
+
+        if ($status !== null && (bool) $status['is_final']) {
+            return false;
+        }
+
+        return $this->canTransition($user, $capabilities, $request);
+    }
+
+    public function updateRequest(array $user, array $capabilities, int $id, array $input): array
+    {
+        $version = isset($input['version']) ? (int) $input['version'] : null;
+        $subject = trim((string) ($input['subject'] ?? ''));
+        $body = trim((string) ($input['body'] ?? ''));
+        $items = $this->normalizeItems($input['items'] ?? []);
+
+        if (mb_strlen($subject) > 255) {
+            $subject = mb_substr($subject, 0, 255);
+        }
+
+        if (mb_strlen($body) > 5000) {
+            $body = mb_substr($body, 0, 5000);
         }
 
         $pdo = Database::pdo();
@@ -368,9 +608,352 @@ final class RequestService
 
             $this->assertCanView($user, $capabilities, $request);
 
-            if ($version !== null && $version !== (int) $request['version']) {
-                throw new HttpException(409, 'version_conflict', 'Заявка изменена другим пользователем, обновите страницу');
+            if (!$this->canEdit($user, $capabilities, $request)) {
+                throw new HttpException(403, 'forbidden', 'Изменить заявку можно только в статусе «Новая»');
             }
+
+            $this->assertVersion($version, $request);
+
+            $beforeItems = $this->requests->itemsForRequests([$id])[$id] ?? [];
+
+            if ($subject === '') {
+                $subject = $this->defaultSubject($items !== [] ? $items : $beforeItems);
+            }
+
+            $oldSubject = (string) $request['subject'];
+            $oldBody = (string) ($request['body'] ?? '');
+
+            $subjectChanged = $subject !== $oldSubject;
+            $bodyChanged = $body !== $oldBody;
+            $itemsChanged = $this->itemsChanged($beforeItems, $items);
+
+            $newClientId = isset($input['client_id']) ? (int) $input['client_id'] : 0;
+
+            if ($newClientId > 0 && $newClientId !== (int) $request['client_id']) {
+                throw new HttpException(422, 'client_locked', 'Клиента заявки нельзя изменить после создания');
+            }
+
+            $priority = null;
+
+            if (array_key_exists('priority', $input) && (int) $user['LEVEL'] >= 10) {
+                $candidate = (int) $input['priority'];
+
+                if (in_array($candidate, self::PRIORITIES, true) && $candidate !== (int) $request['priority']) {
+                    $priority = $candidate;
+                }
+            }
+
+            if ($subjectChanged || $bodyChanged) {
+                $this->requests->updateDetails($id, $subject, $body);
+            }
+
+            if ($itemsChanged) {
+                if (!$this->settings->salesEnabled()) {
+                    throw new HttpException(403, 'sales_disabled', 'Продажи отключены: изменение состава заявки недоступно');
+                }
+
+                $this->requests->replaceItems($id, $items);
+                $this->reservations->apply($id, $items);
+            }
+
+            if ($priority !== null) {
+                $this->requests->updatePriority($id, $priority);
+
+                $this->activities->add(
+                    $id,
+                    (int) $user['ID'],
+                    'priority',
+                    'Приоритет изменён',
+                    'Было: ' . $this->priorityText((int) $request['priority']) . ' → Стало: ' . $this->priorityText($priority)
+                );
+
+                $this->notifications->notifyParticipants(
+                    $request,
+                    (int) $user['ID'],
+                    'request.priority',
+                    'Заявка ' . (string) $request['number'] . ': приоритет изменён',
+                    'Новый приоритет: ' . $this->priorityText($priority),
+                    ['request_number' => (string) $request['number']]
+                );
+            }
+
+            if ($subjectChanged || $bodyChanged) {
+                $lines = [];
+
+                if ($subjectChanged) {
+                    $lines[] = 'Тема: «' . $oldSubject . '» → «' . $subject . '»';
+                }
+
+                if ($bodyChanged) {
+                    $lines[] = $oldBody === ''
+                        ? "Добавлено описание:\n" . $body
+                        : "Описание (было):\n" . $oldBody;
+                }
+
+                $this->activities->add(
+                    $id,
+                    (int) $user['ID'],
+                    'edit',
+                    'Заявка изменена',
+                    $this->limitText(implode("\n\n", $lines))
+                );
+            }
+
+            if ($itemsChanged) {
+                $diff = $this->itemsDiffText($beforeItems, $items);
+
+                if ($diff !== '') {
+                    $this->activities->add($id, (int) $user['ID'], 'items', 'Состав заявки изменён', $diff);
+                }
+            }
+
+            if ($subjectChanged || $bodyChanged || $itemsChanged) {
+                $this->notifications->notifyParticipants(
+                    $request,
+                    (int) $user['ID'],
+                    'request.edit',
+                    'Заявка ' . (string) $request['number'] . ': изменена',
+                    'Тема, описание или состав заявки обновлены. Подробности — в истории заявки',
+                    ['request_number' => (string) $request['number']]
+                );
+            }
+
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+            throw $exception;
+        }
+
+        return $this->detail($user, $capabilities, $id);
+    }
+
+    public function updateMeta(array $user, array $capabilities, int $id, array $input): array
+    {
+        $version = isset($input['version']) ? (int) $input['version'] : null;
+
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $request = $this->requests->findByIdForUpdate($id);
+
+            if ($request === null) {
+                throw new HttpException(404, 'not_found', 'Заявка не найдена');
+            }
+
+            $this->assertCanView($user, $capabilities, $request);
+
+            if (!$this->canTransition($user, $capabilities, $request)) {
+                throw new HttpException(403, 'forbidden', 'Недостаточно прав для изменения заявки');
+            }
+
+            $status = $this->statuses->map()[(string) $request['status_id']] ?? null;
+            $isFinal = $status !== null && (bool) $status['is_final'];
+
+            if ($isFinal && (array_key_exists('priority', $input) || array_key_exists('due_at', $input))) {
+                throw new HttpException(422, 'final_status', 'Заявка завершена — изменения недоступны');
+            }
+
+            $this->assertVersion($version, $request);
+
+            $newSubject = array_key_exists('subject', $input)
+                ? trim((string) $input['subject'])
+                : (string) $request['subject'];
+            $newBody = array_key_exists('body', $input)
+                ? trim((string) $input['body'])
+                : (string) ($request['body'] ?? '');
+
+            if (array_key_exists('subject', $input) && $newSubject === '') {
+                throw new HttpException(422, 'validation_error', 'Тема заявки не может быть пустой');
+            }
+
+            if (mb_strlen($newSubject) > 255) {
+                $newSubject = mb_substr($newSubject, 0, 255);
+            }
+
+            if (mb_strlen($newBody) > 5000) {
+                $newBody = mb_substr($newBody, 0, 5000);
+            }
+
+            $subjectChanged = $newSubject !== (string) $request['subject'];
+            $bodyChanged = $newBody !== (string) ($request['body'] ?? '');
+
+            if ($subjectChanged || $bodyChanged) {
+                $this->requests->updateDetails($id, $newSubject, $newBody);
+
+                if ($subjectChanged) {
+                    $this->activities->add(
+                        $id,
+                        (int) $user['ID'],
+                        'subject',
+                        'Тема изменена',
+                        'Было: «' . (string) $request['subject'] . '» → Стало: «' . $newSubject . '»'
+                    );
+                }
+
+                if ($bodyChanged) {
+                    $this->activities->add(
+                        $id,
+                        (int) $user['ID'],
+                        'body',
+                        'Описание изменено',
+                        $newBody !== '' ? 'Новое описание: ' . $newBody : 'Описание очищено'
+                    );
+                }
+            }
+
+            if (array_key_exists('priority', $input)) {
+                $candidate = (int) $input['priority'];
+
+                if (!in_array($candidate, self::PRIORITIES, true)) {
+                    throw new HttpException(422, 'validation_error', 'Неизвестный приоритет');
+                }
+
+                if ($candidate !== (int) $request['priority']) {
+                    $this->requests->updatePriority($id, $candidate);
+
+                    $this->activities->add(
+                        $id,
+                        (int) $user['ID'],
+                        'priority',
+                        'Приоритет изменён',
+                        'Было: ' . $this->priorityText((int) $request['priority']) . ' → Стало: ' . $this->priorityText($candidate)
+                    );
+
+                    $this->notifications->notifyParticipants(
+                        $request,
+                        (int) $user['ID'],
+                        'request.priority',
+                        'Заявка ' . (string) $request['number'] . ': приоритет изменён',
+                        'Новый приоритет: ' . $this->priorityText($candidate),
+                        ['request_number' => (string) $request['number']]
+                    );
+                }
+            }
+
+            if (array_key_exists('due_at', $input)) {
+                $raw = trim((string) ($input['due_at'] ?? ''));
+
+                if ($raw === '') {
+                    throw new HttpException(422, 'due_required', 'Срок заявки обязателен');
+                }
+
+                $timestamp = strtotime($raw);
+
+                if ($timestamp === false) {
+                    throw new HttpException(422, 'validation_error', 'Некорректная дата срока');
+                }
+
+                $dueAt = date('Y-m-d H:i:s', $timestamp);
+
+                $current = $request['due_at'] !== null && (string) $request['due_at'] !== ''
+                    ? (string) $request['due_at']
+                    : null;
+
+                if ($dueAt !== $current) {
+                    $comment = trim((string) ($input['comment'] ?? ''));
+
+                    if (mb_strlen($comment) < 3) {
+                        throw new HttpException(422, 'comment_required', 'Комментарий к изменению срока обязателен');
+                    }
+
+                    $this->requests->updateDueAt($id, $dueAt);
+
+                    $this->activities->add(
+                        $id,
+                        (int) $user['ID'],
+                        'due',
+                        'Срок изменён',
+                        ($current !== null ? 'Было: ' . $current : 'Срок не был задан')
+                            . ' → Стало: ' . $dueAt
+                            . '. ' . $comment
+                    );
+
+                    $this->notifications->notifyParticipants(
+                        $request,
+                        (int) $user['ID'],
+                        'request.due',
+                        'Заявка ' . (string) $request['number'] . ': изменён срок',
+                        'Новый срок: ' . $dueAt . '. ' . $comment,
+                        ['request_number' => (string) $request['number']]
+                    );
+                }
+            }
+
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+            throw $exception;
+        }
+
+        return $this->detail($user, $capabilities, $id);
+    }
+
+    private function priorityText(int $priority): string
+    {
+        return match ($priority) {
+            1 => 'Высокий',
+            3 => 'Низкий',
+            default => 'Обычный',
+        };
+    }
+
+    private function itemsChanged(array $before, array $after): bool
+    {
+        if (count($before) !== count($after)) {
+            return true;
+        }
+
+        $beforeMap = $this->itemsMap($before);
+        $afterMap = $this->itemsMap($after);
+
+        if (count($beforeMap) !== count($afterMap)) {
+            return true;
+        }
+
+        foreach ($afterMap as $key => $item) {
+            if (!isset($beforeMap[$key])) {
+                return true;
+            }
+
+            if (abs((float) $beforeMap[$key]['quantity'] - (float) $item['quantity']) > 0.00001) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function limitText(string $text): string
+    {
+        if (mb_strlen($text) > 2000) {
+            return mb_substr($text, 0, 1990) . '…';
+        }
+
+        return $text;
+    }
+
+    public function transition(array $user, array $capabilities, int $id, array $input, bool $requireVersion = true): array
+    {
+        $toStatus = trim((string) ($input['to_status'] ?? ''));
+        $comment = trim((string) ($input['comment'] ?? ''));
+        $version = isset($input['version']) ? (int) $input['version'] : null;
+
+        if (!$this->statuses->exists($toStatus)) {
+            throw new HttpException(422, 'validation_error', 'Неизвестный статус');
+        }
+
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $request = $this->requests->findByIdForUpdate($id);
+
+            if ($request === null) {
+                throw new HttpException(404, 'not_found', 'Заявка не найдена');
+            }
+
+            $this->assertCanView($user, $capabilities, $request);
 
             if (!$this->canTransition($user, $capabilities, $request)) {
                 throw new HttpException(403, 'forbidden', 'Недостаточно прав для смены статуса');
@@ -382,10 +965,26 @@ final class RequestService
                 throw new HttpException(403, 'forbidden', 'Клиент может только отменить заявку');
             }
 
+            if ($requireVersion) {
+                $this->assertVersion($version, $request);
+            }
+
             $fromStatus = (string) $request['status_id'];
 
             if ($fromStatus === $toStatus) {
                 throw new HttpException(422, 'validation_error', 'Заявка уже в этом статусе');
+            }
+
+            $allowedTargets = $isManager ? $this->allowedTargets($fromStatus) : ['canceled'];
+
+            if (!in_array($toStatus, $allowedTargets, true)) {
+                $fromTitle = (string) ($this->statuses->map()[$fromStatus]['title'] ?? $fromStatus);
+
+                throw new HttpException(
+                    422,
+                    'invalid_transition',
+                    'Из статуса «' . $fromTitle . '» нельзя перейти в этот статус'
+                );
             }
 
             $target = $this->statuses->map()[$toStatus] ?? null;
@@ -395,6 +994,11 @@ final class RequestService
             }
 
             $timestampOps = [];
+
+            if (!(bool) $target['is_final']) {
+                $timestampOps['resolved_at'] = 'clear';
+                $timestampOps['closed_at'] = 'clear';
+            }
 
             if ($fromStatus === 'new' && $toStatus !== 'canceled' && empty($request['first_response_at'])) {
                 $timestampOps['first_response_at'] = 'set';
@@ -408,15 +1012,20 @@ final class RequestService
                 $timestampOps['closed_at'] = 'set';
             }
 
-            if (!(bool) $target['is_final']) {
-                $timestampOps['resolved_at'] = 'clear';
-                $timestampOps['closed_at'] = 'clear';
+            $fromTitle = (string) ($this->statuses->map()[$fromStatus]['title'] ?? $fromStatus);
+            $historyComment = 'Было: ' . $fromTitle . ' → Стало: ' . (string) $target['title'];
+
+            if ($comment !== '') {
+                $historyComment .= "\n" . $comment;
             }
 
             $this->requests->applyTransition($id, $toStatus, $timestampOps);
-            $this->history->add($id, (int) $user['ID'], $fromStatus, $toStatus, $comment);
 
-            $fromTitle = (string) ($this->statuses->map()[$fromStatus]['title'] ?? $fromStatus);
+            if ($toStatus === 'canceled') {
+                $this->reservations->release($id);
+            }
+
+            $this->history->add($id, (int) $user['ID'], $fromStatus, $toStatus, $historyComment);
 
             $this->notifications->notifyParticipants(
                 $request,
@@ -436,54 +1045,10 @@ final class RequestService
         return $this->detail($user, $capabilities, $id);
     }
 
-    public function bulk(array $user, array $capabilities, array $input): array
-    {
-        $rawIds = is_array($input['ids'] ?? null) ? $input['ids'] : [];
-        $ids = array_values(array_unique(array_filter(
-            array_map('intval', $rawIds),
-            static fn (int $id): bool => $id > 0
-        )));
-
-        $action = (string) ($input['action'] ?? '');
-
-        if ($ids === []) {
-            throw new HttpException(422, 'validation_error', 'Выберите заявки');
-        }
-
-        if (count($ids) > 100) {
-            throw new HttpException(422, 'validation_error', 'За раз можно обработать до 100 заявок');
-        }
-
-        if (!in_array($action, ['assign', 'transition'], true)) {
-            throw new HttpException(422, 'validation_error', 'Неизвестное массовое действие');
-        }
-
-        $updated = 0;
-        $errors = [];
-
-        foreach ($ids as $id) {
-            try {
-                if ($action === 'assign') {
-                    $this->assignRequest($user, $capabilities, $id, $input);
-                } else {
-                    $this->transition($user, $capabilities, $id, $input);
-                }
-
-                $updated++;
-            } catch (HttpException $exception) {
-                $errors[] = ['id' => $id, 'message' => $exception->getMessage()];
-            }
-        }
-
-        return [
-            'updated' => $updated,
-            'failed' => count($errors),
-            'errors' => array_slice($errors, 0, 20),
-        ];
-    }
-
     public function claim(array $user, array $capabilities, int $id): array
     {
+        $this->requireCapability($capabilities, 'requests.transition');
+
         $pdo = Database::pdo();
         $pdo->beginTransaction();
 
@@ -528,7 +1093,7 @@ final class RequestService
         return $this->detail($user, $capabilities, $id);
     }
 
-    public function assignRequest(array $user, array $capabilities, int $id, array $input): array
+    public function assignRequest(array $user, array $capabilities, int $id, array $input, bool $requireVersion = true): array
     {
         $comment = trim((string) ($input['comment'] ?? ''));
 
@@ -558,9 +1123,9 @@ final class RequestService
                 throw new HttpException(403, 'forbidden', 'Передавать заявку может её менеджер или РОП');
             }
 
-            if ($version !== null && $version !== (int) $request['version']) {
-                throw new HttpException(409, 'version_conflict', 'Заявка изменена другим пользователем, обновите страницу');
-            }
+                if ($requireVersion) {
+                    $this->assertVersion($version, $request);
+                }
 
             $status = $this->statuses->map()[(string) $request['status_id']] ?? null;
 
@@ -715,12 +1280,26 @@ final class RequestService
             $body = mb_substr($body, 0, 2000);
         }
 
+        $occurredAt = null;
+        $occurredRaw = trim((string) ($input['occurred_at'] ?? ''));
+
+        if ($occurredRaw !== '') {
+            $timestamp = strtotime($occurredRaw);
+
+            if ($timestamp === false) {
+                throw new HttpException(422, 'validation_error', 'Некорректная дата действия');
+            }
+
+            $occurredAt = date('Y-m-d H:i:s', $timestamp);
+        }
+
         $this->activities->add(
             $id,
             (int) $user['ID'],
             $typeCode,
             (string) $type['title'],
-            $body !== '' ? $body : null
+            $body !== '' ? $body : null,
+            $occurredAt
         );
 
         $this->notifications->notifyParticipants(
@@ -740,6 +1319,8 @@ final class RequestService
             throw new HttpException(403, 'forbidden', 'Комментарии доступны только сотрудникам');
         }
 
+        RateLimiter::hit('request.comment', 'user:' . (int) $user['ID'], 120, 3600);
+
         $body = trim((string) ($input['body'] ?? ''));
 
         if ($body === '') {
@@ -758,28 +1339,14 @@ final class RequestService
 
         $this->assertCanView($user, $capabilities, $request);
 
-        $isInternal = (bool) ($input['is_internal'] ?? false)
-            && $this->canManage($user, $capabilities, $request);
-
-        $this->comments->add($id, (int) $user['ID'], $body, $isInternal);
-
-        if (!$isInternal) {
-            $this->notifications->notifyParticipants(
-                $request,
-                (int) $user['ID'],
-                'request.comment',
-                'Новый комментарий по заявке ' . (string) $request['number'],
-                $body,
-                ['request_number' => (string) $request['number']]
-            );
-        }
+        $this->comments->add($id, (int) $user['ID'], $body, true);
 
         return $this->detail($user, $capabilities, $id);
     }
 
     private function scopeFor(array $user, array $capabilities): array
     {
-        if (in_array('requests.view.all', $capabilities, true)) {
+        if ((int) $user['LEVEL'] >= 10) {
             return [];
         }
 
@@ -804,7 +1371,7 @@ final class RequestService
 
     private function assertCanView(array $user, array $capabilities, array $request): void
     {
-        if (in_array('requests.view.all', $capabilities, true)) {
+        if ((int) $user['LEVEL'] >= 10) {
             return;
         }
 
@@ -860,10 +1427,55 @@ final class RequestService
         return $request['manager_id'] === null || (int) $request['manager_id'] === 0;
     }
 
+    private const TRANSITIONS = [
+        'new' => ['accepted', 'in_progress', 'waiting', 'closed', 'canceled'],
+        'accepted' => ['in_progress', 'waiting', 'resolved', 'closed', 'canceled'],
+        'in_progress' => ['waiting', 'resolved', 'closed', 'canceled'],
+        'waiting' => ['in_progress', 'resolved', 'closed', 'canceled'],
+        'resolved' => ['in_progress', 'closed', 'canceled'],
+        'closed' => [],
+        'canceled' => [],
+    ];
+
+    private function allowedTargets(string $from): array
+    {
+        $targets = self::TRANSITIONS[$from] ?? [];
+        $statuses = $this->statuses->map();
+
+        return array_values(array_filter(
+            $targets,
+            static fn (string $code): bool => isset($statuses[$code]) && (bool) $statuses[$code]['is_active']
+        ));
+    }
+
+    private function transitionTargets(array $user, array $capabilities, array $request, bool $isManager): array
+    {
+        if (!$this->canTransition($user, $capabilities, $request)) {
+            return [];
+        }
+
+        if (!$isManager) {
+            return ['canceled'];
+        }
+
+        return $this->allowedTargets((string) $request['status_id']);
+    }
+
     private function requireCapability(array $capabilities, string $capability): void
     {
         if (!in_array($capability, $capabilities, true)) {
             throw new HttpException(403, 'forbidden', 'Недостаточно прав');
+        }
+    }
+
+    private function assertVersion(?int $version, array $request): void
+    {
+        if ($version === null) {
+            throw new HttpException(422, 'version_required', 'Не указана версия заявки — обновите страницу и повторите');
+        }
+
+        if ($version !== (int) $request['version']) {
+            throw new HttpException(409, 'version_conflict', 'Заявка изменена другим пользователем, обновите страницу');
         }
     }
 
@@ -886,10 +1498,12 @@ final class RequestService
                 'name' => (string) ($row['client_name'] ?? ''),
                 'email' => (string) ($row['client_email'] ?? ''),
                 'phone' => (string) ($row['client_phone'] ?? ''),
+                'inn' => (string) ($row['client_inn'] ?? ''),
             ],
             'manager' => $row['manager_id'] !== null
                 ? ['id' => (int) $row['manager_id'], 'name' => (string) ($row['manager_name'] ?? '')]
                 : null,
+            'items_count' => (int) ($row['items_count'] ?? 0),
             'due_at' => $row['due_at'],
             'is_overdue' => (bool) ($row['is_overdue'] ?? false),
             'first_response_at' => $row['first_response_at'],
@@ -909,6 +1523,7 @@ final class RequestService
                 'id' => (int) $row['user_id'],
                 'name' => (string) $row['user_name'],
                 'level' => (int) $row['user_level'],
+                'position' => (string) ($row['user_position'] ?? ''),
             ],
             'from' => $row['from_status_id'] !== null
                 ? ['code' => (string) $row['from_status_id'], 'title' => (string) ($row['from_title'] ?? '')]
@@ -954,6 +1569,7 @@ final class RequestService
                 'id' => (int) $row['user_id'],
                 'name' => (string) $row['user_name'],
                 'level' => (int) $row['user_level'],
+                'position' => (string) ($row['user_position'] ?? ''),
             ],
             'body' => (string) ($row['body'] ?? ''),
             'created_at' => (string) $row['created_at'],

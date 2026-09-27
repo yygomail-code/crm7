@@ -1,8 +1,8 @@
-export const APP_NAME = 'CRM';
+export const APP_NAME = 'CRM7';
 export const APP_VERSION = '1.2';
 
-export const AUTHOR = 'Литвинов Антон';
-export const AUTHOR_LOCATION = 'Россия, г. Краснодар';
+export const SITE_URL = 'https://www.crm7.ru';
+export const SITE_LABEL = 'www.crm7.ru';
 
 export const CONTACTS: { label: string; value: string; href?: string }[] = [
   { label: 'Телефон', value: '+7 909 498-13-22', href: 'tel:+79094981322' },

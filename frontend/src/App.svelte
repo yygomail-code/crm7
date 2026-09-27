@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { auth } from './lib/stores/auth.svelte';
+  import { appSettings } from './lib/stores/app-settings.svelte';
   import { matchRoute, router } from './lib/router.svelte';
   import Spinner from './lib/components/ui/Spinner.svelte';
   import CookieNotice from './lib/components/CookieNotice.svelte';
@@ -30,6 +31,12 @@
 
   onMount(() => {
     void auth.bootstrap();
+  });
+
+  $effect(() => {
+    if (auth.isAuthenticated && appSettings.loadedFor !== auth.user?.id) {
+      void appSettings.load();
+    }
   });
 
   $effect(() => {

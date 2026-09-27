@@ -87,6 +87,42 @@ final class StocksController extends ApiController
         return Response::ok($this->service->history($user, $capabilities));
     }
 
+    public function createItem(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->createItem(
+            $user,
+            $capabilities,
+            (int) ($params['id'] ?? 0),
+            $request->bodyAll()
+        ), 201);
+    }
+
+    public function updateItem(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->updateItem(
+            $user,
+            $capabilities,
+            (int) ($params['itemId'] ?? 0),
+            $request->bodyAll()
+        ));
+    }
+
+    public function rename(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->renameWarehouse(
+            $user,
+            $capabilities,
+            (int) ($params['id'] ?? 0),
+            $request->bodyAll()
+        ));
+    }
+
     private function filters(Request $request): array
     {
         return [
@@ -94,6 +130,7 @@ final class StocksController extends ApiController
             'qty_op' => (string) $request->queryParam('qty_op', ''),
             'qty' => $request->queryParam('qty', ''),
             'sort' => (string) $request->queryParam('sort', ''),
+            'show_zero' => (string) $request->queryParam('show_zero', ''),
         ];
     }
 }

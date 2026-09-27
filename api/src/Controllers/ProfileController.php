@@ -11,6 +11,7 @@ use App\Http\Response;
 use App\Repositories\UserHistoryRepository;
 use App\Repositories\UserRepository;
 use App\Support\Storage;
+use App\Support\Validator;
 
 final class ProfileController extends ApiController
 {
@@ -28,6 +29,7 @@ final class ProfileController extends ApiController
     public function update(Request $request): Response
     {
         [$user] = $this->context($request);
+        $userId = (int) $user['ID'];
 
         $name = trim((string) $request->input('name', ''));
 
@@ -35,10 +37,100 @@ final class ProfileController extends ApiController
             throw new HttpException(422, 'validation_error', 'Укажите имя (минимум 3 символа)');
         }
 
-        $this->users->updateName((int) $user['ID'], mb_substr($name, 0, 255));
-        $this->history->add((int) $user['ID'], 'profile_updated', (int) $user['ID'], 'Профиль обновлён пользователем');
+        if ((int) $user['LEVEL'] < 10) {
+            $oldName = (string) ($user['FULL_NAME'] ?? '');
+            $this->users->updateName($userId, mb_substr($name, 0, 255));
+            $this->history->add(
+                $userId,
+                'profile_updated',
+                $userId,
+                $oldName !== $name
+                    ? 'Имя: «' . ($oldName !== '' ? $oldName : '—') . '» → «' . $name . '»'
+                    : 'Изменений нет'
+            );
 
-        return Response::ok(['id' => (int) $user['ID'], 'name' => mb_substr($name, 0, 255)]);
+            return Response::ok([
+                'id' => $userId,
+                'name' => mb_substr($name, 0, 255),
+                'position' => (string) ($user['DOLGNOST'] ?? ''),
+                'phone' => (string) ($user['PHONE'] ?? ''),
+                'email' => (string) ($user['EMAIL'] ?? ''),
+            ]);
+        }
+
+        $position = trim((string) $request->input('position', ''));
+        $phone = trim((string) $request->input('phone', ''));
+        $email = mb_strtolower(trim((string) $request->input('email', '')));
+
+        if ($email !== '' && !Validator::email($email)) {
+            throw new HttpException(422, 'validation_error', 'Некорректный e-mail');
+        }
+
+        if ($phone !== '' && mb_strlen($phone) < 5) {
+            throw new HttpException(422, 'validation_error', 'Некорректный телефон');
+        }
+
+        if ($email !== '') {
+            $existing = $this->users->findAnyByEmail($email);
+
+            if ($existing !== null && (int) $existing['ID'] !== $userId) {
+                throw new HttpException(422, 'email_taken', 'Пользователь с таким e-mail уже зарегистрирован');
+            }
+        }
+
+        if ($phone !== '') {
+            $existing = $this->users->findAnyByPhone($phone);
+
+            if ($existing !== null && (int) $existing['ID'] !== $userId) {
+                throw new HttpException(422, 'phone_taken', 'Пользователь с таким телефоном уже зарегистрирован');
+            }
+        }
+
+        $before = [
+            'Имя' => (string) ($user['FULL_NAME'] ?? ''),
+            'Должность' => (string) ($user['DOLGNOST'] ?? ''),
+            'Телефон' => (string) ($user['PHONE'] ?? ''),
+            'E-mail' => (string) ($user['EMAIL'] ?? ''),
+        ];
+        $after = [
+            'Имя' => mb_substr($name, 0, 255),
+            'Должность' => mb_substr($position, 0, 255),
+            'Телефон' => mb_substr($phone, 0, 255),
+            'E-mail' => mb_substr($email, 0, 255),
+        ];
+
+        $this->users->updateProfileContacts($userId, [
+            'name' => $after['Имя'],
+            'position' => $after['Должность'],
+            'phone' => $after['Телефон'],
+            'email' => $after['E-mail'],
+        ]);
+
+        $changes = [];
+
+        foreach ($before as $label => $oldValue) {
+            $newValue = $after[$label];
+
+            if ($oldValue !== $newValue) {
+                $changes[] = $label . ': «' . ($oldValue !== '' ? $oldValue : '—') . '» → «' . ($newValue !== '' ? $newValue : '—') . '»';
+            }
+        }
+
+        $this->history->add(
+            $userId,
+            'profile_updated',
+            $userId,
+            $changes !== [] ? implode('; ', $changes) : 'Изменений нет'
+        );
+        $this->audit($request, $user, 'profile.update', 'user', $userId, []);
+
+        return Response::ok([
+            'id' => $userId,
+            'name' => mb_substr($name, 0, 255),
+            'position' => mb_substr($position, 0, 255),
+            'phone' => mb_substr($phone, 0, 255),
+            'email' => mb_substr($email, 0, 255),
+        ]);
     }
 
     public function uploadAvatar(Request $request): Response
@@ -93,9 +185,37 @@ final class ProfileController extends ApiController
             }
         }
 
-        $this->history->add((int) $user['ID'], 'avatar_updated', (int) $user['ID'], 'Обновлено фото профиля');
+        $this->history->add(
+            (int) $user['ID'],
+            'avatar_updated',
+            (int) $user['ID'],
+            $previous !== '' ? 'Фото профиля: заменено' : 'Фото профиля: добавлено'
+        );
 
         return Response::ok(['has_avatar' => true]);
+    }
+
+    public function deleteAvatar(Request $request): Response
+    {
+        [$user] = $this->context($request);
+
+        $previous = (string) ($user['AVATAR_PATH'] ?? '');
+
+        if ($previous === '') {
+            return Response::ok(['has_avatar' => false]);
+        }
+
+        $this->users->updateAvatar((int) $user['ID'], null);
+
+        try {
+            Storage::delete($previous);
+        } catch (\Throwable) {
+            // файл можно удалить позже
+        }
+
+        $this->history->add((int) $user['ID'], 'avatar_removed', (int) $user['ID'], 'Фото профиля: удалено');
+
+        return Response::ok(['has_avatar' => false]);
     }
 
     public function avatar(Request $request, array $params): FileResponse
@@ -135,6 +255,7 @@ final class ProfileController extends ApiController
 
         return Response::ok([
             'id' => (int) $target['ID'],
+            'login' => (string) ($target['LOGIN'] ?? ''),
             'name' => (string) ($target['FULL_NAME'] ?? ''),
             'level' => $targetLevel,
             'is_staff' => $targetLevel >= 10,

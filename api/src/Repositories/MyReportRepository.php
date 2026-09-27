@@ -131,12 +131,16 @@ final class MyReportRepository
         [$where, $params] = $this->requestWhere($userId, $from, $to, $filters, false);
 
         $stmt = Database::pdo()->prepare(
-            'SELECT DISTINCT ri.warehouse_id, ri.warehouse_name
+            'SELECT ri.warehouse_id, MAX(ri.warehouse_name) AS warehouse_name
              FROM requests r
              INNER JOIN request_items ri ON ri.request_id = r.ID
-             WHERE ' . $where . '
-             ORDER BY ri.warehouse_name ASC
-             LIMIT 100'
+             WHERE ' . $where . "
+               AND ri.warehouse_id IS NOT NULL
+               AND ri.warehouse_name IS NOT NULL
+               AND ri.warehouse_name <> ''
+             GROUP BY ri.warehouse_id
+             ORDER BY warehouse_name ASC
+             LIMIT 100"
         );
         $stmt->execute($params);
 

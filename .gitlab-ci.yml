@@ -2,10 +2,11 @@ stages:
   - lint
   - test
   - build
+  - e2e
 
 api:lint:
   stage: lint
-  image: php:8.3-cli
+  image: php:8.5-cli
   script:
     - find api/src api/public api/bin -name '*.php' -print0 | xargs -0 -n1 php -l
   rules:
@@ -27,6 +28,25 @@ frontend:check:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH
+
+# e2e требует запущенного стенда (фронтенд + API + БД с демо-данными) и браузера.
+# Запускается вручную: задайте CRM_BASE_URL, CRM_API_URL, CRM_PASSWORD и запустите job.
+frontend:e2e:
+  stage: e2e
+  image: mcr.microsoft.com/playwright:v1.63.0-noble
+  variables:
+    CRM_BROWSER_CHANNEL: bundled
+  script:
+    - cd frontend
+    - npm ci
+    - npm run e2e
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: manual
+      allow_failure: true
+    - if: $CI_COMMIT_BRANCH
+      when: manual
+      allow_failure: true
 
 frontend:build:
   stage: build

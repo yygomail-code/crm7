@@ -100,8 +100,8 @@
   .wrap {
     position: relative;
     display: flex;
-    flex: 1;
-    min-width: 180px;
+    flex: 1 1 180px;
+    min-width: 0;
   }
 
   input {

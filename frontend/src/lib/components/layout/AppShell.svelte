@@ -3,12 +3,13 @@
   import type { Snippet } from 'svelte';
   import { chatUnread } from '../../api/chat';
   import { unreadCount } from '../../api/notifications';
-  import { loadAvatarUrl } from '../../api/profile';
   import { config } from '../../config';
+  import { avatarColor, avatarLetter, avatarName } from '../../avatar';
+  import Icon from '../ui/Icon.svelte';
   import { auth } from '../../stores/auth.svelte';
+  import { avatars } from '../../stores/avatar.svelte';
   import { cart } from '../../stores/cart.svelte';
   import { router } from '../../router.svelte';
-  import Button from '../ui/Button.svelte';
   import Logo from '../ui/Logo.svelte';
 
   interface Props {
@@ -19,16 +20,12 @@
 
   let unread = $state(0);
   let chatUnreadCount = $state(0);
-  let avatarUrl = $state<string | null>(null);
 
-  const initials = $derived(
-    (auth.name || '')
-      .split(/\s+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .join('')
-  );
+  const avatarUrl = $derived(avatars.url(auth.user?.id));
+
+  const avatarSeed = $derived(avatarName(auth.user?.name, auth.user?.login ?? 'guest'));
+  const letter = $derived(avatarLetter(avatarSeed));
+  const avatarBg = $derived(avatarColor(avatarSeed));
 
   const path = $derived(router.current.path);
 
@@ -42,11 +39,18 @@
 
   const showSubstitutions = $derived(auth.can('clients.assign'));
 
+  const navCount = $derived(
+    3 +
+      (showReports ? 1 : 0) +
+      (showClients ? 1 : 0) +
+      (showSubstitutions ? 1 : 0) +
+      (showAdmin ? 1 : 0) +
+      (showSettings ? 1 : 0)
+  );
+
   onMount(() => {
     if (auth.user) {
-      void loadAvatarUrl(auth.user.id).then((url) => {
-        avatarUrl = url;
-      });
+      void avatars.load(auth.user.id);
     }
 
     const tick = async (): Promise<void> => {
@@ -69,10 +73,6 @@
     return () => clearInterval(timer);
   });
 
-  function logout(): void {
-    void auth.logout();
-    router.navigate('/');
-  }
 </script>
 
 <div class="shell">
@@ -80,28 +80,53 @@
     <div class="left">
       <a class="brand" href="#/requests">
         <Logo size={26} />
-        <span>CRM</span>
+        <span>CRM7</span>
       </a>
-      <nav class="desktop-nav">
-        <a href="#/requests" class:active={path.startsWith('/requests')}>Заявки</a>
-        {#if showClients}
-          <a href="#/clients" class:active={path === '/clients'}>Клиенты</a>
-        {/if}
-        <a href="#/stocks" class:active={path === '/stocks'}>Склады</a>
+      <nav class="desktop-nav" class:many={navCount > 6}>
+        <a href="#/stocks" class:active={path === '/stocks'} title="Складские остатки">
+          <Icon name="stocks" size={20} />
+          <span class="nav-label">Складские остатки</span>
+        </a>
+        <a href="#/requests" class:active={path.startsWith('/requests')} title="Заявки">
+          <Icon name="requests" size={20} />
+          <span class="nav-label">Заявки</span>
+        </a>
         {#if showReports}
-          <a href="#/reports" class:active={path === '/reports'}>Отчёты</a>
+          <a href="#/reports" class:active={path === '/reports'} title="Отчёты">
+            <Icon name="reports" size={20} />
+            <span class="nav-label">Отчёты</span>
+          </a>
+        {/if}
+        {#if !showReports}
+          <a href="#/my-reports" class:active={path === '/my-reports'} title="Мои отчёты">
+            <Icon name="my-reports" size={20} />
+            <span class="nav-label">Мои отчёты</span>
+          </a>
+        {/if}
+        {#if showClients}
+          <a href="#/clients" class:active={path === '/clients'} title="Клиенты">
+            <Icon name="clients" size={20} />
+            <span class="nav-label">Клиенты</span>
+          </a>
         {/if}
         {#if showSubstitutions}
-          <a href="#/substitutions" class:active={path === '/substitutions'}>Замещения</a>
+          <a href="#/substitutions" class:active={path === '/substitutions'} title="Замещения">
+            <Icon name="substitutions" size={20} />
+            <span class="nav-label">Замещения</span>
+          </a>
         {/if}
         {#if showAdmin}
-          <a href="#/admin" class:active={path === '/admin'}>Админ</a>
+          <a href="#/admin" class:active={path === '/admin'} title="Админ">
+            <Icon name="admin" size={20} />
+            <span class="nav-label">Админ</span>
+          </a>
         {/if}
         {#if showSettings}
-          <a href="#/settings" class:active={path === '/settings'}>Настройки</a>
+          <a href="#/settings" class:active={path === '/settings'} title="Настройки">
+            <Icon name="settings" size={20} />
+            <span class="nav-label">Настройки</span>
+          </a>
         {/if}
-        <a href="#/my-reports" class:active={path === '/my-reports'}>Мои отчёты</a>
-        <a href="#/profile" class:active={path === '/profile'}>Профиль</a>
       </nav>
     </div>
     <div class="user">
@@ -188,7 +213,7 @@
           class="bell has-new"
           aria-label={`Заявка из склада: ${cart.count} позиций`}
           title="Создать заявку из выбранных позиций"
-          onclick={() => router.navigate('/requests/new')}
+          onclick={() => router.navigate('/requests/new?from=cart')}
         >
           <svg
             viewBox="0 0 24 24"
@@ -218,11 +243,12 @@
         {#if avatarUrl}
           <img src={avatarUrl} alt="" />
         {:else}
-          <span>{initials || '•'}</span>
+          <span style:background={avatarBg}>{letter}</span>
         {/if}
       </button>
-      <span class="name">{auth.name || 'Пользователь'}</span>
-      <Button variant="ghost" onclick={logout}>Выйти</Button>
+      <button type="button" class="name" title="Профиль" onclick={() => router.navigate('/profile')}>
+        {auth.name || 'Пользователь'}
+      </button>
     </div>
   </header>
 
@@ -231,42 +257,38 @@
 </main>
 
   <nav class="mobile-nav">
-    <a href="#/requests" class:active={path.startsWith('/requests')}>
-      <span class="icon">≡</span>
-      Заявки
+    <a href="#/stocks" class:active={path === '/stocks'} title="Складские остатки">
+      <Icon name="stocks" size={20} />
+      <span class="nav-label">Остатки</span>
     </a>
-    <a href="#/stocks" class:active={path === '/stocks'}>
-      <span class="icon">▤</span>
-      Склады
+    <a href="#/requests" class:active={path.startsWith('/requests')} title="Заявки">
+      <Icon name="requests" size={20} />
+      <span class="nav-label">Заявки</span>
     </a>
-    {#if showClients}
-      <a href="#/clients" class:active={path === '/clients'}>
-        <span class="icon">☺</span>
-        Клиенты
-      </a>
-    {/if}
     {#if showReports}
-      <a href="#/reports" class:active={path === '/reports'}>
-        <span class="icon">◫</span>
-        Отчёты
-      </a>
-    {/if}
-    {#if showSubstitutions}
-      <a href="#/substitutions" class:active={path === '/substitutions'}>
-        <span class="icon">⇄</span>
-        Замещения
+      <a href="#/reports" class:active={path === '/reports'} title="Отчёты">
+        <Icon name="reports" size={20} />
+        <span class="nav-label">Отчёты</span>
       </a>
     {/if}
     {#if !showReports}
-      <a href="#/my-reports" class:active={path === '/my-reports'}>
-        <span class="icon">◫</span>
-        Отчёты
+      <a href="#/my-reports" class:active={path === '/my-reports'} title="Мои отчёты">
+        <Icon name="my-reports" size={20} />
+        <span class="nav-label">Отчёты</span>
       </a>
     {/if}
-    <a href="#/profile" class:active={path === '/profile'}>
-      <span class="icon">⚙</span>
-      Профиль
-    </a>
+    {#if showClients}
+      <a href="#/clients" class:active={path === '/clients'} title="Клиенты">
+        <Icon name="clients" size={20} />
+        <span class="nav-label">Клиенты</span>
+      </a>
+    {/if}
+    {#if showSubstitutions}
+      <a href="#/substitutions" class:active={path === '/substitutions'} title="Замещения">
+        <Icon name="substitutions" size={20} />
+        <span class="nav-label">Замещения</span>
+      </a>
+    {/if}
   </nav>
 </div>
 
@@ -310,17 +332,33 @@
   }
 
   nav a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     color: var(--muted);
     text-decoration: none;
     font-size: 14px;
     padding: 4px 0;
     border-bottom: 2px solid transparent;
+    white-space: nowrap;
   }
 
   nav a.active,
   nav a:hover {
     color: var(--text);
     border-bottom-color: var(--primary);
+  }
+
+  @media (max-width: 1150px) {
+    .desktop-nav .nav-label {
+      display: none;
+    }
+  }
+
+  @media (max-width: 1520px) {
+    .desktop-nav.many .nav-label {
+      display: none;
+    }
   }
 
   .user {
@@ -330,7 +368,17 @@
   }
 
   .name {
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    font: inherit;
     font-weight: 500;
+    cursor: pointer;
+  }
+
+  .name:hover {
+    color: var(--primary);
   }
 
   .avatar {
@@ -354,6 +402,15 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
+  }
+
+  .avatar span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    color: #fff;
   }
 
   .avatar:hover {
@@ -420,7 +477,11 @@
       padding: var(--space-3) var(--space-4);
     }
 
-    .desktop-nav {
+    nav.desktop-nav {
+      display: none;
+    }
+
+    .name {
       display: none;
     }
 
@@ -457,9 +518,10 @@
       color: var(--primary);
     }
 
-    .icon {
-      font-size: 18px;
-      line-height: 1;
+  @media (max-width: 380px) {
+    .mobile-nav .nav-label {
+      display: none;
     }
+  }
   }
 </style>

@@ -11,8 +11,9 @@ final class RequestRepository
     private const DETAIL_SELECT = 'SELECT r.*, s.title AS status_title, s.color AS status_color,
                s.is_final AS status_is_final, s.sort AS status_sort,
                CASE WHEN r.due_at IS NOT NULL AND r.due_at < NOW() AND s.is_final = 0 THEN 1 ELSE 0 END AS is_overdue,
-               c.FULL_NAME AS client_name, c.EMAIL AS client_email, c.PHONE AS client_phone,
-               m.FULL_NAME AS manager_name
+               c.FULL_NAME AS client_name, c.EMAIL AS client_email, c.PHONE AS client_phone, c.INN AS client_inn,
+               m.FULL_NAME AS manager_name,
+               (SELECT COUNT(*) FROM request_items ri WHERE ri.request_id = r.ID) AS items_count
         FROM requests r
         INNER JOIN request_statuses s ON s.code = r.status_id
         INNER JOIN users c ON c.ID = r.client_id
@@ -140,6 +141,19 @@ final class RequestRepository
         return $stmt->fetchAll() ?: [];
     }
 
+    public function openByClient(int $clientId): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT r.* FROM requests r
+             INNER JOIN request_statuses s ON s.code = r.status_id
+             WHERE r.client_id = ? AND s.is_final = 0
+             ORDER BY r.ID ASC'
+        );
+        $stmt->execute([$clientId]);
+
+        return $stmt->fetchAll() ?: [];
+    }
+
     public function applySubstitution(int $id, ?int $managerId, ?int $substitutionId): void
     {
         $stmt = Database::pdo()->prepare(
@@ -167,6 +181,16 @@ final class RequestRepository
             $params[] = (int) $filters['client_id'];
         }
 
+        $state = (string) ($filters['state'] ?? '');
+
+        if ($state === 'open') {
+            $where[] = 's.is_final = 0';
+        } elseif ($state === 'closed') {
+            $where[] = 's.is_final = 1';
+        } elseif ($state === 'overdue') {
+            $where[] = 's.is_final = 0 AND r.due_at IS NOT NULL AND r.due_at < NOW()';
+        }
+
         if (!empty($filters['warehouse_id'])) {
             $where[] = 'EXISTS (SELECT 1 FROM request_items ri WHERE ri.request_id = r.ID AND ri.warehouse_id = ?)';
             $params[] = (int) $filters['warehouse_id'];
@@ -183,14 +207,33 @@ final class RequestRepository
         }
 
         if (!empty($filters['q'])) {
-            $where[] = '(r.subject LIKE ? OR r.body LIKE ? OR r.number LIKE ?)';
+            $where[] = '(r.subject LIKE ? OR r.body LIKE ? OR r.number LIKE ? OR c.FULL_NAME LIKE ? OR c.PHONE LIKE ?)';
             $like = '%' . $filters['q'] . '%';
-            array_push($params, $like, $like, $like);
+            array_push($params, $like, $like, $like, $like, $like);
+        }
+
+        $managerScope = (string) ($filters['manager_scope'] ?? '');
+        $scopeUserId = (int) ($filters['manager_scope_user'] ?? 0);
+
+        if ($scopeUserId > 0) {
+            if ($managerScope === 'none') {
+                $where[] = 'r.manager_id IS NULL AND s.is_final = 0';
+            } elseif ($managerScope === 'mine') {
+                $where[] = 'r.manager_id = ?';
+                $params[] = $scopeUserId;
+            } elseif ($managerScope === 'others') {
+                $where[] = 'r.manager_id IS NOT NULL AND r.manager_id <> ?';
+                $params[] = $scopeUserId;
+            }
         }
 
         $whereSql = $where !== [] ? ' WHERE ' . implode(' AND ', $where) : '';
 
-        $countStmt = Database::pdo()->prepare('SELECT COUNT(*) FROM requests r' . $whereSql);
+        $countStmt = Database::pdo()->prepare(
+            'SELECT COUNT(*) FROM requests r
+             INNER JOIN request_statuses s ON s.code = r.status_id
+             INNER JOIN users c ON c.ID = r.client_id' . $whereSql
+        );
         $countStmt->execute($params);
         $total = (int) $countStmt->fetchColumn();
 
@@ -204,17 +247,141 @@ final class RequestRepository
         return ['items' => $stmt->fetchAll() ?: [], 'total' => $total];
     }
 
+    public function activeManagerForClient(int $clientId): ?int
+    {
+        $stmt = Database::pdo()->prepare(
+            "SELECT r.manager_id
+             FROM requests r
+             INNER JOIN request_statuses s ON s.code = r.status_id
+             WHERE r.client_id = ? AND s.is_final = 0 AND r.manager_id IS NOT NULL
+             ORDER BY r.ID DESC
+             LIMIT 1"
+        );
+        $stmt->execute([$clientId]);
+        $value = $stmt->fetchColumn();
+
+        return $value !== false && $value !== null ? (int) $value : null;
+    }
+
+    public function clientInterests(int $clientId, string $query = '', string $sort = 'qty_desc', int $limit = 20, int $offset = 0): array
+    {
+        $limit = max(1, min(100, $limit));
+        [$where, $params] = $this->interestsWhere($clientId, $query);
+
+        $order = match ($sort) {
+            'qty_asc' => 'total_qty ASC, ri.name ASC',
+            'orders_desc' => 'orders DESC, ri.name ASC',
+            'orders_asc' => 'orders ASC, ri.name ASC',
+            'last_desc' => 'last_at DESC, ri.name ASC',
+            'last_asc' => 'last_at ASC, ri.name ASC',
+            'name_asc' => 'ri.name ASC, ri.unit ASC',
+            'name_desc' => 'ri.name DESC, ri.unit DESC',
+            default => 'total_qty DESC, ri.name ASC',
+        };
+
+        $stmt = Database::pdo()->prepare(
+            "SELECT ri.name, ri.unit,
+                    MAX(ri.description) AS description,
+                    COUNT(*) AS orders,
+                    SUM(ri.quantity) AS total_qty,
+                    MAX(r.created_at) AS last_at,
+                    SUBSTRING_INDEX(GROUP_CONCAT(ri.warehouse_name ORDER BY ri.quantity DESC), ',', 1) AS warehouse_name
+             FROM request_items ri
+             INNER JOIN requests r ON r.ID = ri.request_id
+             WHERE " . $where . "
+             GROUP BY ri.name, ri.unit
+             ORDER BY " . $order . "
+             LIMIT " . $limit . ' OFFSET ' . max(0, $offset)
+        );
+        $stmt->execute($params);
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    public function countClientInterests(int $clientId, string $query = ''): int
+    {
+        [$where, $params] = $this->interestsWhere($clientId, $query);
+
+        $stmt = Database::pdo()->prepare(
+            'SELECT COUNT(*) FROM (
+                SELECT 1
+                FROM request_items ri
+                INNER JOIN requests r ON r.ID = ri.request_id
+                WHERE ' . $where . '
+                GROUP BY ri.name, ri.unit
+             ) t'
+        );
+        $stmt->execute($params);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    private function interestsWhere(int $clientId, string $query): array
+    {
+        $where = "r.client_id = ? AND r.status_id <> 'canceled'";
+        $params = [$clientId];
+
+        if (trim($query) !== '') {
+            $where .= ' AND ri.name LIKE ?';
+            $params[] = '%' . trim($query) . '%';
+        }
+
+        return [$where, $params];
+    }
+
+    public function statsForClient(int $clientId): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT
+                COUNT(*) AS total,
+                COALESCE(SUM(CASE WHEN s.is_final = 0 THEN 1 ELSE 0 END), 0) AS open_now,
+                COALESCE(SUM(CASE WHEN s.is_final = 1 THEN 1 ELSE 0 END), 0) AS closed_now,
+                COALESCE(SUM(CASE WHEN s.is_final = 0 AND r.due_at IS NOT NULL AND r.due_at < NOW() THEN 1 ELSE 0 END), 0) AS overdue
+             FROM requests r
+             INNER JOIN request_statuses s ON s.code = r.status_id
+             WHERE r.client_id = ?'
+        );
+        $stmt->execute([$clientId]);
+        $row = $stmt->fetch() ?: [];
+
+        $byStatusStmt = Database::pdo()->prepare(
+            'SELECT r.status_id, COUNT(*) AS cnt
+             FROM requests r
+             WHERE r.client_id = ?
+             GROUP BY r.status_id'
+        );
+        $byStatusStmt->execute([$clientId]);
+
+        $byStatus = [];
+
+        foreach ($byStatusStmt->fetchAll() ?: [] as $statusRow) {
+            $byStatus[(string) $statusRow['status_id']] = (int) $statusRow['cnt'];
+        }
+
+        return [
+            'total' => (int) ($row['total'] ?? 0),
+            'open' => (int) ($row['open_now'] ?? 0),
+            'closed' => (int) ($row['closed_now'] ?? 0),
+            'overdue' => (int) ($row['overdue'] ?? 0),
+            'by_status' => $byStatus,
+        ];
+    }
+
     public function warehousesForScope(array $scope): array
     {
         [$where, $params] = $this->scopeConditions($scope);
 
-        $whereSql = $where !== [] ? ' WHERE ' . implode(' AND ', $where) : '';
+        $conditions = $where;
+        $conditions[] = 'ri.warehouse_id IS NOT NULL';
+        $conditions[] = "ri.warehouse_name IS NOT NULL AND ri.warehouse_name <> ''";
 
         $stmt = Database::pdo()->prepare(
-            'SELECT DISTINCT ri.warehouse_id, ri.warehouse_name
+            'SELECT ri.warehouse_id, MAX(ri.warehouse_name) AS warehouse_name
              FROM request_items ri
-             INNER JOIN requests r ON r.ID = ri.request_id' . $whereSql . '
-             ORDER BY ri.warehouse_name ASC
+             INNER JOIN requests r ON r.ID = ri.request_id
+             WHERE ' . implode(' AND ', $conditions) . '
+             GROUP BY ri.warehouse_id
+             ORDER BY warehouse_name ASC
              LIMIT 100'
         );
         $stmt->execute($params);
@@ -229,8 +396,8 @@ final class RequestRepository
         }
 
         $stmt = Database::pdo()->prepare(
-            'INSERT INTO request_items (request_id, warehouse_id, warehouse_name, name, unit, quantity)
-             VALUES (?, ?, ?, ?, ?, ?)'
+            'INSERT INTO request_items (request_id, warehouse_id, warehouse_name, stock_level_id, name, unit, description, quantity)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
         );
 
         foreach ($items as $item) {
@@ -238,11 +405,48 @@ final class RequestRepository
                 $requestId,
                 $item['warehouse_id'] ?? null,
                 $item['warehouse_name'] ?? null,
+                $item['stock_level_id'] ?? null,
                 $item['name'],
                 $item['unit'] ?? null,
+                ($item['description'] ?? '') !== '' ? $item['description'] : null,
                 $item['quantity'],
             ]);
         }
+    }
+
+    public function updateDetails(int $id, string $subject, string $body): void
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE requests SET subject = ?, body = ?, version = version + 1, updated_at = NOW() WHERE ID = ?'
+        );
+        $stmt->execute([$subject, $body, $id]);
+    }
+
+    public function updatePriority(int $id, int $priority): void
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE requests SET priority = ?, version = version + 1, updated_at = NOW() WHERE ID = ?'
+        );
+        $stmt->execute([$priority, $id]);
+    }
+
+    public function updateDueAt(int $id, ?string $dueAt): void
+    {
+        $stmt = Database::pdo()->prepare(
+            'UPDATE requests SET due_at = ?, version = version + 1, updated_at = NOW() WHERE ID = ?'
+        );
+        $stmt->execute([$dueAt, $id]);
+    }
+
+    public function replaceItems(int $requestId, array $items): void
+    {
+        $stmt = Database::pdo()->prepare('DELETE FROM request_items WHERE request_id = ?');
+        $stmt->execute([$requestId]);
+
+        $this->createItems($requestId, $items);
+
+        $stmt = Database::pdo()->prepare('UPDATE requests SET version = version + 1, updated_at = NOW() WHERE ID = ?');
+        $stmt->execute([$requestId]);
     }
 
     public function itemsForRequests(array $requestIds): array
@@ -254,7 +458,7 @@ final class RequestRepository
         $placeholders = implode(',', array_fill(0, count($requestIds), '?'));
 
         $stmt = Database::pdo()->prepare(
-            'SELECT ID AS id, request_id, warehouse_id, warehouse_name, name, unit, quantity
+            'SELECT ID AS id, request_id, warehouse_id, warehouse_name, stock_level_id, name, unit, description, quantity
              FROM request_items
              WHERE request_id IN (' . $placeholders . ')
              ORDER BY ID ASC'
@@ -268,8 +472,10 @@ final class RequestRepository
                 'id' => (int) $row['id'],
                 'warehouse_id' => $row['warehouse_id'] !== null ? (int) $row['warehouse_id'] : null,
                 'warehouse_name' => (string) ($row['warehouse_name'] ?? ''),
+                'stock_level_id' => $row['stock_level_id'] !== null ? (int) $row['stock_level_id'] : null,
                 'name' => (string) $row['name'],
                 'unit' => (string) ($row['unit'] ?? ''),
+                'description' => (string) ($row['description'] ?? ''),
                 'quantity' => (float) $row['quantity'],
             ];
         }

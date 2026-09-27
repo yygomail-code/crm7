@@ -6,6 +6,7 @@ namespace App\Export;
 
 use App\Http\HttpException;
 use App\Mail\MailService;
+use App\Repositories\SettingsRepository;
 use Throwable;
 
 final class ExportMailer
@@ -16,6 +17,14 @@ final class ExportMailer
      */
     public static function send(array $user, array $file): array
     {
+        if (!(new SettingsRepository())->emailExportEnabled()) {
+            throw new HttpException(
+                403,
+                'email_export_disabled',
+                'Отправка отчётов на e-mail отключена администратором'
+            );
+        }
+
         $to = trim((string) ($user['EMAIL'] ?? ''));
 
         if ($to === '' || filter_var($to, FILTER_VALIDATE_EMAIL) === false) {
@@ -31,8 +40,8 @@ final class ExportMailer
         try {
             (new MailService())->sendAttachment(
                 $to,
-                'CRM: ' . $title,
-                "Во вложении — «{$title}».\n\nФайл: {$file['file_name']}\n\nЭто автоматическое сообщение CRM.",
+                'CRM7: ' . $title,
+                "Во вложении — «{$title}».\n\nФайл: {$file['file_name']}\n\nЭто автоматическое сообщение CRM7.",
                 $file['file_name'],
                 $file['content'],
                 $file['mime']

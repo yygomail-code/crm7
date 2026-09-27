@@ -3,13 +3,20 @@
     open: boolean;
     title?: string;
     email?: string;
+    emailAllowed?: boolean;
     onpick: (format: string, byEmail: boolean) => void;
     onclose: () => void;
   }
 
-  let { open, title = 'Экспорт', email = '', onpick, onclose }: Props = $props();
+  let { open, title = 'Экспорт', email = '', emailAllowed = true, onpick, onclose }: Props = $props();
 
   let sendByEmail = $state(false);
+
+  $effect(() => {
+    if (!emailAllowed) {
+      sendByEmail = false;
+    }
+  });
 
   const formats = [
     { code: 'xlsx', label: 'Excel (XLSX)', hint: 'современный Excel' },
@@ -36,15 +43,17 @@
         <h2>{title}</h2>
         <button type="button" class="close" aria-label="Закрыть" onclick={onclose}>×</button>
       </div>
-      <label class="delivery" class:disabled={email === ''}>
-        <input type="checkbox" bind:checked={sendByEmail} disabled={email === ''} />
-        <span class="delivery-text">
-          <span>Отправить на почту вместо скачивания</span>
-          <span class="delivery-hint">
-            {email !== '' ? email : 'e-mail не указан в профиле'}
+      {#if emailAllowed}
+        <label class="delivery" class:disabled={email === ''}>
+          <input type="checkbox" bind:checked={sendByEmail} disabled={email === ''} />
+          <span class="delivery-text">
+            <span>Отправить на почту вместо скачивания</span>
+            <span class="delivery-hint">
+              {email !== '' ? email : 'e-mail не указан в профиле'}
+            </span>
           </span>
-        </span>
-      </label>
+        </label>
+      {/if}
 
       <div class="formats">
         {#each formats as format (format.code)}

@@ -2,29 +2,38 @@
   import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
   import {
+    createStockItem,
     emailLevels,
     exportLevels,
     importHistory,
     importLevels,
     listLevels,
     listWarehouses,
+    renameWarehouse,
     searchCounts,
+    updateStockItem,
     type StockFilters
   } from '../lib/api/stocks';
   import type { StockImportJob, StockLevel, StockUpdate, StockWarehouse } from '../lib/api/types';
   import Button from '../lib/components/ui/Button.svelte';
   import ExportModal from '../lib/components/ui/ExportModal.svelte';
+  import Icon from '../lib/components/ui/Icon.svelte';
+  import Input from '../lib/components/ui/Input.svelte';
+  import Modal from '../lib/components/ui/Modal.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
   import { cart } from '../lib/stores/cart.svelte';
   import { auth } from '../lib/stores/auth.svelte';
+  import { appSettings } from '../lib/stores/app-settings.svelte';
   import { addHistory } from '../lib/search-history';
+  import { loadFilters, saveFilters } from '../lib/filters';
   import { formatDate, formatDateTime } from '../lib/format';
 
   let warehouses = $state<StockWarehouse[]>([]);
   let levels = $state<StockLevel[]>([]);
   let jobs = $state<StockImportJob[]>([]);
   let updates = $state<StockUpdate[]>([]);
+  let expandedLevels = $state<Set<number>>(new Set());
   let activeId = $state<number | null>(null);
   let query = $state('');
   let searchInput = $state('');
@@ -36,28 +45,129 @@
   let error = $state('');
   let message = $state('');
   let canImport = $state(false);
+  let canEdit = $state(false);
   let busy = $state(false);
   let file = $state<File | null>(null);
   let actualDate = $state(new Date().toISOString().slice(0, 10));
   let showHistory = $state(false);
+  let importOpen = $state(false);
   let exportOpen = $state(false);
   let counts = $state<Record<string, number>>({});
-  let qtyOp = $state('gt');
-  let qtyValue = $state('');
-  let sortBy = $state('name_asc');
+
+  let tabsEl = $state<HTMLElement | null>(null);
+  let tabsOverflow = $state(false);
+  let tabsAtStart = $state(true);
+  let tabsAtEnd = $state(false);
+
+  function updateTabsScroll(): void {
+    const el = tabsEl;
+
+    if (!el) {
+      return;
+    }
+
+    tabsOverflow = el.scrollWidth - el.clientWidth > 4;
+    tabsAtStart = el.scrollLeft <= 4;
+    tabsAtEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
+  }
+
+  function scrollTabs(direction: number): void {
+    const el = tabsEl;
+
+    if (!el) {
+      return;
+    }
+
+    const step = Math.max(220, Math.round(el.clientWidth * 0.6));
+    el.scrollBy({ left: direction * step, behavior: 'smooth' });
+  }
+
+  function scrollActiveIntoView(): void {
+    const el = tabsEl;
+    const active = el?.querySelector<HTMLElement>('.tab.active');
+
+    if (!el || !active) {
+      return;
+    }
+
+    const left = active.offsetLeft;
+    const right = left + active.offsetWidth;
+
+    if (left < el.scrollLeft + 4) {
+      el.scrollLeft = Math.max(0, left - 8);
+    } else if (right > el.scrollLeft + el.clientWidth - 4) {
+      el.scrollLeft = right - el.clientWidth + 8;
+    }
+
+    updateTabsScroll();
+  }
+
+  $effect(() => {
+    void warehouses.length;
+    void activeId;
+
+    const el = tabsEl;
+
+    if (!el) {
+      return;
+    }
+
+    const update = (): void => {
+      updateTabsScroll();
+      scrollActiveIntoView();
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(el);
+    window.addEventListener('resize', update);
+    const frame = requestAnimationFrame(update);
+    const timer = setTimeout(update, 80);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', update);
+      cancelAnimationFrame(frame);
+      clearTimeout(timer);
+    };
+  });
+
+  let itemOpen = $state(false);
+  let itemBusy = $state(false);
+  let itemError = $state('');
+  let itemTarget = $state<StockLevel | null>(null);
+  let itemForm = $state({ name: '', unit: '', quantity: '0', description: '' });
+
+  let renameOpen = $state(false);
+  let renameBusy = $state(false);
+  let renameError = $state('');
+  let renameName = $state('');
+
+  const stockFilterDefaults = { sort: 'name_asc' };
+  const initialStockFilters = loadFilters('stocks', stockFilterDefaults);
+  let stockSort = $state(initialStockFilters.sort);
 
   const canCreate = $derived(auth.can('requests.create'));
   const pages = $derived(Math.max(1, Math.ceil(total / perPage)));
 
   const filters = $derived<StockFilters>({
     q: query,
-    qty_op: qtyOp,
-    qty: qtyValue.trim(),
-    sort: sortBy
+    sort: stockSort,
+    show_zero: appSettings.allowZeroStock
   });
 
-  const hasFilters = $derived(query !== '' || (qtyValue.trim() !== '' && qtyOp !== ''));
+  const hasFilters = $derived(query !== '');
   const currentWarehouse = $derived(warehouses.find((item) => item.id === activeId) ?? null);
+
+  function toggleLevelDescription(levelId: number): void {
+    const next = new Set(expandedLevels);
+
+    if (next.has(levelId)) {
+      next.delete(levelId);
+    } else {
+      next.add(levelId);
+    }
+
+    expandedLevels = next;
+  }
 
   function addToCart(level: StockLevel): void {
     if (activeId === null) {
@@ -71,7 +181,8 @@
       warehouseName: warehouse?.name ?? '',
       name: level.name,
       unit: level.unit,
-      quantity: 1
+      quantity: 1,
+      stockLevelId: level.id
     });
 
     message = `Добавлено в корзину: ${level.name}`;
@@ -93,6 +204,7 @@
       const data = await listWarehouses();
       warehouses = data.items;
       canImport = data.can_import;
+      canEdit = data.can_edit;
 
       if (warehouses.length > 0) {
         await select(warehouses[0].id);
@@ -132,12 +244,12 @@
     await loadLevels();
   }
 
-  function resetFilters(): void {
-    qtyOp = 'gt';
-    qtyValue = '';
-    sortBy = 'name_asc';
-    searchInput = '';
-    query = '';
+  function cartCount(warehouseId: number): number {
+    return cart.items.filter((item) => item.warehouseId === warehouseId).length;
+  }
+
+  function changeSort(): void {
+    saveFilters('stocks', { sort: stockSort });
     void applyFilters();
   }
 
@@ -185,21 +297,20 @@
   async function doExport(format: string, byEmail: boolean): Promise<void> {
     exportOpen = false;
 
-    if (activeId === null) {
+    if (warehouses.length === 0) {
       return;
     }
 
-    const warehouse = warehouses.find((item) => item.id === activeId);
     busy = true;
     error = '';
     message = '';
 
     try {
       if (byEmail) {
-        const result = await emailLevels(activeId, filters, format);
-        message = `Остатки отправлены на ${result.email}`;
+        const result = await emailLevels(filters, format);
+        message = `Остатки по всем складам отправлены на ${result.email}`;
       } else {
-        await exportLevels(activeId, filters, warehouse?.name ?? 'склад', format);
+        await exportLevels(filters, format);
       }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось выгрузить остатки';
@@ -222,6 +333,9 @@
       const result = await importLevels(file, actualDate);
       message =
         `Импорт: загружено ${result.rows_imported} строк` +
+        (result.rows_created > 0 ? `, новых позиций ${result.rows_created}` : '') +
+        (result.warehouses_created > 0 ? `, новых складов ${result.warehouses_created}` : '') +
+        (result.rows_zeroed > 0 ? `, обнулено ${result.rows_zeroed}` : '') +
         (result.rows_skipped > 0 ? `, пропущено ${result.rows_skipped}` : '');
 
       if (result.errors.length > 0) {
@@ -260,19 +374,133 @@
     const input = event.target as HTMLInputElement;
     file = input.files?.[0] ?? null;
   }
+
+  function openItemCreate(): void {
+    itemTarget = null;
+    itemForm = { name: '', unit: '', quantity: '0', description: '' };
+    itemError = '';
+    itemOpen = true;
+  }
+
+  function openRename(): void {
+    if (activeId === null) {
+      return;
+    }
+
+    renameName = currentWarehouse?.name ?? '';
+    renameError = '';
+    renameOpen = true;
+  }
+
+  async function saveRename(): Promise<void> {
+    if (activeId === null) {
+      return;
+    }
+
+    const name = renameName.trim();
+
+    if (name === '') {
+      renameError = 'Укажите название склада';
+      return;
+    }
+
+    renameBusy = true;
+    renameError = '';
+
+    try {
+      const data = await renameWarehouse(activeId, name);
+      warehouses = warehouses.map((item) =>
+        item.id === data.warehouse.id ? { ...item, name: data.warehouse.name } : item
+      );
+      renameOpen = false;
+      message = `Склад переименован: ${data.warehouse.name}`;
+    } catch (cause) {
+      renameError = cause instanceof ApiError ? cause.message : 'Не удалось переименовать склад';
+    } finally {
+      renameBusy = false;
+    }
+  }
+
+  function openItemEdit(level: StockLevel): void {
+    itemTarget = level;
+    itemForm = {
+      name: level.name,
+      unit: level.unit,
+      quantity: String(level.quantity),
+      description: level.description ?? ''
+    };
+    itemError = '';
+    itemOpen = true;
+  }
+
+  async function saveItem(): Promise<void> {
+    if (activeId === null) {
+      return;
+    }
+
+    const name = itemForm.name.trim();
+
+    if (name === '') {
+      itemError = 'Укажите название позиции';
+      return;
+    }
+
+    const quantity = Number(itemForm.quantity);
+
+    if (!Number.isFinite(quantity) || quantity < 0) {
+      itemError = 'Укажите корректное количество (не меньше нуля)';
+      return;
+    }
+
+    itemBusy = true;
+    itemError = '';
+
+    try {
+      const payload = {
+        name,
+        unit: itemForm.unit.trim(),
+        quantity,
+        description: itemForm.description.trim()
+      };
+
+      if (itemTarget === null) {
+        await createStockItem(activeId, payload);
+        message = `Позиция добавлена: ${name}`;
+      } else {
+        await updateStockItem(itemTarget.id, payload);
+        message = `Позиция сохранена: ${name}`;
+      }
+
+      itemOpen = false;
+      await loadLevels();
+      void refreshCounts();
+    } catch (cause) {
+      itemError = cause instanceof ApiError ? cause.message : 'Не удалось сохранить позицию';
+    } finally {
+      itemBusy = false;
+    }
+  }
 </script>
 
 <section class="page page-wide">
   <div class="head">
     <h1>
-      Склады
+      Складские остатки
       {#if currentWarehouse?.actual_date}
-        <span class="head-date">(остатки на {formatDate(currentWarehouse.actual_date)})</span>
+        <span class="head-date">(на {formatDate(currentWarehouse.actual_date)})</span>
       {/if}
     </h1>
     <div class="actions">
-      <Button variant="ghost" loading={busy} disabled={activeId === null} onclick={() => (exportOpen = true)}>
-        Скачать или отправить
+      {#if canEdit}
+        <Button variant="ghost" disabled={activeId === null} onclick={openItemCreate}>
+          + Позиция
+        </Button>
+        <Button variant="ghost" disabled={activeId === null} onclick={openRename}>
+          Переименовать склад
+        </Button>
+      {/if}
+      <Button variant="ghost" loading={busy} disabled={warehouses.length === 0} onclick={() => (exportOpen = true)}>
+        Экспорт
       </Button>
       {#if canImport}
         <Button variant="ghost" onclick={() => void toggleHistory()}>
@@ -286,11 +514,16 @@
   {#if message}<div class="notice">{message}</div>{/if}
 
   {#if canImport}
-    <div class="card import">
-      <h2>Импорт остатков из 1С</h2>
+    <details class="card import" open={importOpen}>
+      <summary>
+        <h2>Импорт остатков из 1С</h2>
+        <span class="chev" aria-hidden="true"></span>
+      </summary>
       <p class="hint">
         Файл Excel (xls/xlsx) в формате 1С: строки «Склад …» и далее «товар; ед.; количество».
-        CSV: те же три колонки либо «склад; товар; ед.; количество». Импорт заменяет остатки целиком.
+        CSV: те же три колонки либо «склад; товар; ед.; количество». Импорт заменяет остатки целиком:
+        позиции, которых нет в файле, обнуляются и скрываются, пока в настройках системы не разрешены
+        нулевые остатки. Новые склады из файла добавляются автоматически.
       </p>
       <div class="import-row">
         <input type="file" accept=".xls,.xlsx,.csv,.txt" onchange={onFileChange} />
@@ -300,7 +533,7 @@
         </label>
         <Button loading={busy} disabled={file === null} onclick={() => void doImport()}>Загрузить</Button>
       </div>
-    </div>
+    </details>
   {/if}
 
   {#if showHistory}
@@ -338,49 +571,76 @@
   {:else if warehouses.length === 0}
     <div class="empty">Нет доступных складов</div>
   {:else}
-    <div class="tabs">
+    <select
+      class="warehouse-select"
+      aria-label="Склад"
+      value={activeId ?? ''}
+      onchange={(event) => void select(Number((event.currentTarget as HTMLSelectElement).value))}
+    >
       {#each warehouses as warehouse (warehouse.id)}
+        <option value={warehouse.id}>{warehouse.name} — {warehouse.positions}</option>
+      {/each}
+    </select>
+
+    <div class="tabs-row">
+      {#if tabsOverflow}
         <button
           type="button"
-          class="tab"
-          class:active={warehouse.id === activeId}
-          onclick={() => void select(warehouse.id)}
+          class="tabs-nav"
+          title="Прокрутить влево"
+          aria-label="Прокрутить список складов влево"
+          disabled={tabsAtStart}
+          onclick={() => scrollTabs(-1)}
         >
-          {warehouse.name}
-          {#if warehouse.is_personal}<span class="personal" title="Персональный доступ">•</span>{/if}
-          {#if hasFilters}
-            <span class="count" class:found={(counts[warehouse.id] ?? 0) > 0} class:zero={(counts[warehouse.id] ?? 0) === 0}>
-              {counts[warehouse.id] ?? 0}
-            </span>
-          {:else}
-            <span class="count">{warehouse.positions}</span>
-          {/if}
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M15 6l-6 6 6 6" />
+          </svg>
         </button>
-      {/each}
+      {/if}
+
+      <div class="tabs-wrap" class:overflow={tabsOverflow && !tabsAtEnd}>
+        <div class="tabs" bind:this={tabsEl} onscroll={updateTabsScroll}>
+          {#each warehouses as warehouse (warehouse.id)}
+            <button
+              type="button"
+              class="tab"
+              class:active={warehouse.id === activeId}
+              onclick={() => void select(warehouse.id)}
+            >
+              {warehouse.name}
+              {#if warehouse.is_personal}<span class="personal" title="Персональный доступ">•</span>{/if}
+              {#if hasFilters}
+                <span class="count" class:found={(counts[warehouse.id] ?? 0) > 0} class:zero={(counts[warehouse.id] ?? 0) === 0}>
+                  {counts[warehouse.id] ?? 0}
+                </span>
+              {:else}
+                <span class="count">{warehouse.positions}</span>
+              {/if}
+              {#if cartCount(warehouse.id) > 0}
+                <span class="picked" title="Позиций в корзине заявки">в заявке: {cartCount(warehouse.id)}</span>
+              {/if}
+            </button>
+          {/each}
+        </div>
+      </div>
+
+      {#if tabsOverflow}
+        <button
+          type="button"
+          class="tabs-nav"
+          title="Прокрутить вправо"
+          aria-label="Прокрутить список складов вправо"
+          disabled={tabsAtEnd}
+          onclick={() => scrollTabs(1)}
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </button>
+      {/if}
     </div>
 
     <div class="filters">
-      <select bind:value={qtyOp} onchange={() => void applyFilters()}>
-        <option value="gt">Количество больше</option>
-        <option value="lt">Количество меньше</option>
-      </select>
-      <input
-        class="qty-input"
-        type="number"
-        min="0"
-        step="any"
-        placeholder="значение"
-        bind:value={qtyValue}
-        onchange={() => void applyFilters()}
-      />
-
-      <select bind:value={sortBy} onchange={() => void applyFilters()}>
-        <option value="name_asc">Наименование: А–Я</option>
-        <option value="name_desc">Наименование: Я–А</option>
-        <option value="qty_desc">Количество: по убыванию</option>
-        <option value="qty_asc">Количество: по возрастанию</option>
-      </select>
-
       <form
         class="search"
         onsubmit={(event) => {
@@ -398,7 +658,15 @@
         <Button type="submit" variant="ghost">Найти</Button>
       </form>
 
-      <Button variant="ghost" onclick={resetFilters}>Сбросить</Button>
+      <label class="sort-field">
+        <span>Сортировка</span>
+        <select bind:value={stockSort} onchange={changeSort}>
+          <option value="name_asc">Наименование: А–Я</option>
+          <option value="name_desc">Наименование: Я–А</option>
+          <option value="qty_desc">Количество: по убыванию</option>
+          <option value="qty_asc">Количество: по возрастанию</option>
+        </select>
+      </label>
     </div>
 
     {#if loadingLevels}
@@ -410,8 +678,40 @@
         {#each levels as level (level.id)}
           {@const cartQty = inCart(level)}
           <div class="level" class:in-cart={cartQty > 0}>
-            <span class="name">{level.name}</span>
+            <div class="name-col">
+              <button
+                type="button"
+                class="name"
+                class:has-desc={level.description !== ''}
+                title={level.description !== ''
+                  ? expandedLevels.has(level.id)
+                    ? 'Скрыть описание'
+                    : 'Показать описание'
+                  : ''}
+                onclick={() => toggleLevelDescription(level.id)}
+              >
+                {level.name}
+              </button>
+
+              {#if expandedLevels.has(level.id) && level.description !== ''}
+                <div class="desc">{level.description}</div>
+              {/if}
+            </div>
+            {#if level.quantity <= 0}
+              <span class="zero-mark">нет в наличии</span>
+            {/if}
             <span class="quantity">{level.quantity.toLocaleString('ru-RU', { maximumFractionDigits: 3 })} {level.unit}</span>
+            {#if canEdit}
+              <button
+                type="button"
+                class="icon-btn"
+                title="Изменить позицию"
+                aria-label={`Изменить: ${level.name}`}
+                onclick={() => openItemEdit(level)}
+              >
+                <Icon name="edit" size={16} />
+              </button>
+            {/if}
             {#if canCreate}
               <span class="add">
                 {#if cartQty > 0}
@@ -488,11 +788,66 @@
 
   <ExportModal
     open={exportOpen}
-    title="Экспорт остатков"
+    title="Экспорт остатков по всем складам"
     email={auth.user?.email ?? ''}
+    emailAllowed={appSettings.emailExportEnabled}
     onclose={() => (exportOpen = false)}
     onpick={(format, byEmail) => void doExport(format, byEmail)}
   />
+
+  <Modal
+    open={itemOpen}
+    title={itemTarget === null ? 'Новая позиция' : 'Позиция'}
+    onclose={() => (itemOpen = false)}
+  >
+    <div class="item-form">
+      <Input label="Название" bind:value={itemForm.name} placeholder="Например: Смартфон Pixel 9" />
+
+      <div class="item-grid">
+        <Input label="Единица измерения" bind:value={itemForm.unit} placeholder="шт" />
+        <Input label="Количество" type="number" bind:value={itemForm.quantity} />
+      </div>
+
+      <label class="field">
+        <span class="label">Описание</span>
+        <textarea
+          bind:value={itemForm.description}
+          rows="3"
+          placeholder="Характеристики, цвет, память — покажется в подсказке при наведении"
+        ></textarea>
+      </label>
+
+      {#if itemError}
+        <div class="alert">{itemError}</div>
+      {/if}
+
+      <div class="modal-actions">
+        <Button variant="ghost" onclick={() => (itemOpen = false)}>Отмена</Button>
+        <Button loading={itemBusy} onclick={() => void saveItem()}>
+          {itemTarget === null ? 'Добавить' : 'Сохранить'}
+        </Button>
+      </div>
+    </div>
+  </Modal>
+
+  <Modal open={renameOpen} title="Название склада" onclose={() => (renameOpen = false)}>
+    <div class="item-form">
+      <Input
+        label="Название"
+        bind:value={renameName}
+        placeholder="Например: Склад Тест-Центральный"
+      />
+
+      {#if renameError}
+        <div class="alert">{renameError}</div>
+      {/if}
+
+      <div class="modal-actions">
+        <Button variant="ghost" onclick={() => (renameOpen = false)}>Отмена</Button>
+        <Button loading={renameBusy} onclick={() => void saveRename()}>Сохранить</Button>
+      </div>
+    </div>
+  </Modal>
 </section>
 
 <style>
@@ -522,6 +877,7 @@
 
   .actions {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
   }
 
@@ -546,6 +902,44 @@
     align-items: flex-end;
   }
 
+  .import summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .import summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .import summary h2 {
+    margin: 0;
+  }
+
+  .import summary .chev {
+    width: 8px;
+    height: 8px;
+    border: solid var(--muted);
+    border-width: 0 1.5px 1.5px 0;
+    transform: rotate(45deg);
+    transition: transform 0.15s ease;
+  }
+
+  .import[open] summary .chev {
+    transform: rotate(-135deg);
+  }
+
+  .import summary:hover .chev {
+    border-color: var(--primary);
+  }
+
+  .import .hint {
+    margin-top: var(--space-2);
+  }
+
   .import-row input[type='file'] {
     flex: 1;
     min-width: 220px;
@@ -567,13 +961,71 @@
     font: inherit;
   }
 
-  .tabs {
+  .tabs-row {
     display: flex;
-    flex-wrap: wrap;
+    align-items: center;
     gap: var(--space-2);
   }
 
+  .tabs-nav {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    transition: border-color 0.12s ease, color 0.12s ease;
+  }
+
+  .tabs-nav:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .tabs-nav:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .tabs-wrap {
+    position: relative;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .tabs-wrap.overflow::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 40px;
+    pointer-events: none;
+    background: linear-gradient(to right, transparent, var(--bg) 85%);
+  }
+
+  .tabs {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: var(--space-2);
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+  }
+
+  .tabs::-webkit-scrollbar {
+    display: none;
+  }
+
   .tab {
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     gap: 6px;
@@ -610,6 +1062,34 @@
     opacity: 0.55;
   }
 
+  .picked {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--primary);
+    white-space: nowrap;
+  }
+
+  .warehouse-select {
+    display: none;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    color: var(--text);
+  }
+
+  @media (max-width: 720px) {
+    .tabs-row {
+      display: none;
+    }
+
+    .warehouse-select {
+      display: block;
+    }
+  }
+
   .personal {
     color: var(--primary);
     font-size: 16px;
@@ -630,23 +1110,30 @@
     background: var(--surface);
   }
 
-  .qty-input {
-    width: 130px;
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    font: inherit;
-    font-size: 13px;
-  }
-
-
-
   .search {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
-    flex: 1;
-    min-width: 220px;
+    flex: 1 1 260px;
+    min-width: 0;
+  }
+
+  .sort-field {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: var(--space-2);
+    padding-left: var(--space-4);
+    border-left: 1px solid var(--border);
+    font-size: 14px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  @media (max-width: 720px) {
+    .search {
+      flex: 1 1 100%;
+    }
   }
 
   .head-date {
@@ -672,20 +1159,121 @@
     padding: 10px var(--space-4);
     border-bottom: 1px solid var(--border);
     font-size: 14px;
+    transition: background 0.12s ease;
+  }
+
+  .level:hover {
+    background: var(--bg);
   }
 
   .level:last-child {
     border-bottom: none;
   }
 
-  .level .name {
+  .name-col {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
     flex: 1;
     min-width: 0;
+  }
+
+  .name {
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+  }
+
+  .name.has-desc {
+    border-bottom: 1px dashed var(--border);
+  }
+
+  .name:hover {
+    color: var(--primary);
+  }
+
+  .desc {
+    padding: 8px 10px;
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+    color: var(--muted);
+    font-size: 13px;
+    white-space: pre-wrap;
   }
 
   .level .quantity {
     font-weight: 500;
     white-space: nowrap;
+  }
+
+  .zero-mark {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--muted);
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+
+  .icon-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .item-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .item-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-3);
+  }
+
+  .item-form .field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .item-form .label {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .item-form textarea {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    color: var(--text);
+    resize: vertical;
+  }
+
+  .item-form .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
   }
 
   .level.in-cart {

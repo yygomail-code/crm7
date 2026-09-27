@@ -10,7 +10,13 @@ final class ChatRepository
 {
     public function findByClient(int $clientId): ?array
     {
-        $stmt = Database::pdo()->prepare('SELECT * FROM chat_threads WHERE client_id = ? LIMIT 1');
+        $stmt = Database::pdo()->prepare(
+            'SELECT t.*, c.FULL_NAME AS client_name, m.FULL_NAME AS manager_name
+             FROM chat_threads t
+             INNER JOIN users c ON c.ID = t.client_id
+             LEFT JOIN users m ON m.ID = t.manager_id
+             WHERE t.client_id = ? LIMIT 1'
+        );
         $stmt->execute([$clientId]);
 
         return $stmt->fetch() ?: null;
@@ -24,14 +30,30 @@ final class ChatRepository
         return $stmt->fetch() ?: null;
     }
 
-    public function create(int $clientId, ?int $managerId): int
+    public function create(int $clientId, ?int $managerId, ?int $peerId = null): int
     {
         $pdo = Database::pdo();
 
-        $stmt = $pdo->prepare('INSERT INTO chat_threads (client_id, manager_id) VALUES (?, ?)');
-        $stmt->execute([$clientId, $managerId]);
+        $stmt = $pdo->prepare('INSERT INTO chat_threads (client_id, manager_id, peer_id) VALUES (?, ?, ?)');
+        $stmt->execute([$clientId > 0 ? $clientId : null, $managerId, $peerId]);
 
         return (int) $pdo->lastInsertId();
+    }
+
+    public function findStaffThread(int $userId, int $peerId): ?array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT t.*, NULL AS client_name, m.FULL_NAME AS manager_name, p.FULL_NAME AS peer_name
+             FROM chat_threads t
+             LEFT JOIN users m ON m.ID = t.manager_id
+             LEFT JOIN users p ON p.ID = t.peer_id
+             WHERE t.client_id IS NULL
+               AND ((t.manager_id = ? AND t.peer_id = ?) OR (t.manager_id = ? AND t.peer_id = ?))
+             LIMIT 1'
+        );
+        $stmt->execute([$userId, $peerId, $peerId, $userId]);
+
+        return $stmt->fetch() ?: null;
     }
 
     public function syncManager(int $clientId, ?int $managerId): void
@@ -52,17 +74,16 @@ final class ChatRepository
         $params = array_map('intval', $managerIds);
 
         $stmt = Database::pdo()->prepare(
-            'SELECT t.*, c.FULL_NAME AS client_name, m.FULL_NAME AS manager_name
+            'SELECT t.*, c.FULL_NAME AS client_name, m.FULL_NAME AS manager_name, p.FULL_NAME AS peer_name
              FROM chat_threads t
-             INNER JOIN users c ON c.ID = t.client_id
+             LEFT JOIN users c ON c.ID = t.client_id
              LEFT JOIN users m ON m.ID = t.manager_id
-             WHERE t.manager_id IN (' . $placeholders . ')
-                OR EXISTS (
-                    SELECT 1 FROM manager_clients mc
-                    WHERE mc.client_id = t.client_id AND mc.manager_id IN (' . $placeholders . ')
-                )
+             LEFT JOIN users p ON p.ID = t.peer_id
+             WHERE t.client_id IS NOT NULL
+                OR t.manager_id IN (' . $placeholders . ')
+                OR t.peer_id IN (' . $placeholders . ')
              ORDER BY COALESCE(t.last_message_at, t.created_at) DESC
-             LIMIT 200'
+             LIMIT 300'
         );
         $stmt->execute(array_merge($params, $params));
 
@@ -72,10 +93,11 @@ final class ChatRepository
     public function listAll(): array
     {
         $stmt = Database::pdo()->query(
-            'SELECT t.*, c.FULL_NAME AS client_name, m.FULL_NAME AS manager_name
+            'SELECT t.*, c.FULL_NAME AS client_name, m.FULL_NAME AS manager_name, p.FULL_NAME AS peer_name
              FROM chat_threads t
-             INNER JOIN users c ON c.ID = t.client_id
+             LEFT JOIN users c ON c.ID = t.client_id
              LEFT JOIN users m ON m.ID = t.manager_id
+             LEFT JOIN users p ON p.ID = t.peer_id
              ORDER BY COALESCE(t.last_message_at, t.created_at) DESC
              LIMIT 500'
         );
@@ -140,12 +162,26 @@ final class ChatRepository
         return $result;
     }
 
-    public function addMessage(int $threadId, int $userId, string $body): int
+    public function unreadCountForRequest(int $userId, int $threadId, int $requestId): int
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT COUNT(*) AS unread
+             FROM chat_messages m
+             LEFT JOIN chat_reads r ON r.thread_id = m.thread_id AND r.user_id = ?
+             WHERE m.thread_id = ? AND m.request_id = ? AND m.user_id <> ?
+               AND m.ID > COALESCE(r.last_read_id, 0)'
+        );
+        $stmt->execute([$userId, $threadId, $requestId, $userId]);
+
+        return (int) ($stmt->fetchColumn() ?: 0);
+    }
+
+    public function addMessage(int $threadId, int $userId, string $body, ?int $requestId = null): int
     {
         $pdo = Database::pdo();
 
-        $stmt = $pdo->prepare('INSERT INTO chat_messages (thread_id, user_id, body) VALUES (?, ?, ?)');
-        $stmt->execute([$threadId, $userId, $body]);
+        $stmt = $pdo->prepare('INSERT INTO chat_messages (thread_id, request_id, user_id, body) VALUES (?, ?, ?, ?)');
+        $stmt->execute([$threadId, $requestId !== null && $requestId > 0 ? $requestId : null, $userId, $body]);
 
         $messageId = (int) $pdo->lastInsertId();
 
@@ -154,20 +190,40 @@ final class ChatRepository
         return $messageId;
     }
 
-    public function messages(int $threadId, int $afterId = 0, int $limit = 200): array
+    public function messages(int $threadId, int $afterId = 0, int $limit = 200, ?int $requestId = null): array
     {
         $limit = max(1, min(500, $limit));
+        $requestFilter = $requestId !== null && $requestId > 0;
 
-        $stmt = Database::pdo()->prepare(
-            'SELECT m.ID AS id, m.body, m.created_at, m.user_id,
-                    u.FULL_NAME AS user_name, u.LEVEL AS user_level
-             FROM chat_messages m
-             INNER JOIN users u ON u.ID = m.user_id
-             WHERE m.thread_id = ? AND m.ID > ?
-             ORDER BY m.ID ASC
-             LIMIT ' . $limit
-        );
-        $stmt->execute([$threadId, $afterId]);
+        if ($afterId <= 0) {
+            $sql = 'SELECT m.ID AS id, m.body, m.created_at, m.user_id, m.request_id,
+                           r.number AS request_number,
+                           u.FULL_NAME AS user_name, u.LEVEL AS user_level
+                    FROM chat_messages m
+                    INNER JOIN users u ON u.ID = m.user_id
+                    LEFT JOIN requests r ON r.ID = m.request_id
+                    WHERE m.thread_id = ?'
+                . ($requestFilter ? ' AND m.request_id = ?' : '')
+                . ' ORDER BY m.ID DESC LIMIT ' . $limit;
+
+            $stmt = Database::pdo()->prepare($sql);
+            $stmt->execute($requestFilter ? [$threadId, (int) $requestId] : [$threadId]);
+
+            return array_reverse($stmt->fetchAll() ?: []);
+        }
+
+        $sql = 'SELECT m.ID AS id, m.body, m.created_at, m.user_id, m.request_id,
+                       r.number AS request_number,
+                       u.FULL_NAME AS user_name, u.LEVEL AS user_level
+                FROM chat_messages m
+                INNER JOIN users u ON u.ID = m.user_id
+                LEFT JOIN requests r ON r.ID = m.request_id
+                WHERE m.thread_id = ? AND m.ID > ?'
+            . ($requestFilter ? ' AND m.request_id = ?' : '')
+            . ' ORDER BY m.ID ASC LIMIT ' . $limit;
+
+        $stmt = Database::pdo()->prepare($sql);
+        $stmt->execute($requestFilter ? [$threadId, $afterId, (int) $requestId] : [$threadId, $afterId]);
 
         return $stmt->fetchAll() ?: [];
     }

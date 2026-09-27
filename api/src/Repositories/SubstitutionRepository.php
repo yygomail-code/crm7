@@ -72,12 +72,19 @@ final class SubstitutionRepository
     {
         $stmt = Database::pdo()->prepare(
             'SELECT 1 FROM substitutions
-             WHERE manager_id = ? AND is_active = 1 AND date_from <= ? AND date_to >= ?
+             WHERE manager_id = ? AND is_active = 1 AND date_to >= CURDATE() AND date_from <= ? AND date_to >= ?
              LIMIT 1'
         );
         $stmt->execute([$managerId, $to, $from]);
 
         return $stmt->fetchColumn() !== false;
+    }
+
+    public function lockForManager(int $managerId): void
+    {
+        $stmt = Database::pdo()->prepare('SELECT ID FROM substitutions WHERE manager_id = ? FOR UPDATE');
+        $stmt->execute([$managerId]);
+        $stmt->fetchAll();
     }
 
     public function activeForManager(int $managerId, ?string $date = null): ?array

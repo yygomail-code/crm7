@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Core\DatabaseSettings;
 use App\Http\HttpException;
 use App\Http\Request;
 use App\Http\Response;
@@ -33,11 +34,19 @@ final class AdminController extends ApiController
         $reaction = max(1, min(168, (int) $request->input('sla_reaction_hours', 2)));
         $resolution = max(1, min(720, (int) $request->input('sla_resolution_hours', 24)));
         $spf = (bool) $request->input('spf_checklist', false);
+        $sales = (bool) $request->input('sales_enabled', true);
+        $emailExport = (bool) $request->input('email_export_enabled', true);
+        $stockReserve = (bool) $request->input('stock_reserve_enabled', false);
+        $stockAllowZero = (bool) $request->input('stock_allow_zero', false);
 
         $this->settings->many([
             'sla.reaction_hours' => (string) $reaction,
             'sla.resolution_hours' => (string) $resolution,
             'mail.spf_checklist' => $spf ? '1' : '0',
+            'sales.enabled' => $sales ? '1' : '0',
+            'mail.export_enabled' => $emailExport ? '1' : '0',
+            'stock.reserve_enabled' => $stockReserve ? '1' : '0',
+            'stock.allow_zero' => $stockAllowZero ? '1' : '0',
         ]);
 
         return Response::ok($this->systemSettingsPayload());
@@ -49,6 +58,10 @@ final class AdminController extends ApiController
             'sla_reaction_hours' => (int) ($this->settings->get('sla.reaction_hours') ?? 2),
             'sla_resolution_hours' => (int) ($this->settings->get('sla.resolution_hours') ?? 24),
             'spf_checklist' => $this->settings->get('mail.spf_checklist') === '1',
+            'sales_enabled' => $this->settings->salesEnabled(),
+            'email_export_enabled' => $this->settings->emailExportEnabled(),
+            'stock_reserve_enabled' => $this->settings->stockReserveEnabled(),
+            'stock_allow_zero' => $this->settings->allowZeroStock(),
             'spf_steps' => [
                 'SPF: добавьте в DNS TXT-запись домена с серверами отправки (v=spf1 …)',
                 'DKIM: включите подпись в панели почтового провайдера и опубликуйте публичный ключ',
@@ -85,6 +98,35 @@ final class AdminController extends ApiController
         return Response::ok($this->mail->testConnection());
     }
 
+    public function databaseSettings(Request $request): Response
+    {
+        $this->requireSettings($request);
+
+        return Response::ok(DatabaseSettings::publicPayload());
+    }
+
+    public function testDatabaseSettings(Request $request): Response
+    {
+        $this->requireSettings($request);
+
+        return Response::ok(DatabaseSettings::test($request->bodyAll()));
+    }
+
+    public function saveDatabaseSettings(Request $request): Response
+    {
+        $user = $this->requireSettings($request);
+
+        $payload = DatabaseSettings::save($request->bodyAll(), (string) ($user['LOGIN'] ?? ''));
+
+        $this->audit($request, $user, 'settings.database', 'settings', null, [
+            'host' => $payload['host'],
+            'database' => $payload['database'],
+            'user' => $payload['user'],
+        ]);
+
+        return Response::ok($payload);
+    }
+
     public function templates(Request $request): Response
     {
         $this->requireSettings($request);
@@ -110,12 +152,14 @@ final class AdminController extends ApiController
         return Response::ok($this->mail->queueRecent((int) $request->queryParam('limit', '30')));
     }
 
-    private function requireSettings(Request $request): void
+    private function requireSettings(Request $request): array
     {
-        [, $capabilities] = $this->context($request);
+        [$user, $capabilities] = $this->context($request);
 
         if (!in_array('settings.manage', $capabilities, true)) {
             throw new HttpException(403, 'forbidden', 'Недостаточно прав');
         }
+
+        return $user;
     }
 }

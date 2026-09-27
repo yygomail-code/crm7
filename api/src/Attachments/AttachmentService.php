@@ -4,8 +4,10 @@ declare(strict_types=1);
 
 namespace App\Attachments;
 
+use App\Core\RateLimiter;
 use App\Http\HttpException;
 use App\Repositories\AttachmentRepository;
+use App\Repositories\RequestActivityRepository;
 use App\Repositories\RequestRepository;
 use App\Requests\RequestService;
 use App\Support\Storage;
@@ -18,10 +20,49 @@ final class AttachmentService
         'jpg', 'jpeg', 'png', 'webp', 'pdf', 'xls', 'xlsx', 'doc', 'docx', 'txt', 'zip', 'rar',
     ];
 
+    public const FORBIDDEN_MIME = [
+        'text/html',
+        'text/x-php',
+        'application/x-php',
+        'application/x-httpd-php',
+        'application/x-httpd-php-source',
+        'text/x-shellscript',
+        'application/x-sh',
+        'application/x-csh',
+        'text/javascript',
+        'application/javascript',
+        'application/x-javascript',
+        'image/svg+xml',
+        'application/xml',
+        'text/xml',
+        'application/x-msdownload',
+        'application/x-dosexec',
+        'application/x-executable',
+        'application/vnd.microsoft.portable-executable',
+        'text/x-perl',
+        'application/x-perl',
+    ];
+
+    public static function assertSafeMime(array $file): void
+    {
+        $path = (string) ($file['tmp_name'] ?? '');
+
+        if ($path === '' || !is_file($path)) {
+            return;
+        }
+
+        $detected = (new \finfo(FILEINFO_MIME_TYPE))->file($path);
+
+        if ($detected !== false && in_array(strtolower((string) $detected), self::FORBIDDEN_MIME, true)) {
+            throw new HttpException(422, 'bad_type', 'Недопустимый тип файла');
+        }
+    }
+
     public function __construct(
         private readonly AttachmentRepository $attachments = new AttachmentRepository(),
         private readonly RequestRepository $requests = new RequestRepository(),
-        private readonly RequestService $requestService = new RequestService()
+        private readonly RequestService $requestService = new RequestService(),
+        private readonly RequestActivityRepository $activities = new RequestActivityRepository()
     ) {
     }
 
@@ -40,6 +81,8 @@ final class AttachmentService
     public function upload(array $user, array $capabilities, int $requestId, array $file): array
     {
         $this->requireRequest($user, $capabilities, $requestId);
+
+        RateLimiter::hit('request.upload', 'user:' . (int) $user['ID'], 60, 3600);
 
         $error = (int) ($file['error'] ?? UPLOAD_ERR_NO_FILE);
 
@@ -68,6 +111,8 @@ final class AttachmentService
             throw new HttpException(422, 'bad_type', 'Недопустимый тип файла');
         }
 
+        self::assertSafeMime($file);
+
         $stored = Storage::save($file);
 
         $finfo = new \finfo(FILEINFO_MIME_TYPE);
@@ -80,6 +125,14 @@ final class AttachmentService
             $stored['relative'],
             mb_substr($mime, 0, 100),
             $size
+        );
+
+        $this->activities->add(
+            $requestId,
+            (int) $user['ID'],
+            'file_attached',
+            'Прикреплён файл',
+            mb_substr($originalName, 0, 200) . ' — ' . $this->formatSize($size)
         );
 
         return $this->list($user, $capabilities, $requestId);
@@ -122,6 +175,14 @@ final class AttachmentService
         Storage::delete((string) $attachment['storage_path']);
         $this->attachments->delete($attachmentId);
 
+        $this->activities->add(
+            (int) $attachment['request_id'],
+            (int) $user['ID'],
+            'file_removed',
+            'Удалён файл',
+            mb_substr((string) $attachment['file_name'], 0, 255)
+        );
+
         return ['deleted' => true];
     }
 
@@ -136,6 +197,19 @@ final class AttachmentService
         $this->requestService->assertAccess($user, $capabilities, $request);
 
         return $request;
+    }
+
+    private function formatSize(int $bytes): string
+    {
+        if ($bytes >= 1048576) {
+            return rtrim(rtrim(number_format($bytes / 1048576, 1, ',', ' '), '0'), ',') . ' МБ';
+        }
+
+        if ($bytes >= 1024) {
+            return round($bytes / 1024) . ' КБ';
+        }
+
+        return $bytes . ' Б';
     }
 
     private function mapAttachment(array $row): array

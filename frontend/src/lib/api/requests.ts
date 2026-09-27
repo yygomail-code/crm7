@@ -17,18 +17,26 @@ export function listActivityTypes(): Promise<ActivityType[]> {
   return apiRequest<ActivityType[]>('/activity-types', { auth: true });
 }
 
-export function addActivity(id: number, type: string, body: string): Promise<RequestDetail> {
+export function addActivity(
+  id: number,
+  type: string,
+  body: string,
+  occurredAt?: string
+): Promise<RequestDetail> {
   return apiRequest<RequestDetail>(`/requests/${id}/activities`, {
     method: 'POST',
     auth: true,
-    body: { type, body }
+    body: { type, body, occurred_at: occurredAt ?? '' }
   });
 }
 
 export interface RequestFilters {
   status?: string;
+  manager_scope?: string;
   q?: string;
   warehouse_id?: number;
+  client_id?: number;
+  state?: string;
   from?: string;
   to?: string;
   sort?: string;
@@ -52,8 +60,11 @@ export function listRequests(filters: RequestFilters = {}): Promise<RequestListR
   const query = new URLSearchParams();
 
   if (filters.status) query.set('status', filters.status);
+  if (filters.manager_scope) query.set('manager_scope', filters.manager_scope);
   if (filters.q) query.set('q', filters.q);
   if (filters.warehouse_id) query.set('warehouse_id', String(filters.warehouse_id));
+  if (filters.client_id) query.set('client_id', String(filters.client_id));
+  if (filters.state) query.set('state', filters.state);
   if (filters.from) query.set('from', filters.from);
   if (filters.to) query.set('to', filters.to);
   if (filters.sort) query.set('sort', filters.sort);
@@ -76,8 +87,10 @@ export function getRequest(id: number): Promise<RequestDetail> {
 export interface CreateRequestItem {
   warehouse_id: number | null;
   warehouse_name: string;
+  stock_level_id?: number | null;
   name: string;
   unit: string;
+  description?: string;
   quantity: number;
 }
 
@@ -93,6 +106,25 @@ export function createRequest(payload: CreateRequestPayload): Promise<RequestDet
   return apiRequest<RequestDetail>('/requests', { method: 'POST', auth: true, body: payload });
 }
 
+export interface UpdateRequestPayload {
+  subject: string;
+  body: string;
+  items: CreateRequestItem[];
+  priority?: number;
+}
+
+export function updateRequest(
+  id: number,
+  payload: UpdateRequestPayload,
+  version: number
+): Promise<RequestDetail> {
+  return apiRequest<RequestDetail>(`/requests/${id}/edit`, {
+    method: 'POST',
+    auth: true,
+    body: { ...payload, version }
+  });
+}
+
 export function transitionRequest(
   id: number,
   toStatus: string,
@@ -103,6 +135,31 @@ export function transitionRequest(
     method: 'POST',
     auth: true,
     body: { to_status: toStatus, comment, version }
+  });
+}
+
+export function updateRequestMeta(
+  id: number,
+  payload: { priority?: number; due_at?: string | null; comment?: string; subject?: string; body?: string },
+  version: number
+): Promise<RequestDetail> {
+  return apiRequest<RequestDetail>(`/requests/${id}/meta`, {
+    method: 'POST',
+    auth: true,
+    body: { ...payload, version }
+  });
+}
+
+export function updateRequestItems(
+  id: number,
+  items: CreateRequestItem[],
+  version: number,
+  comment = ''
+): Promise<RequestDetail> {
+  return apiRequest<RequestDetail>(`/requests/${id}/items`, {
+    method: 'POST',
+    auth: true,
+    body: { items, version, comment }
   });
 }
 
@@ -123,7 +180,7 @@ export function assignRequest(
   });
 }
 
-export function addComment(id: number, body: string, isInternal = false): Promise<RequestDetail> {
+export function addComment(id: number, body: string, isInternal = true): Promise<RequestDetail> {
   return apiRequest<RequestDetail>(`/requests/${id}/comments`, {
     method: 'POST',
     auth: true,
@@ -131,16 +188,30 @@ export function addComment(id: number, body: string, isInternal = false): Promis
   });
 }
 
+export interface ClientListFilters {
+  state?: string;
+  manager?: string;
+  from?: string;
+  to?: string;
+  sort?: string;
+}
+
 export function listClients(
   query = '',
   page = 1,
-  perPage = 20
+  perPage = 20,
+  filters: ClientListFilters = {}
 ): Promise<{ items: ClientItem[]; total: number; page: number; per_page: number }> {
   const params = new URLSearchParams();
 
   if (query) params.set('q', query);
   if (page > 1) params.set('page', String(page));
   params.set('per_page', String(perPage));
+  if (filters.state) params.set('state', filters.state);
+  if (filters.manager) params.set('manager', filters.manager);
+  if (filters.from) params.set('from', filters.from);
+  if (filters.to) params.set('to', filters.to);
+  if (filters.sort) params.set('sort', filters.sort);
 
   return apiRequest<{ items: ClientItem[]; total: number; page: number; per_page: number }>(
     `/clients?${params.toString()}`,
@@ -165,51 +236,6 @@ export function listManagers(): Promise<{ items: ManagerItem[] }> {
   return apiRequest<{ items: ManagerItem[] }>('/managers', { auth: true });
 }
 
-export interface SavedFilter {
-  id: number;
-  name: string;
-  params: {
-    status?: string;
-    q?: string;
-    warehouse_id?: number;
-    from?: string;
-    to?: string;
-    sort?: string;
-  };
-  created_at: string;
-}
 
-export function listSavedFilters(): Promise<{ items: SavedFilter[] }> {
-  return apiRequest<{ items: SavedFilter[] }>('/saved-filters', { auth: true });
-}
 
-export function saveSavedFilter(
-  name: string,
-  params: {
-    status?: string;
-    q?: string;
-    warehouse_id?: number;
-    from?: string;
-    to?: string;
-    sort?: string;
-  }
-): Promise<SavedFilter> {
-  return apiRequest<SavedFilter>('/saved-filters', { method: 'POST', auth: true, body: { name, params } });
-}
 
-export function deleteSavedFilter(id: number): Promise<{ deleted: boolean }> {
-  return apiRequest<{ deleted: boolean }>(`/saved-filters/${id}`, { method: 'DELETE', auth: true });
-}
-
-export function bulkRequests(payload: {
-  ids: number[];
-  action: 'assign' | 'transition';
-  manager_id?: number;
-  to_status?: string;
-  comment?: string;
-}): Promise<{ updated: number; failed: number; errors: { id: number; message: string }[] }> {
-  return apiRequest<{ updated: number; failed: number; errors: { id: number; message: string }[] }>(
-    '/requests/bulk',
-    { method: 'POST', auth: true, body: payload }
-  );
-}

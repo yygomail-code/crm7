@@ -11,10 +11,13 @@
 
 <style>
   .page {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: var(--space-6);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
-    padding: var(--space-6);
     box-shadow: var(--shadow-sm);
+    text-align: center;
   }
 </style>

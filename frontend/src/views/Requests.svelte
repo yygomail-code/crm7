@@ -2,26 +2,43 @@
   import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
   import {
-    bulkRequests,
-    deleteSavedFilter,
-    listManagers,
     listRequests,
-    listSavedFilters,
     listStatuses,
-    requestFilters,
-    saveSavedFilter,
-    type SavedFilter
+    requestFilters
   } from '../lib/api/requests';
-  import type { ManagerItem, RequestItem, RequestStatus } from '../lib/api/types';
+  import { listDrafts, deleteDraft, type RequestDraftSummary } from '../lib/api/drafts';
+  import type { RequestItem, RequestStatus } from '../lib/api/types';
   import { auth } from '../lib/stores/auth.svelte';
+  import { appSettings } from '../lib/stores/app-settings.svelte';
   import { router } from '../lib/router.svelte';
   import { addHistory } from '../lib/search-history';
   import StatusBadge from '../lib/components/StatusBadge.svelte';
   import Button from '../lib/components/ui/Button.svelte';
+  import FiltersModal from '../lib/components/ui/FiltersModal.svelte';
+  import Modal from '../lib/components/ui/Modal.svelte';
   import Pagination from '../lib/components/ui/Pagination.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
+  import { clearFilters, countActive, loadFilters, saveFilters } from '../lib/filters';
   import { formatDateTime } from '../lib/format';
+  import { clampPeriod, defaultPeriod, todayIso } from '../lib/period';
+
+  const filterDefaults = {
+    status: '',
+    scope: '',
+    warehouse: 0,
+    from: defaultPeriod().from,
+    to: defaultPeriod().to,
+    sort: 'created_desc'
+  };
+
+  const filterCountDefaults = {
+    status: filterDefaults.status,
+    scope: filterDefaults.scope,
+    warehouse: filterDefaults.warehouse,
+    from: filterDefaults.from,
+    to: filterDefaults.to
+  };
 
   let statuses = $state<RequestStatus[]>([]);
   let items = $state<RequestItem[]>([]);
@@ -29,26 +46,26 @@
   let page = $state(1);
   let loading = $state(true);
   let error = $state('');
-  let statusFilter = $state('');
+  const initialFilters = loadFilters('requests', filterDefaults);
+  let filters = $state({ ...initialFilters });
+  let draft = $state({ ...initialFilters });
   let search = $state('');
   let searchInput = $state('');
-  let warehouseFilter = $state(0);
-  let periodFrom = $state('');
-  let periodTo = $state('');
-  let sortFilter = $state('created_desc');
   let warehouses = $state<{ id: number; name: string }[]>([]);
   let sorts = $state<{ code: string; title: string }[]>([]);
 
-  let saved = $state<SavedFilter[]>([]);
-  let selected = $state<number[]>([]);
-  let managers = $state<ManagerItem[]>([]);
-  let bulkStatus = $state('');
-  let bulkManager = $state(0);
-  let bulkBusy = $state(false);
-  let bulkNotice = $state('');
+  let notice = $state('');
 
-  const canAssign = $derived(auth.can('requests.assign') || auth.can('clients.assign'));
-  const canBulk = $derived(auth.can('requests.transition') || canAssign);
+  let draftsOpen = $state(false);
+  let drafts = $state<RequestDraftSummary[]>([]);
+  let draftsLoading = $state(false);
+  let draftsError = $state('');
+  let draftBusy = $state(0);
+  let draftCount = $state(0);
+
+  const isStaff = $derived(auth.level >= 10);
+  const activeFilterCount = $derived(countActive(filters, filterCountDefaults));
+  const searchActive = $derived(search.trim() !== '');
 
   onMount(() => {
     void listStatuses()
@@ -69,157 +86,54 @@
         sorts = [];
       });
 
-    void listSavedFilters()
-      .then((data) => {
-        saved = data.items;
-      })
-      .catch(() => {
-        saved = [];
-      });
-
-    if (canAssign) {
-      void listManagers()
-        .then((data) => {
-          managers = data.items;
-        })
-        .catch(() => {
-          managers = [];
-        });
-    }
-
+    void refreshDraftCount();
     void load(true);
   });
 
-  function toggleSelect(id: number): void {
-    selected = selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id];
-  }
-
-  function clearSelection(): void {
-    selected = [];
-    bulkStatus = '';
-    bulkManager = 0;
+  async function refreshDraftCount(): Promise<void> {
+    try {
+      draftCount = (await listDrafts()).items.length;
+    } catch {
+      draftCount = 0;
+    }
   }
 
   function resetFilters(): void {
-    statusFilter = '';
-    warehouseFilter = 0;
-    periodFrom = '';
-    periodTo = '';
-    sortFilter = 'created_desc';
-    searchInput = '';
-    search = '';
+    const period = defaultPeriod();
+    const next = { ...filterDefaults, from: period.from, to: period.to };
+
+    draft = { ...next };
+    filters = { ...next };
+    clearFilters('requests');
     void load(true);
   }
 
-  async function applySavedFilter(filter: SavedFilter): Promise<void> {
-    statusFilter = filter.params.status ?? '';
-    warehouseFilter = filter.params.warehouse_id ?? 0;
-    periodFrom = filter.params.from ?? '';
-    periodTo = filter.params.to ?? '';
-    sortFilter = filter.params.sort ?? 'created_desc';
-    searchInput = filter.params.q ?? '';
-    search = searchInput;
-    await load(true);
+  function resetFiltersAndSearch(): void {
+    search = '';
+    searchInput = '';
+    resetFilters();
   }
 
-  async function storeFilter(): Promise<void> {
-    const name = prompt('Название фильтра:', '');
+  function applyFilterDraft(): void {
+    const period = clampPeriod(draft.from, draft.to);
 
-    if (name === null || name.trim() === '') {
-      return;
-    }
-
-    try {
-      const created = await saveSavedFilter(name.trim(), {
-        status: statusFilter,
-        q: search,
-        warehouse_id: warehouseFilter > 0 ? warehouseFilter : undefined,
-        from: periodFrom,
-        to: periodTo,
-        sort: sortFilter
-      });
-      saved = [created, ...saved];
-      bulkNotice = 'Фильтр сохранён';
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить фильтр';
-    }
+    draft.from = period.from;
+    draft.to = period.to;
+    filters = { ...draft };
+    saveFilters('requests', filters);
+    void load(true);
   }
 
-  async function removeSavedFilter(filter: SavedFilter): Promise<void> {
-    try {
-      await deleteSavedFilter(filter.id);
-      saved = saved.filter((item) => item.id !== filter.id);
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось удалить фильтр';
-    }
+  function changeSort(): void {
+    saveFilters('requests', filters);
+    void load(true);
   }
 
-  async function bulkTransition(): Promise<void> {
-    if (selected.length === 0 || bulkStatus === '') {
-      return;
-    }
-
-    const comment = prompt('Комментарий к смене статуса (обязателен):', '');
-
-    if (comment === null || comment.trim().length < 3) {
-      return;
-    }
-
-    bulkBusy = true;
-    error = '';
-    bulkNotice = '';
-
-    try {
-      const result = await bulkRequests({
-        ids: selected,
-        action: 'transition',
-        to_status: bulkStatus,
-        comment: comment.trim()
-      });
-
-      bulkNotice = `Обновлено: ${result.updated}${result.failed > 0 ? `, не удалось: ${result.failed}` : ''}`;
-      clearSelection();
-      await load(true);
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Массовое действие не выполнено';
-    } finally {
-      bulkBusy = false;
-    }
-  }
-
-  async function bulkAssign(): Promise<void> {
-    if (selected.length === 0 || bulkManager === 0) {
-      return;
-    }
-
-    bulkBusy = true;
-    error = '';
-    bulkNotice = '';
-
-    try {
-      const result = await bulkRequests({
-        ids: selected,
-        action: 'assign',
-        manager_id: bulkManager,
-        comment: 'Массовое назначение'
-      });
-
-      bulkNotice = `Назначено: ${result.updated}${result.failed > 0 ? `, не удалось: ${result.failed}` : ''}`;
-      clearSelection();
-      await load(true);
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Массовое назначение не выполнено';
-    } finally {
-      bulkBusy = false;
-    }
-  }
-
-  const perPage = 20;
+  let perPage = $state(20);
 
   async function load(reset: boolean): Promise<void> {
     if (reset) {
       page = 1;
-      selected = [];
     }
 
     loading = true;
@@ -227,12 +141,13 @@
 
     try {
       const data = await listRequests({
-        status: statusFilter,
+        status: filters.status,
+        manager_scope: filters.scope || undefined,
         q: search,
-        warehouse_id: warehouseFilter > 0 ? warehouseFilter : undefined,
-        from: periodFrom,
-        to: periodTo,
-        sort: sortFilter,
+        warehouse_id: filters.warehouse > 0 ? filters.warehouse : undefined,
+        from: filters.from,
+        to: filters.to,
+        sort: filters.sort,
         page,
         per_page: perPage
       });
@@ -256,150 +171,200 @@
     page = next;
     void load(false);
   }
+
+  function changePerPage(value: number): void {
+    perPage = value;
+    void load(true);
+  }
+
+  async function loadDrafts(): Promise<void> {
+    draftsLoading = true;
+    draftsError = '';
+
+    try {
+      drafts = (await listDrafts()).items;
+      draftCount = drafts.length;
+    } catch (cause) {
+      draftsError = cause instanceof ApiError ? cause.message : 'Не удалось загрузить черновики';
+    } finally {
+      draftsLoading = false;
+    }
+  }
+
+  async function openDrafts(): Promise<void> {
+    draftsOpen = true;
+
+    await loadDrafts();
+  }
+
+  function openDraft(id: number): void {
+    draftsOpen = false;
+    router.navigate(`/requests/new?draft=${id}`);
+  }
+
+  async function removeDraft(id: number): Promise<void> {
+    if (!confirm('Удалить черновик?')) {
+      return;
+    }
+
+    draftBusy = id;
+    draftsError = '';
+
+    try {
+      await deleteDraft(id);
+      await loadDrafts();
+    } catch (cause) {      draftsError = cause instanceof ApiError ? cause.message : 'Не удалось удалить черновик';
+    } finally {
+      draftBusy = 0;
+    }
+  }
 </script>
 
 <section class="page page-wide">
   <div class="head">
     <h1>Заявки</h1>
     <div class="head-actions">
-      <Button onclick={() => router.navigate('/requests/new')}>Новая заявка</Button>
+      <span class="drafts-wrap" class:has-drafts={draftCount > 0}>
+        <Button variant="ghost" onclick={() => void openDrafts()}>Черновики заявок</Button>
+      </span>
+      <Button
+        disabled={!appSettings.salesEnabled}
+        onclick={() => router.navigate('/requests/new')}
+      >
+        Новая заявка
+      </Button>
     </div>
   </div>
 
-  <div class="filters">
-    <select bind:value={statusFilter} onchange={() => void load(true)}>
-      <option value="">Все статусы</option>
-      {#each statuses as status}
-        <option value={status.code}>{status.title}</option>
-      {/each}
-    </select>
+  {#if !appSettings.salesEnabled}
+    <div class="notice sales-off">
+      Продажи отключены: оформление новых заявок и черновиков недоступно, остатки складов доступны
+      для просмотра.
+    </div>
+  {/if}
 
-    {#if warehouses.length > 0}
-      <select bind:value={warehouseFilter} onchange={() => void load(true)}>
-        <option value={0}>Все склады</option>
-        {#each warehouses as warehouse (warehouse.id)}
-          <option value={warehouse.id}>{warehouse.name}</option>
-        {/each}
-      </select>
-    {/if}
-
-    <label class="period">
-      <span>с</span>
-      <input type="date" bind:value={periodFrom} onchange={() => void load(true)} />
-    </label>
-    <label class="period">
-      <span>по</span>
-      <input type="date" bind:value={periodTo} onchange={() => void load(true)} />
-    </label>
-
-    <select bind:value={sortFilter} onchange={() => void load(true)}>
-      {#each sorts as sort (sort.code)}
-        <option value={sort.code}>{sort.title}</option>
-      {/each}
-    </select>
-
+  <div class="search-row">
     <form class="search" onsubmit={(event) => { event.preventDefault(); applyFilters(); }}>
       <SearchInput
         bind:value={searchInput}
         historyKey="requests"
-        placeholder="Поиск: номер, тема, текст"
+        placeholder="Поиск: тема, клиент, номер, телефон, описание"
         onclear={applyFilters}
         onpick={applyFilters}
       />
       <Button type="submit" variant="ghost">Найти</Button>
     </form>
 
-    <Button variant="ghost" onclick={resetFilters}>Сбросить</Button>
-  </div>
-
-  <div class="saved">
-    {#each saved as filter (filter.id)}
-      <span class="chip">
-        <button type="button" class="chip-apply" onclick={() => void applySavedFilter(filter)}>
-          {filter.name}
-        </button>
-        <button
-          type="button"
-          class="chip-remove"
-          aria-label="Удалить фильтр"
-          onclick={() => void removeSavedFilter(filter)}
-        >
-          ×
-        </button>
-      </span>
-    {/each}
-    <Button variant="ghost" onclick={() => void storeFilter()}>Сохранить фильтр</Button>
-  </div>
-
-  {#if canBulk && selected.length > 0}
-    <div class="bulk">
-      <span class="bulk-count">Выбрано: {selected.length}</span>
-
-      <select bind:value={bulkStatus}>
-        <option value="">Статус…</option>
-        {#each statuses as status}
-          <option value={status.code}>{status.title}</option>
-        {/each}
-      </select>
-      <Button variant="ghost" loading={bulkBusy} disabled={bulkStatus === ''} onclick={() => void bulkTransition()}>
-        Сменить статус
-      </Button>
-
-      {#if canAssign}
-        <select bind:value={bulkManager}>
-          <option value={0}>Менеджер…</option>
-          {#each managers as manager (manager.id)}
-            <option value={manager.id}>{manager.name}</option>
+    <FiltersModal
+      count={countActive(filters, filterCountDefaults)}
+      onopen={() => (draft = { ...filters })}
+      onapply={applyFilterDraft}
+      onreset={resetFilters}
+    >
+      <label class="filter-field">
+        <span>Статус</span>
+        <select bind:value={draft.status}>
+          <option value="">Все статусы</option>
+          {#each statuses as status}
+            <option value={status.code}>{status.title}</option>
           {/each}
         </select>
-        <Button variant="ghost" loading={bulkBusy} disabled={bulkManager === 0} onclick={() => void bulkAssign()}>
-          Назначить
-        </Button>
+      </label>
+
+      {#if isStaff}
+        <label class="filter-field">
+          <span>Менеджер</span>
+          <select bind:value={draft.scope}>
+            <option value="">Все заявки</option>
+            <option value="none">Без менеджера</option>
+            <option value="mine">В работе у меня</option>
+            <option value="others">В работе у других менеджеров</option>
+          </select>
+        </label>
       {/if}
 
-      <Button variant="ghost" onclick={clearSelection}>Снять выбор</Button>
-    </div>
-  {/if}
+      {#if warehouses.length > 0}
+        <label class="filter-field">
+          <span>Склад</span>
+          <select bind:value={draft.warehouse}>
+            <option value={0}>Все склады</option>
+            {#each warehouses as warehouse (`${warehouse.id}|${warehouse.name}`)}
+              <option value={warehouse.id}>{warehouse.name}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
+      <label class="filter-field">
+        <span>Период с</span>
+        <input type="date" bind:value={draft.from} max={draft.to} />
+      </label>
+      <label class="filter-field">
+        <span>Период по</span>
+        <input type="date" bind:value={draft.to} min={draft.from} max={todayIso()} />
+      </label>
+    </FiltersModal>
+
+    <label class="sort-field">
+      <span>Сортировка</span>
+      <select bind:value={filters.sort} onchange={changeSort}>
+        {#each sorts as sort (sort.code)}
+          <option value={sort.code}>{sort.title}</option>
+        {/each}
+      </select>
+    </label>
+  </div>
 
   {#if error}
     <div class="alert">{error}</div>
   {/if}
-  {#if bulkNotice}
-    <div class="notice">{bulkNotice}</div>
+  {#if notice}
+    <div class="notice">{notice}</div>
   {/if}
 
   {#if loading && items.length === 0}
     <div class="center"><Spinner size={26} /></div>
   {:else if items.length === 0}
-    <div class="empty">Заявок пока нет</div>
+    {#if activeFilterCount > 0}
+      <div class="empty">
+        <p class="empty-title">Заявки не найдены</p>
+        <p class="empty-hint">
+          Включены фильтры — часть заявок может быть скрыта. Отключите фильтры, чтобы не пропустить их.
+        </p>
+        <Button variant="ghost" onclick={resetFiltersAndSearch}>Сбросить фильтры</Button>
+      </div>
+    {:else if searchActive}
+      <div class="empty">
+        <p class="empty-title">Заявки не найдены</p>
+        <p class="empty-hint">Уточните запрос или очистите поиск.</p>
+        <Button variant="ghost" onclick={resetFiltersAndSearch}>Очистить поиск</Button>
+      </div>
+    {:else}
+      <div class="empty">Заявок пока нет</div>
+    {/if}
   {:else}
     <div class="list">
       {#each items as item (item.id)}
-        <div class="row" class:picked={selected.includes(item.id)}>
-          {#if canBulk}
-            <div class="pick">
-              <input
-                type="checkbox"
-                aria-label={`Выбрать заявку ${item.number}`}
-                checked={selected.includes(item.id)}
-                onchange={() => toggleSelect(item.id)}
-              />
-            </div>
-          {/if}
+        <div class="row">
           <a class="card" href={`#/requests/${item.id}`}>
             <div class="card-head">
               <span class="number">{item.number}</span>
               <StatusBadge title={item.status.title} color={item.status.color} />
+              <span class="date">{formatDateTime(item.created_at)}</span>
             </div>
             <div class="subject">{item.subject}</div>
             <div class="meta">
-              <span>{item.client.name}</span>
+              {#if isStaff}
+                <span>{item.client.name}</span>
+              {/if}
               {#if item.manager}
                 <span>менеджер: {item.manager.name}</span>
               {:else}
-                <span class="search">поиск менеджера</span>
+                <span class="search-badge">поиск менеджера</span>
               {/if}
-              <span>{formatDateTime(item.created_at)}</span>
+              {#if item.items_count > 0}
+                <span>позиций: {item.items_count}</span>
+              {/if}
             </div>
             {#if item.is_overdue}
               <div class="overdue">Просрочена</div>
@@ -409,11 +374,154 @@
       {/each}
     </div>
 
-    <Pagination page={page} perPage={perPage} total={total} loading={loading} onchange={goToPage} />
+    <Pagination
+      page={page}
+      perPage={perPage}
+      total={total}
+      loading={loading}
+      perPageOptions={[20, 50, 100]}
+      onchange={goToPage}
+      onperpage={changePerPage}
+    />
   {/if}
+
+  <Modal open={draftsOpen} title="Черновики заявок" onclose={() => (draftsOpen = false)}>
+    {#if draftsLoading}
+      <div class="center"><Spinner size={22} /></div>
+    {:else if drafts.length === 0}
+      <p class="muted">Черновиков нет</p>
+    {:else}
+      <div class="draft-list">
+        {#each drafts as draft (draft.id)}
+          <div class="draft-row">
+            <button
+              type="button"
+              class="draft-main"
+              title="Открыть черновик"
+              onclick={() => openDraft(draft.id)}
+            >
+              <span class="draft-name">{draft.subject || 'Без темы'}</span>
+              <span class="draft-meta">
+                позиций: {draft.items_count} · обновлён {formatDateTime(draft.updated_at)}
+              </span>
+            </button>
+            <button
+              type="button"
+              class="draft-del"
+              aria-label={`Удалить черновик: ${draft.subject || 'Без темы'}`}
+              disabled={draftBusy === draft.id}
+              onclick={() => void removeDraft(draft.id)}
+            >
+              ✕
+            </button>
+          </div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if draftsError}
+      <div class="alert">{draftsError}</div>
+    {/if}
+
+    <div class="modal-actions">
+      <div class="modal-buttons">
+        <Button variant="ghost" onclick={() => (draftsOpen = false)}>Закрыть</Button>
+      </div>
+    </div>
+  </Modal>
 </section>
 
 <style>
+  .muted {
+    margin: 0;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .draft-list {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: var(--space-3);
+  }
+
+  .draft-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .draft-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .draft-main:hover .draft-name {
+    color: var(--primary);
+  }
+
+  .draft-name {
+    font-size: 14px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .draft-meta {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .draft-del {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .draft-del:hover:not(:disabled) {
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  .draft-del:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .modal-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+
+  .modal-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+
   .page {
     display: flex;
     flex-direction: column;
@@ -425,6 +533,22 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  @media (max-width: 720px) {
+    .head {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .head-actions {
+      width: 100%;
+    }
+
+    .head-actions :global(button) {
+      flex: 1;
+    }
   }
 
   h1 {
@@ -436,31 +560,23 @@
     display: flex;
     gap: var(--space-2);
     flex-wrap: wrap;
-  }
-
-  .filters {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3);
     align-items: center;
   }
 
-  .period {
+  .drafts-wrap {
     display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--muted);
   }
 
-  .period input {
-    padding: 8px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    font: inherit;
-    font-size: 13px;
+  .drafts-wrap.has-drafts :global(button) {
+    border-color: var(--primary);
+    color: var(--primary);
+    box-shadow: inset 0 0 0 1px var(--primary);
   }
+
+  .sales-off {
+    margin-bottom: var(--space-3);
+  }
+
 
   select {
     padding: 9px 12px;
@@ -469,87 +585,43 @@
     background: var(--surface);
   }
 
+  .search-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    align-items: center;
+  }
+
   .search {
     display: flex;
-    gap: var(--space-2);
-    flex: 1;
-    min-width: 220px;
-  }
-
-  .saved {
-    display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-    align-items: center;
+    flex: 1 1 260px;
+    min-width: 0;
   }
 
-  .chip {
+  .sort-field {
     display: inline-flex;
     align-items: center;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface);
-    overflow: hidden;
-  }
-
-  .chip-apply {
-    border: none;
-    background: none;
-    padding: 6px 4px 6px 12px;
-    font: inherit;
-    font-size: 13px;
-    color: var(--muted);
-    cursor: pointer;
-  }
-
-  .chip-apply:hover {
-    color: var(--primary);
-  }
-
-  .chip-remove {
-    border: none;
-    background: none;
-    padding: 6px 10px 6px 4px;
-    font-size: 14px;
-    line-height: 1;
-    color: var(--muted);
-    cursor: pointer;
-  }
-
-  .chip-remove:hover {
-    color: var(--danger);
-  }
-
-  .bulk {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
     gap: var(--space-2);
-    padding: var(--space-3);
-    background: color-mix(in srgb, var(--primary) 6%, white);
-    border: 1px solid color-mix(in srgb, var(--primary) 30%, var(--border));
-    border-radius: var(--radius-md);
+    margin-left: var(--space-2);
+    padding-left: var(--space-4);
+    border-left: 1px solid var(--border);
+    font-size: 14px;
+    color: var(--muted);
+    white-space: nowrap;
   }
 
-  .bulk-count {
-    font-size: 13px;
-    font-weight: 500;
+  @media (max-width: 720px) {
+    .search {
+      flex: 1 1 100%;
+    }
   }
 
   .row {
     display: flex;
     align-items: stretch;
     gap: var(--space-2);
-  }
-
-  .row.picked .card {
-    border-color: var(--primary);
-  }
-
-  .pick {
-    display: flex;
-    align-items: center;
-    padding: 0 var(--space-1, 4px);
   }
 
   .notice {
@@ -563,7 +635,7 @@
   .list {
     display: flex;
     flex-direction: column;
-    gap: var(--space-3);
+    gap: var(--space-2);
   }
 
   .card {
@@ -572,7 +644,7 @@
     gap: var(--space-2);
     flex: 1;
     min-width: 0;
-    padding: var(--space-4);
+    padding: var(--space-3) var(--space-4);
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
@@ -583,13 +655,19 @@
 
   .card:hover {
     border-color: var(--primary);
+    background: var(--bg);
   }
 
   .card-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: var(--space-2);
+  }
+
+  .date {
+    margin-left: auto;
+    font-size: 13px;
+    color: var(--muted);
   }
 
   .number {
@@ -599,14 +677,14 @@
   }
 
   .subject {
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 500;
   }
 
   .meta {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-3);
+    gap: var(--space-2) var(--space-3);
     font-size: 13px;
     color: var(--muted);
   }
@@ -620,7 +698,7 @@
     padding: 2px 10px;
   }
 
-  .search {
+  .search-badge {
     color: #b45309;
     font-weight: 500;
   }
@@ -640,6 +718,18 @@
     background: var(--surface);
     border: 1px dashed var(--border);
     border-radius: var(--radius-md);
+  }
+
+  .empty-title {
+    margin: 0;
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .empty-hint {
+    margin: var(--space-2) 0 var(--space-4);
+    max-width: 44ch;
+    margin-inline: auto;
   }
 
   .center {

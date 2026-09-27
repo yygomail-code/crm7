@@ -1,44 +1,58 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
-  import { activateClient, pendingClients, rejectClient } from '../lib/api/clients';
-  import { assignClient, listClients, listManagers } from '../lib/api/requests';
-  import type { ClientItem, ManagerItem, PendingClient } from '../lib/api/types';
+  import { pendingClients } from '../lib/api/clients';
+  import { listClients } from '../lib/api/requests';
+  import type { ClientItem, PendingClient } from '../lib/api/types';
   import { auth } from '../lib/stores/auth.svelte';
   import Button from '../lib/components/ui/Button.svelte';
+  import FiltersModal from '../lib/components/ui/FiltersModal.svelte';
   import Pagination from '../lib/components/ui/Pagination.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
+  import { clearFilters, countActive, loadFilters, saveFilters } from '../lib/filters';
   import { addHistory } from '../lib/search-history';
+
+  const filterDefaults = {
+    state: '',
+    manager: '',
+    from: '',
+    to: '',
+    sort: 'name_asc'
+  };
+
+  const filterCountDefaults = {
+    state: filterDefaults.state,
+    manager: filterDefaults.manager,
+    from: filterDefaults.from,
+    to: filterDefaults.to
+  };
 
   let clients = $state<ClientItem[]>([]);
   let total = $state(0);
   let page = $state(1);
-  const perPage = 20;
-  let managers = $state<ManagerItem[]>([]);
+  let perPage = $state(20);
   let pending = $state<PendingClient[]>([]);
-  let selected = $state<Record<number, number>>({});
   let loading = $state(true);
   let error = $state('');
-  let message = $state('');
-  let busyId = $state(0);
   let search = $state('');
   let searchInput = $state('');
+  const initialFilters = loadFilters('clients', filterDefaults);
+  let filters = $state({ ...initialFilters });
+  let draft = $state({ ...initialFilters });
 
-  const canAssign = $derived(auth.can('clients.assign'));
   const canConfirm = $derived(auth.can('clients.confirm'));
 
-  onMount(() => {
-    if (canAssign) {
-      void listManagers()
-        .then((data) => {
-          managers = data.items;
-        })
-        .catch(() => {
-          managers = [];
-        });
-    }
+  const sortOptions = [
+    { code: 'name_asc', title: 'По имени (А → Я)' },
+    { code: 'name_desc', title: 'По имени (Я → А)' },
+    { code: 'created_desc', title: 'Сначала новые' },
+    { code: 'created_asc', title: 'Сначала старые' },
+    { code: 'requests_desc', title: 'Больше заявок' },
+    { code: 'requests_asc', title: 'Меньше заявок' }
+  ];
 
+  onMount(() => {
     void load();
   });
 
@@ -47,10 +61,15 @@
     error = '';
 
     try {
-      const data = await listClients(search, page, perPage);
+      const data = await listClients(search, page, perPage, {
+        state: filters.state || undefined,
+        manager: filters.manager || undefined,
+        from: filters.from || undefined,
+        to: filters.to || undefined,
+        sort: filters.sort
+      });
       clients = data.items;
       total = data.total;
-      selected = {};
 
       if (canConfirm) {
         pending = (await pendingClients()).items;
@@ -67,6 +86,12 @@
     void load();
   }
 
+  function changePerPage(value: number): void {
+    perPage = value;
+    page = 1;
+    void load();
+  }
+
   function applySearch(): void {
     page = 1;
     void load();
@@ -78,82 +103,40 @@
     applySearch();
   }
 
-  async function approve(item: PendingClient): Promise<void> {
-    busyId = item.id;
-    error = '';
-    message = '';
-
-    try {
-      await activateClient(item.id, '');
-      message = `${item.name}: регистрация подтверждена`;
-      await load();
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось подтвердить регистрацию';
-    } finally {
-      busyId = 0;
-    }
+  function resetSearch(): void {
+    searchInput = '';
+    search = '';
+    applySearch();
   }
 
-  async function decline(item: PendingClient): Promise<void> {
-    const reason = prompt('Причина отказа (уйдёт клиенту в письме):', '');
-
-    if (reason === null) {
-      return;
-    }
-
-    if (reason.trim() === '') {
-      error = 'Укажите причину отказа';
-      return;
-    }
-
-    busyId = item.id;
-    error = '';
-    message = '';
-
-    try {
-      await rejectClient(item.id, reason.trim());
-      message = `${item.name}: регистрация отклонена`;
-      await load();
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось отклонить регистрацию';
-    } finally {
-      busyId = 0;
-    }
+  function applyFilterDraft(): void {
+    filters = { ...draft };
+    saveFilters('clients', filters);
+    page = 1;
+    void load();
   }
 
-  async function assign(client: ClientItem): Promise<void> {
-    const managerId = selected[client.id];
+  function resetFilters(): void {
+    draft = { ...filterDefaults };
+    filters = { ...filterDefaults };
+    clearFilters('clients');
+    page = 1;
+    void load();
+  }
 
-    if (!managerId) return;
-
-    busyId = client.id;
-    error = '';
-
-    try {
-      const result = await assignClient(client.id, managerId);
-      clients = clients.map((item) =>
-        item.id === client.id
-          ? {
-              ...item,
-              manager: {
-                manager_id: result.manager.id,
-                manager_name: result.manager.name,
-                is_primary: true
-              }
-            }
-          : item
-      );
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось назначить менеджера';
-    } finally {
-      busyId = 0;
-    }
+  function changeSort(): void {
+    saveFilters('clients', filters);
+    page = 1;
+    void load();
   }
 </script>
 
 <section class="page">
   <div class="head">
     <h1>Клиенты</h1>
+  </div>
+
+  <div class="search-row">
     <form class="search" onsubmit={(event) => { event.preventDefault(); submitSearch(); }}>
       <SearchInput
         bind:value={searchInput}
@@ -167,24 +150,71 @@
       />
       <Button type="submit" variant="ghost">Найти</Button>
     </form>
+
+    <FiltersModal
+      count={countActive(filters, filterCountDefaults)}
+      onopen={() => (draft = { ...filters })}
+      onapply={applyFilterDraft}
+      onreset={resetFilters}
+    >
+      <label class="filter-field">
+        <span>Состояние</span>
+        <select bind:value={draft.state}>
+          <option value="">Все состояния</option>
+          <option value="active">Активные</option>
+          <option value="pending">Ожидают подтверждения</option>
+          <option value="blocked">Заблокированные</option>
+        </select>
+      </label>
+
+      <label class="filter-field">
+        <span>Менеджер</span>
+        <select bind:value={draft.manager}>
+          <option value="">Все менеджеры</option>
+          <option value="mine">Мои клиенты</option>
+          <option value="none">Без менеджера</option>
+        </select>
+      </label>
+
+      <label class="filter-field">
+        <span>Регистрация с</span>
+        <input type="date" bind:value={draft.from} max={draft.to} />
+      </label>
+      <label class="filter-field">
+        <span>Регистрация по</span>
+        <input type="date" bind:value={draft.to} min={draft.from} />
+      </label>
+    </FiltersModal>
+
+    <label class="sort-field">
+      <span>Сортировка</span>
+      <select bind:value={filters.sort} onchange={changeSort}>
+        {#each sortOptions as option (option.code)}
+          <option value={option.code}>{option.title}</option>
+        {/each}
+      </select>
+    </label>
+  </div>
+
+  <div class="legend">
+    <span class="legend-item"><span class="dot pending"></span>ожидает подтверждения регистрации</span>
+    <span class="legend-item"><span class="dot blocked"></span>заблокирован</span>
+    <span class="legend-item"><span class="dot transfer"></span>передают вам</span>
   </div>
 
   {#if error}
     <div class="alert">{error}</div>
   {/if}
 
-  {#if message}
-    <div class="notice">{message}</div>
-  {/if}
-
   {#if canConfirm && pending.length > 0}
     <div class="pending">
       <h2>Ожидают подтверждения <span class="count">{pending.length}</span></h2>
+      <p class="hint">Откройте карточку клиента — подтверждение и отклонение там</p>
       <div class="list">
         {#each pending as item (item.id)}
           <div class="card pending-card">
             <div class="info">
-              <div class="name">{item.name}</div>
+              <a class="name link" href={`#/clients/${item.id}`}>{item.name}</a>
               <div class="meta">
                 {#if item.company}<span>{item.company}</span>{/if}
                 {#if item.inn}<span>ИНН {item.inn}</span>{/if}
@@ -193,14 +223,7 @@
               </div>
               <div class="manager">Зарегистрировался: {item.registered_at}</div>
             </div>
-            <div class="assign">
-              <Button loading={busyId === item.id} onclick={() => void approve(item)}>
-                Подтвердить
-              </Button>
-              <Button variant="ghost" loading={busyId === item.id} onclick={() => void decline(item)}>
-                Отклонить
-              </Button>
-            </div>
+            <span class="state">ожидает подтверждения</span>
           </div>
         {/each}
       </div>
@@ -214,9 +237,20 @@
   {:else}
     <div class="list">
       {#each clients as client (client.id)}
-        <div class="card">
+        <div class="card" class:pending={client.reg_state === 'pending'} class:blocked={!client.active}>
           <div class="info">
-            <a class="name link" href={`#/clients/${client.id}`}>{client.name}</a>
+            <div class="name-row">
+              <a class="name link" href={`#/clients/${client.id}`}>{client.name}</a>
+              {#if client.reg_state === 'pending'}
+                <span class="state">ожидает подтверждения</span>
+              {/if}
+              {#if !client.active}
+                <span class="state blocked-chip">заблокирован</span>
+              {/if}
+              {#if client.transfer_to_me}
+                <span class="state transfer-chip">→ вам передают</span>
+              {/if}
+            </div>
             <div class="meta">
               {#if client.company}<span>{client.company}</span>{/if}
               {#if client.inn}<span>ИНН {client.inn}</span>{/if}
@@ -224,33 +258,28 @@
               {#if client.email}<span>{client.email}</span>{/if}
             </div>
             <div class="manager">
-              Менеджер: {client.manager?.manager_name ?? 'не назначен'}
+              {#if client.manager}
+                менеджер: {client.manager.name}
+              {:else}
+                без менеджера
+              {/if}
+              · заявок: {client.requests_total}
+              {#if client.registered_at}· зарегистрирован: {client.registered_at.slice(0, 10)}{/if}
             </div>
           </div>
-
-          {#if canAssign}
-            <div class="assign">
-              <select bind:value={selected[client.id]}>
-                <option value={undefined}>Выберите менеджера</option>
-                {#each managers as manager}
-                  <option value={manager.id}>{manager.name}</option>
-                {/each}
-              </select>
-              <Button
-                variant="ghost"
-                loading={busyId === client.id}
-                disabled={!selected[client.id]}
-                onclick={() => void assign(client)}
-              >
-                Назначить
-              </Button>
-            </div>
-          {/if}
         </div>
       {/each}
     </div>
 
-    <Pagination page={page} perPage={perPage} total={total} loading={loading} onchange={goToPage} />
+    <Pagination
+    page={page}
+    perPage={perPage}
+    total={total}
+    loading={loading}
+    perPageOptions={[20, 50, 100]}
+    onchange={goToPage}
+    onperpage={changePerPage}
+  />
   {/if}
 </section>
 
@@ -291,16 +320,83 @@
     text-align: center;
   }
 
-  .pending-card {
+  .pending-card,
+  .card.pending {
     border-color: color-mix(in srgb, var(--primary) 35%, var(--border));
+    background: color-mix(in srgb, var(--primary) 6%, var(--surface));
   }
 
-  .notice {
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: #e7f5ec;
-    color: #1e6b3a;
+  .card.blocked {
+    border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+    background: color-mix(in srgb, var(--danger) 6%, var(--surface));
+  }
+
+  .name-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .state.blocked-chip {
+    border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+    color: var(--danger);
+  }
+
+  .state.transfer-chip {
+    border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+    color: var(--primary);
+  }
+
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+  }
+
+  .dot.pending {
+    background: color-mix(in srgb, var(--primary) 35%, #fff);
+    border-color: var(--primary);
+  }
+
+  .dot.blocked {
+    background: color-mix(in srgb, var(--danger) 30%, #fff);
+    border-color: var(--danger);
+  }
+
+  .dot.transfer {
+    background: color-mix(in srgb, var(--primary) 55%, #fff);
+    border-color: var(--primary);
+  }
+
+  .hint {
+    margin: 0;
+    color: var(--muted);
     font-size: 13px;
+  }
+
+  .state {
+    font-size: 12px;
+    padding: 3px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    white-space: nowrap;
   }
 
   .link {
@@ -313,12 +409,48 @@
     border-bottom-color: var(--primary);
   }
 
+  .search-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
   .search {
     display: flex;
+    flex-wrap: wrap;
     gap: var(--space-2);
-    flex: 1;
-    min-width: 220px;
-    max-width: 420px;
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .sort-field {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: var(--space-2);
+    padding-left: var(--space-4);
+    border-left: 1px solid var(--border);
+    font-size: 14px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .sort-field select {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    color: var(--text);
+  }
+
+  @media (max-width: 720px) {
+    .search {
+      flex: 1 1 100%;
+      max-width: none;
+    }
   }
 
   .list {
@@ -338,6 +470,12 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm);
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+
+  .card:hover {
+    background: var(--bg);
+    border-color: var(--primary);
   }
 
   .info {
@@ -362,19 +500,6 @@
   .manager {
     font-size: 13px;
     color: var(--muted);
-  }
-
-  .assign {
-    display: flex;
-    gap: var(--space-2);
-    align-items: center;
-  }
-
-  select {
-    padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
   }
 
   .alert {

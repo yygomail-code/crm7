@@ -49,19 +49,22 @@ final class TokenRepository
         $stmt->execute([$id]);
     }
 
-    public function revokeAllForUser(int $userId, ?int $exceptId = null): void
+    public function revokeAllForUser(int $userId, ?int $exceptId = null): int
     {
         if ($exceptId !== null) {
             $stmt = Database::pdo()->prepare(
                 'UPDATE user_tokens SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL AND ID != ?'
             );
             $stmt->execute([$userId, $exceptId]);
-            return;
+
+            return $stmt->rowCount();
         }
 
         $stmt = Database::pdo()->prepare(
             'UPDATE user_tokens SET revoked_at = NOW() WHERE user_id = ? AND revoked_at IS NULL'
         );
         $stmt->execute([$userId]);
+
+        return $stmt->rowCount();
     }
 }
