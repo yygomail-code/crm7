@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { formatMinutes, formatRelative, formatSize, priorityLabel } from './format';
+import {
+  formatMinutes,
+  formatPrice,
+  formatRelative,
+  formatSize,
+  priorityLabel,
+  stockQuantityText
+} from './format';
 
 describe('formatMinutes', () => {
   it('returns dash for null', () => {
@@ -26,6 +33,30 @@ describe('priorityLabel', () => {
     expect(priorityLabel(3)).toBe('Высокий');
     expect(priorityLabel(2)).toBe('Обычный');
     expect(priorityLabel(1)).toBe('Низкий');
+  });
+});
+
+describe('formatPrice', () => {
+  it('handles empty values', () => {
+    expect(formatPrice(null)).toBe('—');
+    expect(formatPrice(undefined)).toBe('—');
+  });
+
+  it('formats rubles with two decimals', () => {
+    expect(formatPrice(1500).replace(/\s/g, ' ')).toBe('1 500,00 ₽');
+    expect(formatPrice(99.5).replace(/\s/g, ' ')).toBe('99,50 ₽');
+  });
+});
+
+describe('stockQuantityText', () => {
+  it('formats positive quantity with unit', () => {
+    expect(stockQuantityText(12, 'шт').replace(/\s/g, ' ')).toBe('12 шт');
+    expect(stockQuantityText(0, 'шт')).toBe('0 шт');
+  });
+
+  it('replaces negative quantity with the on-order text', () => {
+    expect(stockQuantityText(-3, 'шт')).toBe('поз заказ');
+    expect(stockQuantityText(-0.5)).toBe('поз заказ');
   });
 });
 

@@ -110,3 +110,23 @@ export function priorityLabel(priority: number): string {
   if (priority === 1) return 'Низкий';
   return 'Обычный';
 }
+
+export function formatPrice(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return '—';
+  }
+
+  return `${value.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₽`;
+}
+
+export const STOCK_ON_ORDER_TEXT = 'поз заказ';
+
+export function stockQuantityText(quantity: number, unit = ''): string {
+  if (quantity < 0) {
+    return STOCK_ON_ORDER_TEXT;
+  }
+
+  const value = quantity.toLocaleString('ru-RU', { maximumFractionDigits: 3 });
+
+  return unit ? `${value} ${unit}` : value;
+}

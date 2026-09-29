@@ -66,5 +66,9 @@
     <circle cx="9" cy="7" r="2" />
     <circle cx="15" cy="12" r="2" />
     <circle cx="8" cy="17" r="2" />
+  {:else if name === 'cart'}
+    <path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 7H6" />
+    <circle cx="10" cy="20" r="1" />
+    <circle cx="18" cy="20" r="1" />
   {/if}
 </svg>

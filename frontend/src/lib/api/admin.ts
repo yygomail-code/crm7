@@ -78,6 +78,8 @@ export function saveSystemSettings(payload: {
   email_export_enabled: boolean;
   stock_reserve_enabled: boolean;
   stock_allow_zero: boolean;
+  prices_enabled: boolean;
+  groups_enabled: boolean;
 }): Promise<SystemSettings> {
   return apiRequest<SystemSettings>('/admin/settings/system', {
     method: 'POST',
@@ -145,6 +147,7 @@ export interface AdminUserPayload {
   position?: string;
   level: number;
   password?: string;
+  price_type_id?: number | null;
 }
 
 export function createUser(payload: AdminUserPayload): Promise<{ id: number; login: string; password: string | null }> {

@@ -14,7 +14,9 @@
     updateStockItem,
     type StockFilters
   } from '../lib/api/stocks';
-  import type { StockImportJob, StockLevel, StockUpdate, StockWarehouse } from '../lib/api/types';
+  import type { StockImportJob, StockLevel, StockUpdate, StockWarehouse, PriceType, ItemGroup } from '../lib/api/types';
+  import { listPriceTypes } from '../lib/api/prices';
+  import { listItemGroups } from '../lib/api/groups';
   import Button from '../lib/components/ui/Button.svelte';
   import ExportModal from '../lib/components/ui/ExportModal.svelte';
   import Icon from '../lib/components/ui/Icon.svelte';
@@ -27,7 +29,7 @@
   import { appSettings } from '../lib/stores/app-settings.svelte';
   import { addHistory } from '../lib/search-history';
   import { loadFilters, saveFilters } from '../lib/filters';
-  import { formatDate, formatDateTime } from '../lib/format';
+  import { formatDate, formatDateTime, formatPrice, stockQuantityText } from '../lib/format';
 
   let warehouses = $state<StockWarehouse[]>([]);
   let levels = $state<StockLevel[]>([]);
@@ -134,24 +136,61 @@
   let itemBusy = $state(false);
   let itemError = $state('');
   let itemTarget = $state<StockLevel | null>(null);
-  let itemForm = $state({ name: '', unit: '', quantity: '0', description: '' });
+  let itemForm = $state({ name: '', unit: '', quantity: '0', description: '', group_id: 0 });
+  let itemPrices = $state<Record<string, string>>({});
+  let priceTypes = $state<PriceType[]>([]);
+  let groups = $state<ItemGroup[]>([]);
 
   let renameOpen = $state(false);
   let renameBusy = $state(false);
   let renameError = $state('');
   let renameName = $state('');
 
-  const stockFilterDefaults = { sort: 'name_asc' };
+  const stockFilterDefaults = { sort: 'name_asc', group_id: 0 };
   const initialStockFilters = loadFilters('stocks', stockFilterDefaults);
   let stockSort = $state(initialStockFilters.sort);
+  let stockGroup = $state(Number(initialStockFilters.group_id) || 0);
 
   const canCreate = $derived(auth.can('requests.create'));
   const pages = $derived(Math.max(1, Math.ceil(total / perPage)));
+  const pricesEnabled = $derived(appSettings.pricesEnabled);
+  const groupsEnabled = $derived(appSettings.groupsEnabled);
+
+  $effect(() => {
+    if (pricesEnabled && canEdit && priceTypes.length === 0) {
+      void loadPriceTypes();
+    }
+  });
+
+  $effect(() => {
+    if (groupsEnabled && groups.length === 0) {
+      void loadGroups();
+    }
+  });
+
+  async function loadPriceTypes(): Promise<void> {
+    try {
+      const data = await listPriceTypes();
+      priceTypes = data.items;
+    } catch {
+      priceTypes = [];
+    }
+  }
+
+  async function loadGroups(): Promise<void> {
+    try {
+      const data = await listItemGroups();
+      groups = data.items;
+    } catch {
+      groups = [];
+    }
+  }
 
   const filters = $derived<StockFilters>({
     q: query,
     sort: stockSort,
-    show_zero: appSettings.allowZeroStock
+    show_zero: appSettings.allowZeroStock,
+    group_id: groupsEnabled && stockGroup > 0 ? stockGroup : undefined
   });
 
   const hasFilters = $derived(query !== '');
@@ -182,7 +221,8 @@
       name: level.name,
       unit: level.unit,
       quantity: 1,
-      stockLevelId: level.id
+      stockLevelId: level.id,
+      price: level.price ?? null
     });
 
     message = `Добавлено в корзину: ${level.name}`;
@@ -249,7 +289,12 @@
   }
 
   function changeSort(): void {
-    saveFilters('stocks', { sort: stockSort });
+    saveFilters('stocks', { sort: stockSort, group_id: stockGroup });
+    void applyFilters();
+  }
+
+  function changeGroup(): void {
+    saveFilters('stocks', { sort: stockSort, group_id: stockGroup });
     void applyFilters();
   }
 
@@ -377,7 +422,8 @@
 
   function openItemCreate(): void {
     itemTarget = null;
-    itemForm = { name: '', unit: '', quantity: '0', description: '' };
+    itemForm = { name: '', unit: '', quantity: '0', description: '', group_id: 0 };
+    itemPrices = {};
     itemError = '';
     itemOpen = true;
   }
@@ -427,8 +473,12 @@
       name: level.name,
       unit: level.unit,
       quantity: String(level.quantity),
-      description: level.description ?? ''
+      description: level.description ?? '',
+      group_id: level.group_id ?? 0
     };
+    itemPrices = Object.fromEntries(
+      Object.entries(level.prices ?? {}).map(([typeId, value]) => [typeId, String(value)])
+    );
     itemError = '';
     itemOpen = true;
   }
@@ -452,6 +502,28 @@
       return;
     }
 
+    const prices: Record<string, number | null> = {};
+
+    if (pricesEnabled && canEdit && priceTypes.length > 0) {
+      for (const type of priceTypes) {
+        const raw = (itemPrices[String(type.id)] ?? '').trim();
+
+        if (raw === '') {
+          prices[String(type.id)] = null;
+          continue;
+        }
+
+        const value = Number(raw.replace(',', '.'));
+
+        if (!Number.isFinite(value) || value < 0) {
+          itemError = `Некорректная цена «${type.title}»`;
+          return;
+        }
+
+        prices[String(type.id)] = value;
+      }
+    }
+
     itemBusy = true;
     itemError = '';
 
@@ -460,7 +532,9 @@
         name,
         unit: itemForm.unit.trim(),
         quantity,
-        description: itemForm.description.trim()
+        description: itemForm.description.trim(),
+        ...(Object.keys(prices).length > 0 ? { prices } : {}),
+        ...(groupsEnabled ? { group_id: itemForm.group_id > 0 ? itemForm.group_id : null } : {})
       };
 
       if (itemTarget === null) {
@@ -667,6 +741,18 @@
           <option value="qty_asc">Количество: по возрастанию</option>
         </select>
       </label>
+
+      {#if groupsEnabled}
+        <label class="sort-field">
+          <span>Группа</span>
+          <select bind:value={stockGroup} onchange={changeGroup}>
+            <option value={0}>Все группы</option>
+            {#each groups as group (group.id)}
+              <option value={group.id}>{group.title}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
     </div>
 
     {#if loadingLevels}
@@ -696,11 +782,22 @@
               {#if expandedLevels.has(level.id) && level.description !== ''}
                 <div class="desc">{level.description}</div>
               {/if}
+
+              {#if groupsEnabled && level.group_title}
+                <span class="group">{level.group_title}</span>
+              {/if}
             </div>
-            {#if level.quantity <= 0}
+            {#if level.quantity === 0}
               <span class="zero-mark">нет в наличии</span>
             {/if}
-            <span class="quantity">{level.quantity.toLocaleString('ru-RU', { maximumFractionDigits: 3 })} {level.unit}</span>
+            <span class="quantity" class:on-order={level.quantity < 0}>
+              {stockQuantityText(level.quantity, level.unit)}
+            </span>
+            {#if pricesEnabled}
+              <span class="price" class:missing={level.price === null} title={level.price === null ? 'Цена не задана' : 'Цена'}>
+                {formatPrice(level.price)}
+              </span>
+            {/if}
             {#if canEdit}
               <button
                 type="button"
@@ -808,6 +905,18 @@
         <Input label="Количество" type="number" bind:value={itemForm.quantity} />
       </div>
 
+      {#if groupsEnabled && groups.length > 0}
+        <label class="field">
+          <span class="label">Группа позиции</span>
+          <select bind:value={itemForm.group_id}>
+            <option value={0}>Без группы</option>
+            {#each groups as group (group.id)}
+              <option value={group.id}>{group.title}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
       <label class="field">
         <span class="label">Описание</span>
         <textarea
@@ -816,6 +925,25 @@
           placeholder="Характеристики, цвет, память — покажется в подсказке при наведении"
         ></textarea>
       </label>
+
+      {#if pricesEnabled && canEdit && priceTypes.length > 0}
+        <div class="field">
+          <span class="label">Цены по типам профиля (пусто — цена не задана)</span>
+          <div class="item-grid">
+            {#each priceTypes as type (type.id)}
+              <label class="price-field">
+                <span>{type.title}</span>
+                <input
+                  type="text"
+                  inputmode="decimal"
+                  placeholder="0,00"
+                  bind:value={itemPrices[String(type.id)]}
+                />
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/if}
 
       {#if itemError}
         <div class="alert">{itemError}</div>
@@ -1211,6 +1339,26 @@
     white-space: nowrap;
   }
 
+  .level .quantity.on-order {
+    color: #b45309;
+    font-weight: 600;
+  }
+
+  .level .group {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .level .price {
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .level .price.missing {
+    color: var(--muted);
+    font-weight: 400;
+  }
+
   .zero-mark {
     font-size: 12px;
     color: var(--muted);
@@ -1268,6 +1416,45 @@
     font: inherit;
     color: var(--text);
     resize: vertical;
+  }
+
+  .item-form select {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    color: var(--text);
+    outline: none;
+  }
+
+  .item-form select:focus {
+    border-color: var(--primary);
+  }
+
+  .price-field {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .price-field span {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .price-field input {
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    color: var(--text);
+    outline: none;
+  }
+
+  .price-field input:focus {
+    border-color: var(--primary);
   }
 
   .item-form .modal-actions {

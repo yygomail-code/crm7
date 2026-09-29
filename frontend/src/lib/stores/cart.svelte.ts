@@ -5,6 +5,7 @@ export interface CartItem {
   unit: string;
   quantity: number;
   stockLevelId?: number | null;
+  price?: number | null;
 }
 
 const STORAGE_PREFIX = 'crm.cart';
@@ -47,6 +48,19 @@ class CartStore {
     return this.items.length;
   }
 
+  get total(): number {
+    const sum = this.items.reduce(
+      (value, item) => value + (item.price ?? 0) * Number(item.quantity ?? 0),
+      0
+    );
+
+    return Number(sum.toFixed(2));
+  }
+
+  get missingPriceCount(): number {
+    return this.items.filter((item) => item.price === null || item.price === undefined).length;
+  }
+
   add(item: CartItem): void {
     const quantity = Math.max(0.001, item.quantity);
     const existing = this.items.find(
@@ -55,10 +69,23 @@ class CartStore {
 
     if (existing) {
       existing.quantity = Number((existing.quantity + quantity).toFixed(3));
+
+      if (item.price !== undefined) {
+        existing.price = item.price;
+      }
     } else {
       this.items = [...this.items, { ...item, quantity }];
     }
 
+    this.persist();
+  }
+
+  applyPrices(prices: Array<number | null>): void {
+    if (prices.length !== this.items.length) {
+      return;
+    }
+
+    this.items = this.items.map((item, index) => ({ ...item, price: prices[index] ?? null }));
     this.persist();
   }
 

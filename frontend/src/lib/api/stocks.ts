@@ -7,6 +7,7 @@ export interface StockFilters {
   qty?: string;
   sort?: string;
   show_zero?: boolean;
+  group_id?: number;
 }
 
 function filterParams(filters: StockFilters): URLSearchParams {
@@ -19,6 +20,7 @@ function filterParams(filters: StockFilters): URLSearchParams {
   }
   if (filters.sort) params.set('sort', filters.sort);
   if (filters.show_zero) params.set('show_zero', '1');
+  if (filters.group_id && filters.group_id > 0) params.set('group_id', String(filters.group_id));
 
   return params;
 }
@@ -38,19 +40,26 @@ export function listLevels(
   warehouseId: number,
   filters: StockFilters,
   page = 1,
-  perPage = 50
+  perPage = 50,
+  clientId = 0
 ): Promise<{
   items: StockLevel[];
   total: number;
   page: number;
   per_page: number;
   can_edit: boolean;
+  prices?: { enabled: boolean; type: { id: number; title: string } | null };
+  groups?: { enabled: boolean };
   warehouse: { id: number; name: string };
 }> {
   const params = filterParams(filters);
   params.set('warehouse_id', String(warehouseId));
   params.set('page', String(page));
   params.set('per_page', String(perPage));
+
+  if (clientId > 0) {
+    params.set('client_id', String(clientId));
+  }
 
   return apiRequest(`/stocks/levels?${params.toString()}`, { auth: true });
 }

@@ -48,6 +48,16 @@ final class SettingsRepository
         return $this->get('stock.reserve_enabled') === '1';
     }
 
+    public function pricesEnabled(): bool
+    {
+        return $this->get('prices.enabled') === '1';
+    }
+
+    public function groupsEnabled(): bool
+    {
+        return $this->get('groups.enabled') === '1';
+    }
+
     public function allowZeroStock(): bool
     {
         return $this->get('stock.allow_zero') === '1';

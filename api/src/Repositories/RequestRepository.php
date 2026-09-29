@@ -396,8 +396,8 @@ final class RequestRepository
         }
 
         $stmt = Database::pdo()->prepare(
-            'INSERT INTO request_items (request_id, warehouse_id, warehouse_name, stock_level_id, name, unit, description, quantity)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+            'INSERT INTO request_items (request_id, warehouse_id, warehouse_name, stock_level_id, name, unit, description, quantity, price, price_type_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
         );
 
         foreach ($items as $item) {
@@ -410,6 +410,8 @@ final class RequestRepository
                 $item['unit'] ?? null,
                 ($item['description'] ?? '') !== '' ? $item['description'] : null,
                 $item['quantity'],
+                $item['price'] ?? null,
+                $item['price_type_id'] ?? null,
             ]);
         }
     }
@@ -458,7 +460,7 @@ final class RequestRepository
         $placeholders = implode(',', array_fill(0, count($requestIds), '?'));
 
         $stmt = Database::pdo()->prepare(
-            'SELECT ID AS id, request_id, warehouse_id, warehouse_name, stock_level_id, name, unit, description, quantity
+            'SELECT ID AS id, request_id, warehouse_id, warehouse_name, stock_level_id, name, unit, description, quantity, price, price_type_id
              FROM request_items
              WHERE request_id IN (' . $placeholders . ')
              ORDER BY ID ASC'
@@ -477,6 +479,8 @@ final class RequestRepository
                 'unit' => (string) ($row['unit'] ?? ''),
                 'description' => (string) ($row['description'] ?? ''),
                 'quantity' => (float) $row['quantity'],
+                'price' => $row['price'] !== null ? (float) $row['price'] : null,
+                'price_type_id' => $row['price_type_id'] !== null ? (int) $row['price_type_id'] : null,
             ];
         }
 

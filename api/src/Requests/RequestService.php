@@ -22,6 +22,7 @@ use App\Repositories\SubstitutionRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\ViewLogRepository;
 use App\Notifications\NotificationService;
+use App\Prices\PriceService;
 use App\Stocks\StockReservationService;
 use Throwable;
 
@@ -46,7 +47,8 @@ final class RequestService
         private readonly SettingsRepository $settings = new SettingsRepository(),
         private readonly ViewLogRepository $views = new ViewLogRepository(),
         private readonly ChatService $chat = new ChatService(),
-        private readonly StockReservationService $reservations = new StockReservationService()
+        private readonly StockReservationService $reservations = new StockReservationService(),
+        private readonly PriceService $prices = new PriceService()
     ) {
     }
 
@@ -308,9 +310,15 @@ final class RequestService
         $previousManager = $managerId !== null ? $this->assignments->previousManager($id, $managerId) : null;
         $chat = $this->chat->threadForClient($user, $capabilities, (int) $request['client_id'], $id);
 
+        $decoratedItems = $this->prices->decorateItems(
+            $this->requests->itemsForRequests([$id])[$id] ?? [],
+            $this->users->findById((int) $request['client_id'])
+        );
+
         return [
             'request' => $this->mapRequest($request),
-            'items' => $this->requests->itemsForRequests([$id])[$id] ?? [],
+            'items' => $decoratedItems['items'],
+            'prices' => $decoratedItems['prices'],
             'history' => array_map([$this, 'mapHistory'], $this->history->listByRequest($id)),
             'comments' => $isStaff
                 ? array_map([$this, 'mapComment'], $this->comments->listByRequest($id, true))
@@ -431,6 +439,11 @@ final class RequestService
 
         $slaHours = max(1, (int) ($this->settings->get('sla.resolution_hours') ?? Config::int('REQUEST_SLA_HOURS', 24)));
 
+        $items = $this->prices->attachPrices(
+            $items,
+            $this->prices->effectiveTypeIdForUser($this->users->findById($clientId))
+        );
+
         $pdo = Database::pdo();
         $pdo->beginTransaction();
 
@@ -489,6 +502,46 @@ final class RequestService
         return $this->detail($user, $capabilities, $id);
     }
 
+    /**
+     * Предварительный расчёт цен по составу заявки для текущего клиента
+     * или выбранного клиента (сотрудником). Ничего не сохраняет.
+     */
+    public function preview(array $user, array $input): array
+    {
+        $items = $this->normalizeItems($input['items'] ?? []);
+        $clientId = (int) ($input['client_id'] ?? 0);
+        $target = $user;
+
+        if ($clientId > 0 && $clientId !== (int) $user['ID']) {
+            if ((int) $user['LEVEL'] < 10) {
+                throw new HttpException(403, 'forbidden', 'Можно смотреть цены только для себя');
+            }
+
+            $client = $this->users->findById($clientId);
+
+            if ($client === null || (int) $client['LEVEL'] !== 5) {
+                throw new HttpException(422, 'validation_error', 'Клиент не найден');
+            }
+
+            $target = $client;
+        }
+
+        if (!$this->prices->enabled()) {
+            return ['enabled' => false, 'type' => null, 'items' => [], 'total' => null];
+        }
+
+        $typeId = $this->prices->effectiveTypeIdForUser($target);
+        $type = $typeId !== null ? $this->prices->findType($typeId) : null;
+        $rows = $this->prices->previewRows($this->prices->attachPrices($items, $typeId));
+
+        return [
+            'enabled' => true,
+            'type' => $type !== null ? ['id' => (int) $type['id'], 'title' => (string) $type['title']] : null,
+            'items' => $rows,
+            'total' => $this->prices->total($rows),
+        ];
+    }
+
     public function updateItems(array $user, array $capabilities, int $id, array $input): array
     {
         $version = isset($input['version']) ? (int) $input['version'] : null;
@@ -512,6 +565,11 @@ final class RequestService
             }
 
             $this->assertVersion($version, $request);
+
+            $items = $this->prices->attachPrices(
+                $items,
+                $this->prices->effectiveTypeIdForUser($this->users->findById((int) $request['client_id']))
+            );
 
             $before = $this->requests->itemsForRequests([$id])[$id] ?? [];
 
@@ -651,6 +709,11 @@ final class RequestService
                 if (!$this->settings->salesEnabled()) {
                     throw new HttpException(403, 'sales_disabled', 'Продажи отключены: изменение состава заявки недоступно');
                 }
+
+                $items = $this->prices->attachPrices(
+                    $items,
+                    $this->prices->effectiveTypeIdForUser($this->users->findById((int) $request['client_id']))
+                );
 
                 $this->requests->replaceItems($id, $items);
                 $this->reservations->apply($id, $items);

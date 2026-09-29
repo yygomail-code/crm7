@@ -8,8 +8,11 @@ use App\Audit\AuditService;
 use App\Core\Config;
 use App\Core\Database;
 use App\Export\TableExport;
+use App\Groups\ItemGroupService;
 use App\Http\HttpException;
+use App\Prices\PriceService;
 use App\Repositories\StocksRepository;
+use App\Repositories\UserRepository;
 use App\Repositories\ViewLogRepository;
 use Throwable;
 
@@ -22,7 +25,10 @@ final class StocksService
     public function __construct(
         private readonly StocksRepository $stocks = new StocksRepository(),
         private readonly AuditService $audit = new AuditService(),
-        private readonly ViewLogRepository $views = new ViewLogRepository()
+        private readonly ViewLogRepository $views = new ViewLogRepository(),
+        private readonly PriceService $prices = new PriceService(),
+        private readonly UserRepository $users = new UserRepository(),
+        private readonly ItemGroupService $groups = new ItemGroupService()
     ) {
     }
 
@@ -67,7 +73,8 @@ final class StocksService
         int $warehouseId,
         array $filters,
         int $page,
-        int $perPage
+        int $perPage,
+        int $clientId = 0
     ): array {
         $warehouse = $this->requireWarehouse($user, $capabilities, $warehouseId);
 
@@ -78,30 +85,90 @@ final class StocksService
         $rows = $this->stocks->levels((string) $warehouse['SID'], $filters, $page, $perPage);
         $total = $this->stocks->levelsCount((string) $warehouse['SID'], $filters);
 
+        $priceTypeId = $this->priceTypeFor($user, $clientId);
+        $priceMap = [];
+        $allPrices = [];
+        $stockSid = (string) $warehouse['SID'];
+
+        if ($priceTypeId !== null && $rows !== []) {
+            $sids = array_map(
+                static fn (array $row): string => (string) ($row['name_sid'] ?? ''),
+                $rows
+            );
+            $priceMap = $this->prices->pricesForStockItems($stockSid, $sids, $priceTypeId);
+
+            if (in_array('stocks.edit', $capabilities, true)) {
+                $allPrices = $this->prices->pricesForStockItemsAll($stockSid, $sids);
+            }
+        }
+
         if ($filters['q'] !== '') {
             $this->views->add('stocks', $warehouseId, (int) $user['ID'], 'search', $filters['q'], $total);
         } elseif (!$this->views->recentExists('stocks', $warehouseId, (int) $user['ID'], 'list', 30)) {
             $this->views->add('stocks', $warehouseId, (int) $user['ID'], 'list', (string) $warehouse['NAME']);
         }
 
+        $type = $priceTypeId !== null ? $this->prices->findType($priceTypeId) : null;
+
         return [
-            'items' => array_map(static fn (array $row): array => [
-                'id' => (int) $row['id'],
-                'name' => (string) $row['name'],
-                'unit' => (string) ($row['unit'] ?? ''),
-                'quantity' => (float) $row['quantity'],
-                'description' => (string) ($row['description'] ?? ''),
-                'actual_date' => $row['actual_date'] !== null ? (string) $row['actual_date'] : null,
-            ], $rows),
+            'items' => array_map(static function (array $row) use ($priceMap, $allPrices): array {
+                $sid = (string) ($row['name_sid'] ?? '');
+                $item = [
+                    'id' => (int) $row['id'],
+                    'name' => (string) $row['name'],
+                    'unit' => (string) ($row['unit'] ?? ''),
+                    'quantity' => (float) $row['quantity'],
+                    'description' => (string) ($row['description'] ?? ''),
+                    'actual_date' => $row['actual_date'] !== null ? (string) $row['actual_date'] : null,
+                    'price' => $sid !== '' && isset($priceMap[$sid]) ? (float) $priceMap[$sid] : null,
+                    'group_id' => $row['group_id'] !== null ? (int) $row['group_id'] : null,
+                    'group_title' => (string) ($row['group_title'] ?? ''),
+                ];
+
+                if ($allPrices !== []) {
+                    $item['prices'] = $allPrices[$sid] ?? [];
+                }
+
+                return $item;
+            }, $rows),
             'total' => $total,
             'page' => $page,
             'per_page' => $perPage,
             'can_edit' => in_array('stocks.edit', $capabilities, true),
+            'prices' => [
+                'enabled' => $this->prices->enabled(),
+                'type' => $type !== null ? ['id' => (int) $type['id'], 'title' => (string) $type['title']] : null,
+            ],
+            'groups' => [
+                'enabled' => $this->groups->enabled(),
+            ],
             'warehouse' => [
                 'id' => (int) $warehouse['ID'],
                 'name' => (string) $warehouse['NAME'],
             ],
         ];
+    }
+
+    /**
+     * Тип цен для пользователя: для сотрудника можно запросить тип выбранного клиента.
+     */
+    private function priceTypeFor(array $user, int $clientId): ?int
+    {
+        if (!$this->prices->enabled()) {
+            return null;
+        }
+
+        $target = $user;
+
+        if ($clientId > 0 && $clientId !== (int) $user['ID'] && (int) $user['LEVEL'] >= 10) {
+            $client = $this->users->findById($clientId);
+
+            if ($client !== null && (int) $client['LEVEL'] === 5) {
+                $target = $client;
+            }
+        }
+
+        return $this->prices->effectiveTypeIdForUser($target);
     }
 
     public static function normalizeFilters(array $input): array
@@ -121,6 +188,7 @@ final class StocksService
         }
 
         $showZero = in_array((string) ($input['show_zero'] ?? ''), ['1', 'true', 'yes'], true);
+        $groupId = (int) ($input['group_id'] ?? 0);
 
         return [
             'q' => trim((string) ($input['q'] ?? '')),
@@ -128,6 +196,7 @@ final class StocksService
             'qty' => $qty,
             'sort' => $sort,
             'show_zero' => $showZero,
+            'group_id' => $groupId > 0 ? $groupId : null,
         ];
     }
 
@@ -219,6 +288,7 @@ final class StocksService
         $warehouse = $this->requireWarehouse($user, $capabilities, $warehouseId);
 
         [$name, $unit, $quantity, $description] = $this->normalizeItemInput($input);
+        $groupId = $this->normalizeGroupId($input['group_id'] ?? null);
 
         $item = $this->stocks->upsertNomenclature($name, $unit, $description);
 
@@ -229,6 +299,8 @@ final class StocksService
         if ($this->stocks->levelExists((string) $warehouse['SID'], (string) $item['SID'])) {
             throw new HttpException(422, 'duplicate_item', 'Позиция с таким названием уже есть на складе — отредактируйте её');
         }
+
+        $this->stocks->setNomenclatureGroup((string) $item['SID'], $groupId);
 
         $actualDate = date('Y-m-d');
 
@@ -243,6 +315,8 @@ final class StocksService
             'quantity' => $quantity,
         ]);
 
+        $this->savePrices($warehouse, $item, $input);
+
         $this->audit->log($user, 'stocks.item.create', 'stocks', $warehouseId, [
             'name' => $name,
             'quantity' => $quantity,
@@ -256,6 +330,9 @@ final class StocksService
                 'quantity' => $quantity,
                 'description' => $description ?? '',
                 'actual_date' => $actualDate,
+                'prices' => $this->prices->pricesForStockItem((string) $warehouse['SID'], (string) $item['SID']),
+                'group_id' => $groupId,
+                'group_title' => $this->groupTitle($groupId),
             ],
         ];
     }
@@ -284,6 +361,9 @@ final class StocksService
             'description' => array_key_exists('description', $input) ? $input['description'] : ($level['description'] ?? ''),
             'quantity' => array_key_exists('quantity', $input) ? $input['quantity'] : (float) $level['quantity'],
         ]);
+        $groupId = array_key_exists('group_id', $input)
+            ? $this->normalizeGroupId($input['group_id'])
+            : ($level['group_id'] !== null ? (int) $level['group_id'] : null);
 
         $item = $this->stocks->upsertNomenclature($name, $unit, $description);
 
@@ -297,7 +377,9 @@ final class StocksService
             throw new HttpException(422, 'duplicate_item', 'Позиция с таким названием уже есть на складе');
         }
 
+        $this->stocks->setNomenclatureGroup((string) $item['SID'], $groupId);
         $this->stocks->updateLevel($itemId, $name, (string) $item['SID'], $unit, $quantity);
+        $this->savePrices($warehouse, $item, $input);
 
         $this->audit->log($user, 'stocks.item.update', 'stocks', (int) $warehouse['ID'], [
             'id' => $itemId,
@@ -313,8 +395,50 @@ final class StocksService
                 'quantity' => $quantity,
                 'description' => $description ?? '',
                 'actual_date' => date('Y-m-d'),
+                'prices' => $this->prices->pricesForStockItem((string) $warehouse['SID'], (string) $item['SID']),
+                'group_id' => $groupId,
+                'group_title' => $this->groupTitle($groupId),
             ],
         ];
+    }
+
+    private function savePrices(array $warehouse, array $item, array $input): void
+    {
+        if (!$this->prices->enabled() || !isset($input['prices']) || !is_array($input['prices'])) {
+            return;
+        }
+
+        $this->prices->saveItemPrices(
+            (string) ($warehouse['SID'] ?? ''),
+            (string) ($item['SID'] ?? ''),
+            $input['prices']
+        );
+    }
+
+    private function normalizeGroupId(mixed $value): ?int
+    {
+        if ($value === null || $value === '' || $value === 0 || $value === '0') {
+            return null;
+        }
+
+        $id = (int) $value;
+
+        if ($this->groups->find($id) === null) {
+            throw new HttpException(422, 'validation_error', 'Неизвестная группа позиций');
+        }
+
+        return $id;
+    }
+
+    private function groupTitle(?int $groupId): string
+    {
+        if ($groupId === null) {
+            return '';
+        }
+
+        $group = $this->groups->find($groupId);
+
+        return $group !== null ? (string) $group['title'] : '';
     }
 
     private function requireEdit(array $capabilities): void

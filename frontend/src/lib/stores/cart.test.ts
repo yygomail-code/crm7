@@ -74,4 +74,37 @@ describe('cart store', () => {
     expect(cart.items.length).toBe(1);
     expect(cart.items[0].warehouseId).toBe(2);
   });
+
+  it('keeps and updates prices when merging', () => {
+    cart.add({ ...item, price: 100 });
+    expect(cart.items[0].price).toBe(100);
+
+    cart.add({ ...item, quantity: 2, price: 120 });
+    expect(cart.items.length).toBe(1);
+    expect(cart.items[0].price).toBe(120);
+    expect(cart.total).toBe(360);
+  });
+
+  it('applies refreshed prices by index', () => {
+    cart.add({ ...item, price: 100 });
+    cart.add({ ...item, warehouseId: 2, price: null });
+
+    expect(cart.missingPriceCount).toBe(1);
+
+    cart.applyPrices([150, 200]);
+    expect(cart.items[0].price).toBe(150);
+    expect(cart.items[1].price).toBe(200);
+    expect(cart.total).toBe(350);
+    expect(cart.missingPriceCount).toBe(0);
+  });
+
+  it('ignores a price list of a different length', () => {
+    cart.add(item);
+    cart.add({ ...item, warehouseId: 2, warehouseName: 'Склад Белореченск' });
+    cart.applyPrices([10]);
+
+    expect(cart.items[0].price).toBeUndefined();
+    expect(cart.items[1].price).toBeUndefined();
+    expect(cart.missingPriceCount).toBe(2);
+  });
 });

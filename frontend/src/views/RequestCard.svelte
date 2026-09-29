@@ -39,7 +39,7 @@
   import Button from '../lib/components/ui/Button.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
-  import { formatDateTime, formatSize, priorityLabel } from '../lib/format';
+  import { formatDateTime, formatPrice, formatSize, priorityLabel } from '../lib/format';
   import { ITEMS_SORT_OPTIONS, sortItems, type ItemsSortKey } from '../lib/items-sort';
 
   interface Props {
@@ -55,6 +55,8 @@
   let error = $state('');
   let actionError = $state('');
   let busy = $state(false);
+
+  const showPrices = $derived(detail !== null && detail.prices?.enabled === true);
 
   let targetStatus = $state('');
   let transitionComment = $state('');
@@ -1080,15 +1082,19 @@
           <p class="muted">Позиций пока нет</p>
         {:else}
           <div class="items-table">
-            <div class="it-row it-head">
+            <div class="it-row it-head" class:prices={showPrices}>
               <span>Название</span>
               <span class="it-qty-col">Количество</span>
-              <span>Склад</span>
+              <span class="it-wh">Склад</span>
+              {#if showPrices}
+                <span class="it-price">Цена</span>
+                <span class="it-sum">Сумма</span>
+              {/if}
               <span class="it-del-col"></span>
             </div>
 
             {#each sortItems(detail.items, itemsSort) as item (item.id)}
-              <div class="it-row">
+              <div class="it-row" class:prices={showPrices}>
                 <div class="it-name-col">
                   <button
                     type="button"
@@ -1124,6 +1130,13 @@
 
                 <span class="it-wh">{item.warehouse_name || '—'}</span>
 
+                {#if showPrices}
+                  <span class="it-price" class:missing={item.price === null}>
+                    {formatPrice(item.price)}
+                  </span>
+                  <span class="it-sum">{formatPrice(item.sum ?? null)}</span>
+                {/if}
+
                 {#if detail.can.edit_items}
                   <button
                     type="button"
@@ -1140,6 +1153,15 @@
               </div>
             {/each}
           </div>
+
+          {#if showPrices}
+            <div class="items-total">
+              <span class="muted">
+                Итого{detail.prices.type ? ` · цены: ${detail.prices.type.title.toLowerCase()}` : ''}:
+              </span>
+              <strong>{formatPrice(detail.prices.total)}</strong>
+            </div>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -1613,6 +1635,7 @@
     <ItemsPicker
       open={pickerOpen}
       items={itemRows}
+      clientId={detail.request.client.id}
       onclose={closePicker}
       onchange={scheduleItemsApply}
     />
@@ -1740,6 +1763,10 @@
     transition: background 0.12s ease;
   }
 
+  .it-row.prices {
+    grid-template-columns: minmax(160px, 2fr) 140px minmax(100px, 1fr) 104px 104px 36px;
+  }
+
   .it-row:not(.it-head):hover {
     background: var(--bg);
   }
@@ -1829,6 +1856,47 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+
+  .it-price,
+  .it-sum {
+    text-align: right;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+
+  .it-sum {
+    font-weight: 600;
+  }
+
+  .it-price.missing {
+    color: var(--muted);
+  }
+
+  .items-total {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+    padding-top: var(--space-2);
+    border-top: 1px dashed var(--border);
+  }
+
+  .items-total strong {
+    font-size: 16px;
+  }
+
+  @media (max-width: 860px) {
+    .it-row.prices {
+      grid-template-columns: minmax(120px, 2fr) 110px 80px 80px 36px;
+      gap: var(--space-2);
+    }
+
+    .it-row.prices .it-wh {
+      display: none;
+    }
   }
 
   .it-del {

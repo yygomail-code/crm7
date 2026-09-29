@@ -5,17 +5,21 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\DatabaseSettings;
+use App\Groups\ItemGroupService;
 use App\Http\HttpException;
 use App\Http\Request;
 use App\Http\Response;
 use App\Mail\MailService;
+use App\Prices\PriceService;
 use App\Repositories\SettingsRepository;
 
 final class AdminController extends ApiController
 {
     public function __construct(
         private readonly MailService $mail = new MailService(),
-        private readonly SettingsRepository $settings = new SettingsRepository()
+        private readonly SettingsRepository $settings = new SettingsRepository(),
+        private readonly PriceService $prices = new PriceService(),
+        private readonly ItemGroupService $groups = new ItemGroupService()
     ) {
         parent::__construct();
     }
@@ -38,6 +42,8 @@ final class AdminController extends ApiController
         $emailExport = (bool) $request->input('email_export_enabled', true);
         $stockReserve = (bool) $request->input('stock_reserve_enabled', false);
         $stockAllowZero = (bool) $request->input('stock_allow_zero', false);
+        $pricesEnabled = (bool) $request->input('prices_enabled', false);
+        $groupsEnabled = (bool) $request->input('groups_enabled', false);
 
         $this->settings->many([
             'sla.reaction_hours' => (string) $reaction,
@@ -47,6 +53,8 @@ final class AdminController extends ApiController
             'mail.export_enabled' => $emailExport ? '1' : '0',
             'stock.reserve_enabled' => $stockReserve ? '1' : '0',
             'stock.allow_zero' => $stockAllowZero ? '1' : '0',
+            'prices.enabled' => $pricesEnabled ? '1' : '0',
+            'groups.enabled' => $groupsEnabled ? '1' : '0',
         ]);
 
         return Response::ok($this->systemSettingsPayload());
@@ -62,6 +70,8 @@ final class AdminController extends ApiController
             'email_export_enabled' => $this->settings->emailExportEnabled(),
             'stock_reserve_enabled' => $this->settings->stockReserveEnabled(),
             'stock_allow_zero' => $this->settings->allowZeroStock(),
+            'prices_enabled' => $this->settings->pricesEnabled(),
+            'groups_enabled' => $this->settings->groupsEnabled(),
             'spf_steps' => [
                 'SPF: добавьте в DNS TXT-запись домена с серверами отправки (v=spf1 …)',
                 'DKIM: включите подпись в панели почтового провайдера и опубликуйте публичный ключ',
@@ -69,6 +79,92 @@ final class AdminController extends ApiController
                 'Проверьте отправку тестового письма на внешний ящик и заголовки SPF/DKIM',
             ],
         ];
+    }
+
+    public function priceTypes(Request $request): Response
+    {
+        $this->requireSettings($request);
+
+        return Response::ok(['items' => $this->prices->types()]);
+    }
+
+    public function createPriceType(Request $request): Response
+    {
+        $user = $this->requireSettings($request);
+
+        $type = $this->prices->createType((string) $request->input('title', ''));
+        $this->audit($request, $user, 'prices.type.create', 'price_type', $type['id'] ?? null, [
+            'title' => $type['title'] ?? '',
+        ]);
+
+        return Response::ok(['type' => $type], 201);
+    }
+
+    public function updatePriceType(Request $request, array $params): Response
+    {
+        $user = $this->requireSettings($request);
+
+        $id = (int) ($params['id'] ?? 0);
+        $type = $this->prices->updateType($id, (string) $request->input('title', ''));
+        $this->audit($request, $user, 'prices.type.update', 'price_type', $id, [
+            'title' => $type['title'] ?? '',
+        ]);
+
+        return Response::ok(['type' => $type]);
+    }
+
+    public function deletePriceType(Request $request, array $params): Response
+    {
+        $user = $this->requireSettings($request);
+
+        $id = (int) ($params['id'] ?? 0);
+        $this->prices->deleteType($id);
+        $this->audit($request, $user, 'prices.type.delete', 'price_type', $id);
+
+        return Response::ok(['id' => $id]);
+    }
+
+    public function itemGroups(Request $request): Response
+    {
+        $this->requireSettings($request);
+
+        return Response::ok(['items' => $this->groups->list()]);
+    }
+
+    public function createItemGroup(Request $request): Response
+    {
+        $user = $this->requireSettings($request);
+
+        $group = $this->groups->create((string) $request->input('title', ''));
+        $this->audit($request, $user, 'groups.create', 'item_group', $group['id'] ?? null, [
+            'title' => $group['title'] ?? '',
+        ]);
+
+        return Response::ok(['group' => $group], 201);
+    }
+
+    public function updateItemGroup(Request $request, array $params): Response
+    {
+        $user = $this->requireSettings($request);
+
+        $id = (int) ($params['id'] ?? 0);
+        $group = $this->groups->update($id, (string) $request->input('title', ''));
+        $this->audit($request, $user, 'groups.update', 'item_group', $id, [
+            'title' => $group['title'] ?? '',
+        ]);
+
+        return Response::ok(['group' => $group]);
+    }
+
+    public function deleteItemGroup(Request $request, array $params): Response
+    {
+        $user = $this->requireSettings($request);
+
+        $id = (int) ($params['id'] ?? 0);
+        $this->groups->delete($id);
+        $this->audit($request, $user, 'groups.delete', 'item_group', $id);
+
+        return Response::ok(['id' => $id]);
     }
 
     public function emailSettings(Request $request): Response

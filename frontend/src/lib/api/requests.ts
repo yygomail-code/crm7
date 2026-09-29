@@ -3,6 +3,7 @@ import type {
   ActivityType,
   ClientItem,
   ManagerItem,
+  PricePreview,
   RequestDetail,
   RequestListResponse,
   RequestStatus,
@@ -104,6 +105,17 @@ export interface CreateRequestPayload {
 
 export function createRequest(payload: CreateRequestPayload): Promise<RequestDetail> {
   return apiRequest<RequestDetail>('/requests', { method: 'POST', auth: true, body: payload });
+}
+
+export function previewRequestPrices(
+  items: CreateRequestItem[],
+  clientId = 0
+): Promise<PricePreview> {
+  return apiRequest<PricePreview>('/requests/price-preview', {
+    method: 'POST',
+    auth: true,
+    body: { items, client_id: clientId > 0 ? clientId : undefined }
+  });
 }
 
 export interface UpdateRequestPayload {

@@ -56,10 +56,12 @@ final class StocksRepository
         $offset = max(0, ($page - 1) * $perPage);
 
         $stmt = Database::pdo()->prepare(
-            'SELECT l.ID AS id, l.NAME AS name, l.UNIT AS unit, l.QUANTITY AS quantity,
-                    l.ACTUAL_DATE AS actual_date, n.DESCRIPTION AS description
+            'SELECT l.ID AS id, l.NAME AS name, l.NAME_SID AS name_sid, l.UNIT AS unit, l.QUANTITY AS quantity,
+                    l.ACTUAL_DATE AS actual_date, n.DESCRIPTION AS description,
+                    n.group_id AS group_id, g.TITLE AS group_title
              FROM stock_levels l
              LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
+             LEFT JOIN item_groups g ON g.ID = n.group_id
              WHERE ' . $where . '
              ' . $this->orderSql((string) ($filters['sort'] ?? '')) . '
              LIMIT ' . max(1, min(200, $perPage)) . ' OFFSET ' . $offset
@@ -135,6 +137,11 @@ final class StocksRepository
         if (($filters['qty_op'] ?? '') !== '' && isset($filters['qty'])) {
             $sql .= ' AND l.QUANTITY ' . ($filters['qty_op'] === 'lt' ? '<' : '>') . ' ?';
             $params[] = $filters['qty'];
+        }
+
+        if (($filters['group_id'] ?? null) !== null && (int) $filters['group_id'] > 0) {
+            $sql .= ' AND l.NAME_SID IN (SELECT SID FROM nomenclature WHERE group_id = ?)';
+            $params[] = (int) $filters['group_id'];
         }
 
         if (!($filters['show_zero'] ?? false)) {
@@ -230,7 +237,8 @@ final class StocksRepository
     {
         $stmt = Database::pdo()->prepare(
             'SELECT l.ID AS id, l.STOCK_SID AS stock_sid, l.NAME AS name, l.NAME_SID AS name_sid, l.UNIT AS unit,
-                    l.QUANTITY AS quantity, l.ACTUAL_DATE AS actual_date, n.DESCRIPTION AS description
+                    l.QUANTITY AS quantity, l.ACTUAL_DATE AS actual_date, n.DESCRIPTION AS description,
+                    n.group_id AS group_id
              FROM stock_levels l
              LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
              WHERE l.ID = ? LIMIT 1'
@@ -238,6 +246,12 @@ final class StocksRepository
         $stmt->execute([$id]);
 
         return $stmt->fetch() ?: null;
+    }
+
+    public function setNomenclatureGroup(string $sid, ?int $groupId): void
+    {
+        $stmt = Database::pdo()->prepare('UPDATE nomenclature SET group_id = ? WHERE SID = ?');
+        $stmt->execute([$groupId, $sid]);
     }
 
     public function findWarehouseBySid(string $sid): ?array

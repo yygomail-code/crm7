@@ -21,6 +21,12 @@
     saveSchedule,
     sendScheduleNow
   } from '../lib/api/schedules';
+  import {
+    createPriceType,
+    deletePriceType,
+    listAdminPriceTypes,
+    updatePriceType
+  } from '../lib/api/prices';
   import { listManagers } from '../lib/api/requests';
   import type {
     DatabaseSettings,
@@ -28,6 +34,7 @@
     EmailSettings,
     EmailTemplate,
     ManagerItem,
+    PriceType,
     ReportSchedule,
     SystemSettings
   } from '../lib/api/types';
@@ -61,6 +68,13 @@
   let emailExportEnabled = $state(true);
   let stockReserveEnabled = $state(false);
   let stockAllowZero = $state(false);
+  let pricesEnabled = $state(false);
+  let groupsEnabled = $state(false);
+
+  let priceTypes = $state<PriceType[]>([]);
+  let priceTypeDrafts = $state<Record<number, string>>({});
+  let newPriceTypeTitle = $state('');
+  let priceTypesBusy = $state(false);
 
   let db = $state<DatabaseSettings | null>(null);
   let dbPort = $state('3306');
@@ -99,6 +113,8 @@
       emailExportEnabled = system.email_export_enabled;
       stockReserveEnabled = system.stock_reserve_enabled;
       stockAllowZero = system.stock_allow_zero;
+      pricesEnabled = system.prices_enabled;
+      groupsEnabled = system.groups_enabled;
 
       db = await getDatabaseSettings();
 
@@ -110,6 +126,7 @@
       queue = await listQueue();
       schedules = await listSchedules();
       managers = (await listManagers()).items;
+      await loadPriceTypes();
 
       if (templates.length > 0) {
         selectTemplate(templates[0]);
@@ -156,7 +173,9 @@ async function saveSystem(): Promise<void> {
       sales_enabled: salesEnabled,
       email_export_enabled: emailExportEnabled,
       stock_reserve_enabled: stockReserveEnabled,
-      stock_allow_zero: stockAllowZero
+      stock_allow_zero: stockAllowZero,
+      prices_enabled: pricesEnabled,
+      groups_enabled: groupsEnabled
     });
 
     slaReaction = String(system.sla_reaction_hours);
@@ -165,17 +184,97 @@ async function saveSystem(): Promise<void> {
     emailExportEnabled = system.email_export_enabled;
     stockReserveEnabled = system.stock_reserve_enabled;
     stockAllowZero = system.stock_allow_zero;
+    pricesEnabled = system.prices_enabled;
+    groupsEnabled = system.groups_enabled;
     appSettings.set(
       system.sales_enabled,
       system.email_export_enabled,
       system.stock_reserve_enabled,
-      system.stock_allow_zero
+      system.stock_allow_zero,
+      system.prices_enabled,
+      system.groups_enabled
     );
     notice = 'Настройки системы сохранены';
   } catch (cause) {
     error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить настройки';
   } finally {
     busy = false;
+  }
+}
+
+async function loadPriceTypes(): Promise<void> {
+  try {
+    const data = await listAdminPriceTypes();
+    priceTypes = data.items;
+    priceTypeDrafts = Object.fromEntries(data.items.map((type) => [type.id, type.title]));
+  } catch (cause) {
+    error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить типы цен';
+  }
+}
+
+async function addPriceType(): Promise<void> {
+  const title = newPriceTypeTitle.trim();
+
+  if (title === '') {
+    return;
+  }
+
+  priceTypesBusy = true;
+  error = '';
+  notice = '';
+
+  try {
+    await createPriceType(title);
+    newPriceTypeTitle = '';
+    await loadPriceTypes();
+    notice = 'Тип цен добавлен';
+  } catch (cause) {
+    error = cause instanceof ApiError ? cause.message : 'Не удалось добавить тип цен';
+  } finally {
+    priceTypesBusy = false;
+  }
+}
+
+async function savePriceType(type: PriceType): Promise<void> {
+  const title = (priceTypeDrafts[type.id] ?? '').trim();
+
+  if (title === '') {
+    error = 'Укажите название типа цен';
+    return;
+  }
+
+  priceTypesBusy = true;
+  error = '';
+  notice = '';
+
+  try {
+    await updatePriceType(type.id, title);
+    await loadPriceTypes();
+    notice = 'Тип цен сохранён';
+  } catch (cause) {
+    error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить тип цен';
+  } finally {
+    priceTypesBusy = false;
+  }
+}
+
+async function removePriceType(type: PriceType): Promise<void> {
+  if (!confirm(`Удалить тип цен «${type.title}»? Цены этого типа также будут удалены.`)) {
+    return;
+  }
+
+  priceTypesBusy = true;
+  error = '';
+  notice = '';
+
+  try {
+    await deletePriceType(type.id);
+    await loadPriceTypes();
+    notice = 'Тип цен удалён';
+  } catch (cause) {
+    error = cause instanceof ApiError ? cause.message : 'Не удалось удалить тип цен';
+  } finally {
+    priceTypesBusy = false;
   }
 }
 
@@ -552,11 +651,46 @@ async function saveSettings(): Promise<void> {
 
       {#if stockAllowZero}
         <p class="hint">
-          В выборе позиций показываются позиции с нулевым остатком, их можно добавлять в заявку.
+          В списках остатков и в выборе позиций показываются позиции с нулевым остатком; позиции с
+          отрицательным остатком показываются с пометкой «поз заказ» вместо минусового количества.
         </p>
       {:else}
         <p class="hint">
           Позиции с нулевым остатком скрыты в выборе; нельзя запросить больше, чем есть на складе.
+        </p>
+      {/if}
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={pricesEnabled} />
+        Использовать цены для позиций
+      </label>
+
+      {#if pricesEnabled}
+        <p class="hint">
+          Клиент видит цену позиции по своему типу профиля — в остатках, корзине и заявке; в корзине и
+          заявке считается итоговая сумма. Тип профиля задаётся в карточке пользователя (Админ →
+          Пользователи), цены — при редактировании позиции на складе (для каждого склада свои).
+        </p>
+      {:else}
+        <p class="hint">
+          Цены не показываются: клиент добавляет позиции в заявку без стоимости. Цены типов хранятся,
+          но скрыты до включения.
+        </p>
+      {/if}
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={groupsEnabled} />
+        Разрешить использовать группы позиций
+      </label>
+
+      {#if groupsEnabled}
+        <p class="hint">
+          Группы позиций создаются в «Админ → Группы позиций», назначаются позиции при редактировании
+          на складе; по группам можно фильтровать остатки и выбор позиций в заявке.
+        </p>
+      {:else}
+        <p class="hint">
+          Группы скрыты в интерфейсе; созданные группы и привязки позиций сохраняются.
         </p>
       {/if}
 
@@ -577,6 +711,48 @@ async function saveSettings(): Promise<void> {
 
       <div class="actions">
         <Button loading={busy} onclick={() => void saveSystem()}>Сохранить</Button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Типы цен (типы профиля)</h2>
+      <p class="hint">
+        Каждому клиенту можно назначить тип профиля — например, «Оптовая». Цена позиции для клиента
+        берётся по его типу. Если тип не назначен, используется первый в списке.
+      </p>
+
+      <div class="price-types">
+        {#each priceTypes as type (type.id)}
+          <div class="pt-row">
+            <input class="pt-title" bind:value={priceTypeDrafts[type.id]} maxlength="255" />
+            <span class="pt-meta">
+              {type.users_count ?? 0} польз. · {type.prices_count ?? 0} цен
+            </span>
+            <Button variant="ghost" disabled={priceTypesBusy} onclick={() => void savePriceType(type)}>
+              Сохранить
+            </Button>
+            <button
+              type="button"
+              class="pt-del"
+              disabled={priceTypesBusy}
+              onclick={() => void removePriceType(type)}
+            >
+              Удалить
+            </button>
+          </div>
+        {/each}
+      </div>
+
+      <div class="pt-add">
+        <Input label="Новый тип цен" bind:value={newPriceTypeTitle} placeholder="Например: Партнёрская" />
+        <Button
+          variant="ghost"
+          loading={priceTypesBusy}
+          disabled={!newPriceTypeTitle.trim()}
+          onclick={() => void addPriceType()}
+        >
+          Добавить тип
+        </Button>
       </div>
     </div>
 
@@ -912,6 +1088,77 @@ async function saveSettings(): Promise<void> {
   .s-del:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+  }
+
+  .price-types {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .pt-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: var(--space-2) var(--space-3);
+  }
+
+  .pt-title {
+    flex: 1;
+    min-width: 180px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    outline: none;
+  }
+
+  .pt-title:focus {
+    border-color: var(--primary);
+  }
+
+  .pt-meta {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .pt-del {
+    padding: 9px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--danger);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+  }
+
+  .pt-del:hover:not(:disabled) {
+    border-color: var(--danger);
+    background: rgba(220, 38, 38, 0.06);
+  }
+
+  .pt-del:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .pt-add {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
+  }
+
+  .pt-add :global(.field) {
+    flex: 1;
+    min-width: 200px;
   }
 
   .template-item {

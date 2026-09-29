@@ -45,7 +45,8 @@ final class StocksController extends ApiController
             (int) $request->queryParam('warehouse_id', '0'),
             $this->filters($request),
             (int) $request->queryParam('page', '1'),
-            (int) $request->queryParam('per_page', '50')
+            (int) $request->queryParam('per_page', '50'),
+            (int) $request->queryParam('client_id', '0')
         ));
     }
 
@@ -131,6 +132,7 @@ final class StocksController extends ApiController
             'qty' => $request->queryParam('qty', ''),
             'sort' => (string) $request->queryParam('sort', ''),
             'show_zero' => (string) $request->queryParam('show_zero', ''),
+            'group_id' => (int) $request->queryParam('group_id', '0'),
         ];
     }
 }

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
-  import { createRequest, getRequest, listClients, type CreateRequestItem } from '../lib/api/requests';
+  import { createRequest, getRequest, listClients, previewRequestPrices, type CreateRequestItem } from '../lib/api/requests';
   import { getClientCard } from '../lib/api/clients';
   import { listLevels } from '../lib/api/stocks';
   import { createDraft, deleteDraft, getDraft, updateDraft } from '../lib/api/drafts';
@@ -11,6 +11,7 @@
   import { cart } from '../lib/stores/cart.svelte';
   import { router } from '../lib/router.svelte';
   import { ITEMS_SORT_OPTIONS, sortItems, type ItemsSortKey } from '../lib/items-sort';
+  import { formatPrice } from '../lib/format';
   import Button from '../lib/components/ui/Button.svelte';
   import Icon from '../lib/components/ui/Icon.svelte';
   import Input from '../lib/components/ui/Input.svelte';
@@ -36,6 +37,14 @@
   let lastSaved = $state('');
   let submitting = $state(false);
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  let priceRows = $state<{ price: number | null; sum: number | null }[]>([]);
+  let priceTotal = $state<number | null>(null);
+  let priceType = $state<{ id: number; title: string } | null>(null);
+  let previewTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const pricesEnabled = $derived(appSettings.pricesEnabled);
+  const itemsPayload = $derived(JSON.stringify(itemRows));
 
   type PickedClient = {
     id: number;
@@ -114,10 +123,70 @@
     saveTimer = setTimeout(() => void autoSave(payload), 1500);
   });
 
+  $effect(() => {
+    const payload = itemsPayload;
+    void clientId;
+    void pricesEnabled;
+
+    if (previewTimer !== null) {
+      clearTimeout(previewTimer);
+      previewTimer = null;
+    }
+
+    if (!pricesEnabled) {
+      priceRows = [];
+      priceTotal = null;
+      priceType = null;
+
+      return;
+    }
+
+    if (draftLoading || submitting) {
+      return;
+    }
+
+    previewTimer = setTimeout(() => void refreshPrices(payload), 350);
+  });
+
+  async function refreshPrices(payload: string): Promise<void> {
+    const rows = JSON.parse(payload) as CreateRequestItem[];
+
+    if (rows.length === 0) {
+      priceRows = [];
+      priceTotal = 0;
+      priceType = null;
+
+      return;
+    }
+
+    try {
+      const preview = await previewRequestPrices(rows, clientId);
+
+      if (!preview.enabled) {
+        priceRows = [];
+        priceTotal = null;
+        priceType = null;
+
+        return;
+      }
+
+      priceRows = preview.items;
+      priceTotal = preview.total;
+      priceType = preview.type;
+    } catch {
+      // предпросмотр цен не критичен: сервер пересчитает цены при создании заявки
+    }
+  }
+
   onDestroy(() => {
     if (saveTimer !== null) {
       clearTimeout(saveTimer);
       saveTimer = null;
+    }
+
+    if (previewTimer !== null) {
+      clearTimeout(previewTimer);
+      previewTimer = null;
     }
 
     if (clientTimer !== null) {
@@ -651,6 +720,8 @@
           {:else}
             <div class="item-rows">
               {#each sortItems(itemRows, itemsSort) as row (itemRows.indexOf(row))}
+                {@const rowIndex = itemRows.indexOf(row)}
+                {@const rowPrice = priceRows[rowIndex]}
                 <div class="item-row" class:stock-error={stockError(row)}>
                   <div class="ir-main">
                     <span class="ir-name">{row.name}</span>
@@ -686,6 +757,12 @@
                     </button>
                   </div>
                   {#if row.unit}<span class="ir-unit">{row.unit}</span>{/if}
+                  {#if pricesEnabled}
+                    <span class="ir-price" class:missing={!rowPrice || rowPrice.price === null}>
+                      {formatPrice(rowPrice?.price ?? null)}
+                    </span>
+                    <span class="ir-sum">{formatPrice(rowPrice?.sum ?? null)}</span>
+                  {/if}
                   <button
                     type="button"
                     class="ir-del"
@@ -699,6 +776,13 @@
             </div>
           {/if}
         </div>
+
+        {#if pricesEnabled && itemRows.length > 0}
+          <div class="price-total">
+            <span class="muted">Цены: {priceType?.title ?? '—'}</span>
+            <strong>Итого: {formatPrice(priceTotal)}</strong>
+          </div>
+        {/if}
 
         {#if hasStockErrors}
           <div class="alert">
@@ -735,6 +819,7 @@
   <ItemsPicker
     open={pickerOpen}
     items={itemRows}
+    clientId={clientId}
     onclose={() => (pickerOpen = false)}
     onchange={(next) => (itemRows = next)}
   />
@@ -1066,6 +1151,36 @@
     font-size: 13px;
   }
 
+  .ir-price,
+  .ir-sum {
+    min-width: 92px;
+    text-align: right;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+
+  .ir-sum {
+    font-weight: 600;
+  }
+
+  .ir-price.missing {
+    color: var(--muted);
+  }
+
+  .price-total {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    padding: 8px 0 0;
+    border-top: 1px dashed var(--border);
+  }
+
+  .price-total strong {
+    font-size: 16px;
+  }
+
   .ir-del {
     display: inline-flex;
     align-items: center;
@@ -1138,4 +1253,14 @@
     margin-bottom: var(--space-3);
   }
 
+  @media (max-width: 560px) {
+    .item-row {
+      flex-wrap: wrap;
+    }
+
+    .ir-price,
+    .ir-sum {
+      min-width: 0;
+    }
+  }
 </style>

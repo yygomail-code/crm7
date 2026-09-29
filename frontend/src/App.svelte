@@ -13,6 +13,7 @@
   import Requests from './views/Requests.svelte';
   import RequestCard from './views/RequestCard.svelte';
   import RequestNew from './views/RequestNew.svelte';
+  import Cart from './views/Cart.svelte';
   import Clients from './views/Clients.svelte';
   import ClientCard from './views/ClientCard.svelte';
   import Chat from './views/Chat.svelte';
@@ -74,6 +75,8 @@
       <Requests />
     {:else if route === '/requests/new'}
       <RequestNew />
+    {:else if route === '/cart'}
+      <Cart />
     {:else if requestMatch}
       <RequestCard id={Number(requestMatch.id)} />
     {:else if route === '/clients'}

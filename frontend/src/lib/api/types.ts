@@ -29,6 +29,7 @@ export interface UserProfile {
   phone: string;
   company: string;
   position: string;
+  price_type_id: number | null;
 }
 
 export interface LoginResponse {
@@ -299,6 +300,7 @@ export interface RequestAssignment {
 export interface RequestDetail {
   request: RequestItem;
   items: RequestItemRow[];
+  prices: { enabled: boolean; type: { id: number; title: string } | null; total: number | null };
   history: RequestHistoryItem[];
   comments: RequestComment[];
   assignments: RequestAssignment[];
@@ -372,6 +374,8 @@ export interface SystemSettings {
   email_export_enabled: boolean;
   stock_reserve_enabled: boolean;
   stock_allow_zero: boolean;
+  prices_enabled: boolean;
+  groups_enabled: boolean;
   spf_steps: string[];
 }
 
@@ -400,6 +404,31 @@ export interface AdminUser {
   reg_state: string;
   created_at: string;
   last_seen_at: string | null;
+  price_type_id: number | null;
+  price_type_title: string | null;
+}
+
+export interface PriceType {
+  id: number;
+  code: string;
+  title: string;
+  sort: number;
+  users_count?: number;
+  prices_count?: number;
+}
+
+export interface ItemGroup {
+  id: number;
+  title: string;
+  sort: number;
+  positions_count?: number;
+}
+
+export interface PricePreview {
+  enabled: boolean;
+  type: { id: number; title: string } | null;
+  items: { price: number | null; sum: number | null }[];
+  total: number | null;
 }
 
 export interface RoleInfo {
@@ -469,6 +498,10 @@ export interface StockLevel {
   quantity: number;
   description: string;
   actual_date: string | null;
+  price: number | null;
+  prices?: Record<string, number>;
+  group_id: number | null;
+  group_title: string;
 }
 
 export interface StockItemPayload {
@@ -476,6 +509,8 @@ export interface StockItemPayload {
   unit: string;
   quantity: number;
   description: string;
+  prices?: Record<string, number | null>;
+  group_id?: number | null;
 }
 
 export interface StockImportJob {
@@ -569,6 +604,9 @@ export interface RequestItemRow {
   unit: string;
   description: string;
   quantity: number;
+  price: number | null;
+  price_type_id: number | null;
+  sum: number | null;
 }
 
 export interface ViewEntry {

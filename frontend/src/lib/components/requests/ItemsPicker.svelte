@@ -1,8 +1,10 @@
 <script lang="ts">
   import { listLevels, listWarehouses } from '../../api/stocks';
+  import { listItemGroups } from '../../api/groups';
   import type { CreateRequestItem } from '../../api/requests';
-  import type { StockLevel } from '../../api/types';
+  import type { ItemGroup, StockLevel } from '../../api/types';
   import { appSettings } from '../../stores/app-settings.svelte';
+  import { formatPrice, stockQuantityText } from '../../format';
   import Button from '../ui/Button.svelte';
   import Modal from '../ui/Modal.svelte';
   import Spinner from '../ui/Spinner.svelte';
@@ -12,9 +14,10 @@
     items: CreateRequestItem[];
     onclose: () => void;
     onchange?: (items: CreateRequestItem[]) => void;
+    clientId?: number;
   }
 
-  let { open, items, onclose, onchange }: Props = $props();
+  let { open, items, onclose, onchange, clientId = 0 }: Props = $props();
 
   let warehouses = $state<{ id: number; name: string; positions: number }[]>([]);
   let activeId = $state(0);
@@ -31,6 +34,27 @@
   let tabsOverflow = $state(false);
   let tabsAtStart = $state(true);
   let tabsAtEnd = $state(false);
+  let loadedClientId = -1;
+  let groups = $state<ItemGroup[]>([]);
+  let groupFilter = $state(0);
+
+  const pricesEnabled = $derived(appSettings.pricesEnabled);
+  const groupsEnabled = $derived(appSettings.groupsEnabled);
+
+  $effect(() => {
+    if (groupsEnabled && groups.length === 0) {
+      void loadGroups();
+    }
+  });
+
+  async function loadGroups(): Promise<void> {
+    try {
+      const data = await listItemGroups();
+      groups = data.items;
+    } catch {
+      groups = [];
+    }
+  }
 
   $effect(() => {
     if (!open) {
@@ -45,10 +69,21 @@
     }
   });
 
+  $effect(() => {
+    void clientId;
+
+    if (open && initialized && loadedClientId !== clientId) {
+      loadedClientId = clientId;
+      void load(1, false);
+    }
+  });
+
   async function init(): Promise<void> {
+    loadedClientId = clientId;
     draft = items.map((item) => ({ ...item }));
     searchInput = '';
     query = '';
+    groupFilter = 0;
 
     if (warehouses.length === 0) {
       try {
@@ -86,9 +121,14 @@
     try {
       const result = await listLevels(
         activeId,
-        { q: query, show_zero: appSettings.allowZeroStock },
+        {
+          q: query,
+          show_zero: appSettings.allowZeroStock,
+          group_id: groupFilter > 0 ? groupFilter : undefined
+        },
         targetPage,
-        50
+        50,
+        clientId
       );
 
       levels = append ? [...levels, ...result.items] : result.items;
@@ -119,6 +159,10 @@
   async function searchSubmit(): Promise<void> {
     query = searchInput.trim();
 
+    await load(1, false);
+  }
+
+  async function changeGroup(): Promise<void> {
     await load(1, false);
   }
 
@@ -314,6 +358,19 @@
       }}
     >
       <input class="text-input" bind:value={searchInput} placeholder="Поиск товара" />
+      {#if groupsEnabled && groups.length > 0}
+        <select
+          class="group-select"
+          bind:value={groupFilter}
+          aria-label="Группа позиций"
+          onchange={() => void changeGroup()}
+        >
+          <option value={0}>Все группы</option>
+          {#each groups as group (group.id)}
+            <option value={group.id}>{group.title}</option>
+          {/each}
+        </select>
+      {/if}
       <Button type="submit" variant="ghost">Найти</Button>
     </form>
 
@@ -340,9 +397,16 @@
               {level.name}
             </button>
             <span class="pr-stock">
-              на складе: {level.quantity.toLocaleString('ru-RU', { maximumFractionDigits: 3 })}
-              {#if level.unit}{level.unit}{/if}
+              на складе: {stockQuantityText(level.quantity, level.unit)}
             </span>
+            {#if groupsEnabled && level.group_title}
+              <span class="pr-group">{level.group_title}</span>
+            {/if}
+            {#if pricesEnabled}
+              <span class="pr-price" class:missing={level.price === null}>
+                {formatPrice(level.price)}
+              </span>
+            {/if}
             {#if picked > 0}
               <span class="pr-controls">
                 <button
@@ -596,6 +660,43 @@
     color: var(--muted);
     font-size: 12px;
     white-space: nowrap;
+  }
+
+  .pr-group {
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 160px;
+  }
+
+  .group-select {
+    flex: 0 0 auto;
+    max-width: 190px;
+    padding: 9px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+  }
+
+  .group-select:focus {
+    border-color: var(--primary);
+  }
+
+  .pr-price {
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .pr-price.missing {
+    color: var(--muted);
+    font-weight: 400;
   }
 
   .pr-controls {

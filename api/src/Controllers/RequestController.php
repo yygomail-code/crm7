@@ -63,6 +63,13 @@ final class RequestController extends ApiController
         return Response::ok($result, 201);
     }
 
+    public function preview(Request $request): Response
+    {
+        [$user] = $this->context($request);
+
+        return Response::ok($this->service->preview($user, $request->bodyAll()));
+    }
+
     public function transition(Request $request, array $params): Response
     {
         [$user, $capabilities] = $this->context($request);

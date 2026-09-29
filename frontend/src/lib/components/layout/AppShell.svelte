@@ -8,6 +8,7 @@
   import Icon from '../ui/Icon.svelte';
   import { auth } from '../../stores/auth.svelte';
   import { avatars } from '../../stores/avatar.svelte';
+  import { appSettings } from '../../stores/app-settings.svelte';
   import { cart } from '../../stores/cart.svelte';
   import { router } from '../../router.svelte';
   import Logo from '../ui/Logo.svelte';
@@ -207,13 +208,15 @@
           <span class="bell-badge">{unread > 99 ? '99+' : unread}</span>
         {/if}
       </button>
-      {#if cart.count > 0}
+      {#if appSettings.salesEnabled}
         <button
           type="button"
-          class="bell has-new"
-          aria-label={`Заявка из склада: ${cart.count} позиций`}
-          title="Создать заявку из выбранных позиций"
-          onclick={() => router.navigate('/requests/new?from=cart')}
+          class="bell"
+          class:has-new={cart.count > 0}
+          class:current={path === '/cart'}
+          aria-label={cart.count > 0 ? `Корзина: ${cart.count} позиций` : 'Корзина'}
+          title="Корзина"
+          onclick={() => router.navigate('/cart')}
         >
           <svg
             viewBox="0 0 24 24"
@@ -230,7 +233,9 @@
             <circle cx="10" cy="20" r="1" />
             <circle cx="18" cy="20" r="1" />
           </svg>
-          <span class="bell-badge">{cart.count > 99 ? '99+' : cart.count}</span>
+          {#if cart.count > 0}
+            <span class="bell-badge">{cart.count > 99 ? '99+' : cart.count}</span>
+          {/if}
         </button>
       {/if}
       <button

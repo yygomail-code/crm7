@@ -314,6 +314,7 @@ final class UserRepository
             'phone' => (string) ($row['PHONE'] ?? ''),
             'company' => (string) ($row['COMPANY'] ?? ''),
             'position' => (string) ($row['DOLGNOST'] ?? ''),
+            'price_type_id' => isset($row['price_type_id']) && $row['price_type_id'] !== null ? (int) $row['price_type_id'] : null,
         ];
     }
 }

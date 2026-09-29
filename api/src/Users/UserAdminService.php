@@ -7,6 +7,7 @@ namespace App\Users;
 use App\Audit\AuditService;
 use App\Core\Database;
 use App\Http\HttpException;
+use App\Repositories\PriceRepository;
 use App\Repositories\TokenRepository;
 use App\Repositories\UserHistoryRepository;
 use App\Repositories\UserRepository;
@@ -23,7 +24,8 @@ final class UserAdminService
         private readonly UserRepository $users = new UserRepository(),
         private readonly UserHistoryRepository $history = new UserHistoryRepository(),
         private readonly TokenRepository $tokens = new TokenRepository(),
-        private readonly AuditService $audit = new AuditService()
+        private readonly AuditService $audit = new AuditService(),
+        private readonly PriceRepository $prices = new PriceRepository()
     ) {
     }
 
@@ -59,8 +61,10 @@ final class UserAdminService
         $stmt = Database::pdo()->prepare(
             'SELECT u.ID AS id, u.LOGIN AS login, u.FULL_NAME AS name, u.EMAIL AS email, u.PHONE AS phone,
                     u.COMPANY AS company, u.INN AS inn, u.DOLGNOST AS position, u.LEVEL AS level,
-                    u.ACTIVE AS active, u.reg_state, u.TIME_ADD AS created_at, u.TIME_ACTIVE AS last_seen_at
+                    u.ACTIVE AS active, u.reg_state, u.TIME_ADD AS created_at, u.TIME_ACTIVE AS last_seen_at,
+                    u.price_type_id AS price_type_id, pt.TITLE AS price_type_title
              FROM users u
+             LEFT JOIN price_types pt ON pt.ID = u.price_type_id
              WHERE ' . $whereSql . '
              ORDER BY u.LEVEL DESC, u.FULL_NAME ASC
              LIMIT ' . max(1, min(100, $perPage)) . ' OFFSET ' . $offset
@@ -81,6 +85,8 @@ final class UserAdminService
             'reg_state' => (string) ($row['reg_state'] ?? 'active'),
             'created_at' => (string) ($row['created_at'] ?? ''),
             'last_seen_at' => $row['last_seen_at'] !== null ? (string) $row['last_seen_at'] : null,
+            'price_type_id' => $row['price_type_id'] !== null ? (int) $row['price_type_id'] : null,
+            'price_type_title' => $row['price_type_title'] !== null ? (string) $row['price_type_title'] : null,
         ], $stmt->fetchAll() ?: []);
 
         $countStmt = Database::pdo()->prepare('SELECT COUNT(*) FROM users u WHERE ' . $whereSql);
@@ -101,6 +107,7 @@ final class UserAdminService
         $position = trim((string) ($input['position'] ?? ''));
         $level = (int) ($input['level'] ?? 5);
         $password = (string) ($input['password'] ?? '');
+        $priceTypeId = $this->normalizePriceTypeId($input['price_type_id'] ?? null);
 
         if (mb_strlen($name) < 3) {
             throw new HttpException(422, 'validation_error', 'Укажите ФИО');
@@ -145,8 +152,8 @@ final class UserAdminService
 
         $pdo = Database::pdo();
         $stmt = $pdo->prepare(
-            "INSERT INTO users (ACTIVE, LOGIN, PASSWORD, LEVEL, FULL_NAME, STATUS, COMPANY, INN, PHONE, EMAIL, DOLGNOST, reg_state)
-             VALUES ('Y', ?, ?, ?, ?, 'Y', ?, ?, ?, ?, ?, 'active')"
+            "INSERT INTO users (ACTIVE, LOGIN, PASSWORD, LEVEL, FULL_NAME, STATUS, COMPANY, INN, PHONE, EMAIL, DOLGNOST, reg_state, price_type_id)
+             VALUES ('Y', ?, ?, ?, ?, 'Y', ?, ?, ?, ?, ?, 'active', ?)"
         );
         $stmt->execute([
             $email,
@@ -158,6 +165,7 @@ final class UserAdminService
             $phone !== '' ? $phone : null,
             $email,
             $position !== '' ? $position : null,
+            $priceTypeId,
         ]);
 
         $userId = (int) $pdo->lastInsertId();
@@ -186,6 +194,9 @@ final class UserAdminService
         $inn = preg_replace('/\s+/', '', (string) ($input['inn'] ?? (string) ($user['INN'] ?? ''))) ?? '';
         $position = trim((string) ($input['position'] ?? (string) ($user['DOLGNOST'] ?? '')));
         $level = isset($input['level']) ? (int) $input['level'] : (int) $user['LEVEL'];
+        $priceTypeId = array_key_exists('price_type_id', $input)
+            ? $this->normalizePriceTypeId($input['price_type_id'])
+            : ($user['price_type_id'] !== null ? (int) $user['price_type_id'] : null);
 
         if (mb_strlen($name) < 3) {
             throw new HttpException(422, 'validation_error', 'Укажите ФИО');
@@ -222,7 +233,7 @@ final class UserAdminService
         }
 
         $stmt = Database::pdo()->prepare(
-            'UPDATE users SET FULL_NAME = ?, PHONE = ?, COMPANY = ?, INN = ?, DOLGNOST = ?, LEVEL = ? WHERE ID = ?'
+            'UPDATE users SET FULL_NAME = ?, PHONE = ?, COMPANY = ?, INN = ?, DOLGNOST = ?, LEVEL = ?, price_type_id = ? WHERE ID = ?'
         );
         $stmt->execute([
             $name,
@@ -231,12 +242,13 @@ final class UserAdminService
             $inn !== '' ? $inn : null,
             $position !== '' ? $position : null,
             $level,
+            $priceTypeId,
             $userId,
         ]);
 
         $this->history->add($userId, 'updated', (int) $actor['ID'], 'Изменён администратором');
 
-        return ['id' => $userId, 'level' => $level];
+        return ['id' => $userId, 'level' => $level, 'price_type_id' => $priceTypeId];
     }
 
     public function block(array $actor, array $capabilities, int $userId, bool $block): array
@@ -418,6 +430,21 @@ final class UserAdminService
         if (!in_array('users.manage', $capabilities, true)) {
             throw new HttpException(403, 'forbidden', 'Недостаточно прав для управления пользователями');
         }
+    }
+
+    private function normalizePriceTypeId(mixed $value): ?int
+    {
+        if ($value === null || $value === '' || $value === 0 || $value === '0') {
+            return null;
+        }
+
+        $id = (int) $value;
+
+        if ($this->prices->findType($id) === null) {
+            throw new HttpException(422, 'validation_error', 'Неизвестный тип цен');
+        }
+
+        return $id;
     }
 
     private function assertKeepsAdmin(array $target, string $action): void
