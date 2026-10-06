@@ -34,13 +34,13 @@
   import { formatDateTime } from '../lib/format';
   import { auditLabel, entityLabel } from '../lib/labels';
 
-  const levelTitles: Record<number, string> = {
+  const levelTitles = $derived<Record<number, string>>({
     90: 'Сисадмин',
     50: 'Администратор',
     10: 'Менеджер',
-    5: 'Клиент',
+    5: appSettings.clientLabel,
     1: 'Гость'
-  };
+  });
 
   const adminCoreCapabilities = ['users.manage', 'roles.manage', 'settings.manage'];
 
@@ -652,7 +652,7 @@
             <option value={90}>Сисадмин</option>
             <option value={50}>Администратор</option>
             <option value={10}>Менеджер</option>
-            <option value={5}>Клиент</option>
+                <option value={5}>{appSettings.clientLabel}</option>
           </select>
         </label>
 
@@ -689,7 +689,7 @@
           <label>
             <span>Роль</span>
             <select bind:value={form.level} disabled={!canManageRoles}>
-              <option value={5}>Клиент</option>
+                  <option value={5}>{appSettings.clientLabel}</option>
               <option value={10}>Менеджер</option>
               <option value={50}>Администратор</option>
               <option value={90}>Сисадмин</option>
@@ -727,7 +727,7 @@
           <label>
             <span>Роль</span>
             <select bind:value={editForm.level} disabled={!canManageRoles}>
-              <option value={5}>Клиент</option>
+                  <option value={5}>{appSettings.clientLabel}</option>
               <option value={10}>Менеджер</option>
               <option value={50}>Администратор</option>
               <option value={90}>Сисадмин</option>

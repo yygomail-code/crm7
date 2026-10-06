@@ -30,6 +30,20 @@
 
   const path = $derived(router.current.path);
 
+  $effect(() => {
+    if (!appSettings.loaded) {
+      return;
+    }
+
+    if (!appSettings.requestsEnabled && path.startsWith('/requests')) {
+      router.navigate('/stocks');
+    } else if (!appSettings.substitutionsEnabled && path === '/substitutions') {
+      router.navigate('/stocks');
+    } else if (!appSettings.cartEnabled && path === '/cart') {
+      router.navigate('/stocks');
+    }
+  });
+
   const showClients = $derived(auth.can('clients.view.all') || auth.can('clients.view.own'));
 
   const showSettings = $derived(auth.can('settings.manage'));
@@ -81,17 +95,19 @@
     <div class="left">
       <a class="brand" href="#/requests">
         <Logo size={26} />
-        <span>CRM7</span>
+        <span>{appSettings.appTitle}</span>
       </a>
       <nav class="desktop-nav" class:many={navCount > 6}>
         <a href="#/stocks" class:active={path === '/stocks'} title="Складские остатки">
           <Icon name="stocks" size={20} />
           <span class="nav-label">Складские остатки</span>
         </a>
-        <a href="#/requests" class:active={path.startsWith('/requests')} title="Заявки">
-          <Icon name="requests" size={20} />
-          <span class="nav-label">Заявки</span>
-        </a>
+        {#if appSettings.requestsEnabled}
+          <a href="#/requests" class:active={path.startsWith('/requests')} title="Заявки">
+            <Icon name="requests" size={20} />
+            <span class="nav-label">Заявки</span>
+          </a>
+        {/if}
         {#if showReports}
           <a href="#/reports" class:active={path === '/reports'} title="Отчёты">
             <Icon name="reports" size={20} />
@@ -110,7 +126,7 @@
             <span class="nav-label">Клиенты</span>
           </a>
         {/if}
-        {#if showSubstitutions}
+        {#if showSubstitutions && appSettings.substitutionsEnabled}
           <a href="#/substitutions" class:active={path === '/substitutions'} title="Замещения">
             <Icon name="substitutions" size={20} />
             <span class="nav-label">Замещения</span>
@@ -208,7 +224,7 @@
           <span class="bell-badge">{unread > 99 ? '99+' : unread}</span>
         {/if}
       </button>
-      {#if appSettings.salesEnabled}
+      {#if appSettings.salesEnabled && appSettings.cartEnabled}
         <button
           type="button"
           class="bell"

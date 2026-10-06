@@ -18,14 +18,18 @@
   let loading = $state(false);
   let demoMode = $state(false);
   let demoAccounts = $state<DemoAccount[]>([]);
+  let appTitle = $state('CRM7');
 
   onMount(async () => {
     try {
-      const data = await apiRequest<{ demo_mode: boolean; demo_accounts: DemoAccount[] }>(
-        '/settings/public'
-      );
+      const data = await apiRequest<{
+        demo_mode: boolean;
+        demo_accounts: DemoAccount[];
+        app_title?: string;
+      }>('/settings/public');
       demoMode = data.demo_mode === true;
       demoAccounts = Array.isArray(data.demo_accounts) ? data.demo_accounts : [];
+      appTitle = (data.app_title || 'CRM7').trim() || 'CRM7';
     } catch {
       demoMode = false;
       demoAccounts = [];
@@ -56,7 +60,7 @@
 
 <div class="wrap">
   <form class="card" onsubmit={submit}>
-    <h1>CRM7</h1>
+    <h1>{appTitle}</h1>
     <p class="hint">Вход в систему</p>
 
     <Input label="Логин" bind:value={login} autocomplete="username" name="login" />

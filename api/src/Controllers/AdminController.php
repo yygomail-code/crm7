@@ -44,6 +44,12 @@ final class AdminController extends ApiController
         $stockAllowZero = (bool) $request->input('stock_allow_zero', false);
         $pricesEnabled = (bool) $request->input('prices_enabled', false);
         $groupsEnabled = (bool) $request->input('groups_enabled', false);
+        $requestsEnabled = (bool) $request->input('requests_enabled', true);
+        $cartEnabled = (bool) $request->input('cart_enabled', true);
+        $substitutionsEnabled = (bool) $request->input('substitutions_enabled', true);
+        $managerAssignEnabled = (bool) $request->input('manager_assign_enabled', true);
+        $appTitle = mb_substr(trim((string) $request->input('app_title', '')), 0, 60);
+        $clientLabel = mb_substr(trim((string) $request->input('client_label', '')), 0, 40);
 
         $this->settings->many([
             'sla.reaction_hours' => (string) $reaction,
@@ -55,6 +61,12 @@ final class AdminController extends ApiController
             'stock.allow_zero' => $stockAllowZero ? '1' : '0',
             'prices.enabled' => $pricesEnabled ? '1' : '0',
             'groups.enabled' => $groupsEnabled ? '1' : '0',
+            'module.requests' => $requestsEnabled ? '1' : '0',
+            'module.cart' => $cartEnabled ? '1' : '0',
+            'module.substitutions' => $substitutionsEnabled ? '1' : '0',
+            'module.manager_assign' => $managerAssignEnabled ? '1' : '0',
+            'branding.title' => $appTitle,
+            'branding.client_label' => $clientLabel,
         ]);
 
         return Response::ok($this->systemSettingsPayload());
@@ -72,6 +84,12 @@ final class AdminController extends ApiController
             'stock_allow_zero' => $this->settings->allowZeroStock(),
             'prices_enabled' => $this->settings->pricesEnabled(),
             'groups_enabled' => $this->settings->groupsEnabled(),
+            'requests_enabled' => $this->settings->requestsEnabled(),
+            'cart_enabled' => $this->settings->cartEnabled(),
+            'substitutions_enabled' => $this->settings->substitutionsEnabled(),
+            'manager_assign_enabled' => $this->settings->managerAssignEnabled(),
+            'app_title' => $this->settings->appTitle(),
+            'client_label' => $this->settings->clientLabel(),
             'spf_steps' => [
                 'SPF: добавьте в DNS TXT-запись домена с серверами отправки (v=spf1 …)',
                 'DKIM: включите подпись в панели почтового провайдера и опубликуйте публичный ключ',

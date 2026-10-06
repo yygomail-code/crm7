@@ -8,6 +8,12 @@ interface AppSettingsResponse {
   stock_allow_zero: boolean;
   prices_enabled: boolean;
   groups_enabled: boolean;
+  requests_enabled: boolean;
+  cart_enabled: boolean;
+  substitutions_enabled: boolean;
+  manager_assign_enabled: boolean;
+  app_title: string;
+  client_label: string;
   demo_mode: boolean;
 }
 
@@ -23,6 +29,18 @@ class AppSettingsStore {
   pricesEnabled = $state(false);
 
   groupsEnabled = $state(false);
+
+  requestsEnabled = $state(true);
+
+  cartEnabled = $state(true);
+
+  substitutionsEnabled = $state(true);
+
+  managerAssignEnabled = $state(true);
+
+  appTitle = $state('CRM7');
+
+  clientLabel = $state('Клиент');
 
   demoMode = $state(false);
 
@@ -51,6 +69,12 @@ class AppSettingsStore {
       this.allowZeroStock = data.stock_allow_zero === true;
       this.pricesEnabled = data.prices_enabled === true;
       this.groupsEnabled = data.groups_enabled === true;
+      this.requestsEnabled = data.requests_enabled !== false;
+      this.cartEnabled = data.cart_enabled !== false;
+      this.substitutionsEnabled = data.substitutions_enabled !== false;
+      this.managerAssignEnabled = data.manager_assign_enabled !== false;
+      this.appTitle = (data.app_title || 'CRM7').trim() || 'CRM7';
+      this.clientLabel = (data.client_label || 'Клиент').trim() || 'Клиент';
       this.demoMode = data.demo_mode === true;
       this.loadedFor = userId;
     } catch {
@@ -66,7 +90,13 @@ class AppSettingsStore {
     stockReserveEnabled = this.stockReserveEnabled,
     allowZeroStock = this.allowZeroStock,
     pricesEnabled = this.pricesEnabled,
-    groupsEnabled = this.groupsEnabled
+    groupsEnabled = this.groupsEnabled,
+    requestsEnabled = this.requestsEnabled,
+    cartEnabled = this.cartEnabled,
+    substitutionsEnabled = this.substitutionsEnabled,
+    managerAssignEnabled = this.managerAssignEnabled,
+    appTitle = this.appTitle,
+    clientLabel = this.clientLabel
   ): void {
     this.salesEnabled = salesEnabled;
     this.emailExportEnabled = emailExportEnabled;
@@ -74,6 +104,12 @@ class AppSettingsStore {
     this.allowZeroStock = allowZeroStock;
     this.pricesEnabled = pricesEnabled;
     this.groupsEnabled = groupsEnabled;
+    this.requestsEnabled = requestsEnabled;
+    this.cartEnabled = cartEnabled;
+    this.substitutionsEnabled = substitutionsEnabled;
+    this.managerAssignEnabled = managerAssignEnabled;
+    this.appTitle = appTitle;
+    this.clientLabel = clientLabel;
   }
 
   reset(): void {
@@ -83,6 +119,12 @@ class AppSettingsStore {
     this.allowZeroStock = false;
     this.pricesEnabled = false;
     this.groupsEnabled = false;
+    this.requestsEnabled = true;
+    this.cartEnabled = true;
+    this.substitutionsEnabled = true;
+    this.managerAssignEnabled = true;
+    this.appTitle = 'CRM7';
+    this.clientLabel = 'Клиент';
     this.demoMode = false;
     this.loadedFor = null;
   }

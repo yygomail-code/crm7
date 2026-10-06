@@ -151,7 +151,9 @@
   let stockSort = $state(initialStockFilters.sort);
   let stockGroup = $state(Number(initialStockFilters.group_id) || 0);
 
-  const canCreate = $derived(auth.can('requests.create'));
+  const canCreate = $derived(
+    auth.can('requests.create') && appSettings.salesEnabled && appSettings.cartEnabled && appSettings.requestsEnabled
+  );
   const pages = $derived(Math.max(1, Math.ceil(total / perPage)));
   const pricesEnabled = $derived(appSettings.pricesEnabled);
   const groupsEnabled = $derived(appSettings.groupsEnabled);

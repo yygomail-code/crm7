@@ -62,4 +62,38 @@ final class SettingsRepository
     {
         return $this->get('stock.allow_zero') === '1';
     }
+
+    public function requestsEnabled(): bool
+    {
+        return $this->get('module.requests') !== '0';
+    }
+
+    public function cartEnabled(): bool
+    {
+        return $this->get('module.cart') !== '0';
+    }
+
+    public function substitutionsEnabled(): bool
+    {
+        return $this->get('module.substitutions') !== '0';
+    }
+
+    public function managerAssignEnabled(): bool
+    {
+        return $this->get('module.manager_assign') !== '0';
+    }
+
+    public function appTitle(): string
+    {
+        $title = trim((string) $this->get('branding.title'));
+
+        return $title !== '' ? $title : 'CRM7';
+    }
+
+    public function clientLabel(): string
+    {
+        $label = trim((string) $this->get('branding.client_label'));
+
+        return $label !== '' ? $label : 'Клиент';
+    }
 }

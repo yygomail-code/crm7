@@ -27,6 +27,7 @@ use App\Http\HttpException;
 use App\Http\Request;
 use App\Http\Response;
 use App\Http\Router;
+use App\Repositories\SettingsRepository;
 
 require __DIR__ . '/../src/autoload.php';
 
@@ -58,6 +59,32 @@ $basePath = rtrim((string) Config::get('API_BASE_PATH', ''), '/');
 
 if ($basePath !== '' && str_starts_with($request->path, $basePath)) {
     $request = $request->withPath(substr($request->path, strlen($basePath)) ?: '/');
+}
+
+// Отключённые модули: заявки, замещения, назначение менеджера.
+$moduleSettings = new SettingsRepository();
+$moduleGuards = [];
+
+if (!$moduleSettings->requestsEnabled()) {
+    $moduleGuards[] = '#^/requests(/|$)#';
+    $moduleGuards[] = '#^/request-drafts(/|$)#';
+}
+
+if (!$moduleSettings->substitutionsEnabled()) {
+    $moduleGuards[] = '#^/substitutions(/|$)#';
+}
+
+if (!$moduleSettings->managerAssignEnabled()) {
+    $moduleGuards[] = '#^/clients/\d+/(claim|assign|transfer)$#';
+    $moduleGuards[] = '#^/client-transfers/#';
+    $moduleGuards[] = '#^/requests/\d+/(claim|assign)$#';
+}
+
+foreach ($moduleGuards as $guard) {
+    if (preg_match($guard, $request->path) === 1) {
+        Response::error('module_disabled', 'Модуль отключён', 403)->send();
+        exit;
+    }
 }
 
 $router = new Router();

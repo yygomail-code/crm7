@@ -33,6 +33,12 @@ final class AppSettingsController extends ApiController
             'stock_allow_zero' => $this->settings->allowZeroStock(),
             'prices_enabled' => $this->settings->pricesEnabled(),
             'groups_enabled' => $this->settings->groupsEnabled(),
+            'requests_enabled' => $this->settings->requestsEnabled(),
+            'cart_enabled' => $this->settings->cartEnabled(),
+            'substitutions_enabled' => $this->settings->substitutionsEnabled(),
+            'manager_assign_enabled' => $this->settings->managerAssignEnabled(),
+            'app_title' => $this->settings->appTitle(),
+            'client_label' => $this->settings->clientLabel(),
             'demo_mode' => Config::demoMode(),
         ]);
     }
@@ -43,6 +49,7 @@ final class AppSettingsController extends ApiController
 
         return Response::ok([
             'demo_mode' => $demo,
+            'app_title' => $this->settings->appTitle(),
             'demo_accounts' => $demo
                 ? array_map(static fn (array $account): array => [
                     'login' => $account['login'],

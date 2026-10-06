@@ -70,6 +70,12 @@
   let stockAllowZero = $state(false);
   let pricesEnabled = $state(false);
   let groupsEnabled = $state(false);
+  let requestsEnabled = $state(true);
+  let cartEnabled = $state(true);
+  let substitutionsEnabled = $state(true);
+  let managerAssignEnabled = $state(true);
+  let appTitle = $state('CRM7');
+  let clientLabel = $state('Клиент');
 
   let priceTypes = $state<PriceType[]>([]);
   let priceTypeDrafts = $state<Record<number, string>>({});
@@ -115,6 +121,12 @@
       stockAllowZero = system.stock_allow_zero;
       pricesEnabled = system.prices_enabled;
       groupsEnabled = system.groups_enabled;
+      requestsEnabled = system.requests_enabled;
+      cartEnabled = system.cart_enabled;
+      substitutionsEnabled = system.substitutions_enabled;
+      managerAssignEnabled = system.manager_assign_enabled;
+      appTitle = system.app_title;
+      clientLabel = system.client_label;
 
       db = await getDatabaseSettings();
 
@@ -175,7 +187,13 @@ async function saveSystem(): Promise<void> {
       stock_reserve_enabled: stockReserveEnabled,
       stock_allow_zero: stockAllowZero,
       prices_enabled: pricesEnabled,
-      groups_enabled: groupsEnabled
+      groups_enabled: groupsEnabled,
+      requests_enabled: requestsEnabled,
+      cart_enabled: cartEnabled,
+      substitutions_enabled: substitutionsEnabled,
+      manager_assign_enabled: managerAssignEnabled,
+      app_title: appTitle,
+      client_label: clientLabel
     });
 
     slaReaction = String(system.sla_reaction_hours);
@@ -186,13 +204,25 @@ async function saveSystem(): Promise<void> {
     stockAllowZero = system.stock_allow_zero;
     pricesEnabled = system.prices_enabled;
     groupsEnabled = system.groups_enabled;
+    requestsEnabled = system.requests_enabled;
+    cartEnabled = system.cart_enabled;
+    substitutionsEnabled = system.substitutions_enabled;
+    managerAssignEnabled = system.manager_assign_enabled;
+    appTitle = system.app_title;
+    clientLabel = system.client_label;
     appSettings.set(
       system.sales_enabled,
       system.email_export_enabled,
       system.stock_reserve_enabled,
       system.stock_allow_zero,
       system.prices_enabled,
-      system.groups_enabled
+      system.groups_enabled,
+      system.requests_enabled,
+      system.cart_enabled,
+      system.substitutions_enabled,
+      system.manager_assign_enabled,
+      system.app_title,
+      system.client_label
     );
     notice = 'Настройки системы сохранены';
   } catch (cause) {
@@ -600,6 +630,39 @@ async function saveSettings(): Promise<void> {
 
       <p class="hint">
         Письма уходят через очередь: cron-задача <code>php api/bin/cron.php</code> раз в минуту.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Брендинг и модули</h2>
+
+      <div class="grid">
+        <Input label="Название CRM (в шапке и на входе)" bind:value={appTitle} placeholder="CRM7" />
+        <Input label="Название роли «Клиент»" bind:value={clientLabel} placeholder="Клиент" />
+      </div>
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={requestsEnabled} />
+        Модуль «Заявки» (создание и ведение заявок)
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={cartEnabled} />
+        Корзина (добавление позиций и оформление)
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={substitutionsEnabled} />
+        Модуль «Замещения»
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={managerAssignEnabled} />
+        Назначение менеджера клиенту
+      </label>
+
+      <p class="hint">
+        Отключённые модули скрываются в интерфейсе и блокируются на сервере. Данные при этом сохраняются.
       </p>
     </div>
 

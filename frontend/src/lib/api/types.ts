@@ -376,6 +376,12 @@ export interface SystemSettings {
   stock_allow_zero: boolean;
   prices_enabled: boolean;
   groups_enabled: boolean;
+  requests_enabled: boolean;
+  cart_enabled: boolean;
+  substitutions_enabled: boolean;
+  manager_assign_enabled: boolean;
+  app_title: string;
+  client_label: string;
   spf_steps: string[];
 }
 
