@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { auth } from './lib/stores/auth.svelte';
   import { appSettings } from './lib/stores/app-settings.svelte';
+  import { filterPrefs } from './lib/stores/filter-prefs.svelte';
   import { matchRoute, router } from './lib/router.svelte';
   import Spinner from './lib/components/ui/Spinner.svelte';
   import CookieNotice from './lib/components/CookieNotice.svelte';
@@ -41,6 +42,14 @@
   });
 
   $effect(() => {
+    const userId = auth.user?.id ?? null;
+
+    if (auth.isAuthenticated && userId !== null && filterPrefs.loadedFor !== userId) {
+      void filterPrefs.load(userId);
+    }
+  });
+
+  $effect(() => {
     if (auth.isAuthenticated && router.current.path === '/') {
       router.navigate('/requests', true);
     }
@@ -53,7 +62,7 @@
   const userMatch = $derived(matchRoute('/users/:id', route));
 </script>
 
-{#if !auth.ready}
+{#if !auth.ready || (auth.isAuthenticated && filterPrefs.loadedFor !== auth.user?.id)}
   <div class="boot">
     <Spinner size={28} />
   </div>

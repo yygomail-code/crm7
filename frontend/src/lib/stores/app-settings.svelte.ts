@@ -4,6 +4,7 @@ import { auth } from './auth.svelte';
 interface AppSettingsResponse {
   sales_enabled: boolean;
   email_export_enabled: boolean;
+  mail_configured: boolean;
   stock_reserve_enabled: boolean;
   stock_allow_zero: boolean;
   prices_enabled: boolean;
@@ -21,6 +22,8 @@ class AppSettingsStore {
   salesEnabled = $state(true);
 
   emailExportEnabled = $state(true);
+
+  mailConfigured = $state(false);
 
   stockReserveEnabled = $state(false);
 
@@ -65,6 +68,7 @@ class AppSettingsStore {
       const data = await apiRequest<AppSettingsResponse>('/settings/app', { auth: true });
       this.salesEnabled = Boolean(data.sales_enabled);
       this.emailExportEnabled = data.email_export_enabled !== false;
+      this.mailConfigured = data.mail_configured === true;
       this.stockReserveEnabled = data.stock_reserve_enabled === true;
       this.allowZeroStock = data.stock_allow_zero === true;
       this.pricesEnabled = data.prices_enabled === true;
@@ -87,6 +91,7 @@ class AppSettingsStore {
   set(
     salesEnabled: boolean,
     emailExportEnabled = this.emailExportEnabled,
+    mailConfigured = this.mailConfigured,
     stockReserveEnabled = this.stockReserveEnabled,
     allowZeroStock = this.allowZeroStock,
     pricesEnabled = this.pricesEnabled,
@@ -100,6 +105,7 @@ class AppSettingsStore {
   ): void {
     this.salesEnabled = salesEnabled;
     this.emailExportEnabled = emailExportEnabled;
+    this.mailConfigured = mailConfigured;
     this.stockReserveEnabled = stockReserveEnabled;
     this.allowZeroStock = allowZeroStock;
     this.pricesEnabled = pricesEnabled;
@@ -115,6 +121,7 @@ class AppSettingsStore {
   reset(): void {
     this.salesEnabled = true;
     this.emailExportEnabled = true;
+    this.mailConfigured = false;
     this.stockReserveEnabled = false;
     this.allowZeroStock = false;
     this.pricesEnabled = false;

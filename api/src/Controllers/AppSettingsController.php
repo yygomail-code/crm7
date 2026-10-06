@@ -29,6 +29,7 @@ final class AppSettingsController extends ApiController
         return Response::ok([
             'sales_enabled' => $this->settings->salesEnabled(),
             'email_export_enabled' => $this->settings->emailExportEnabled(),
+            'mail_configured' => $this->settings->mailConfigured(),
             'stock_reserve_enabled' => $this->settings->stockReserveEnabled(),
             'stock_allow_zero' => $this->settings->allowZeroStock(),
             'prices_enabled' => $this->settings->pricesEnabled(),

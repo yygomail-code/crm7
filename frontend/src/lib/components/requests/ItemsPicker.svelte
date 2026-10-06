@@ -120,7 +120,7 @@
 
     try {
       const result = await listLevels(
-        activeId,
+        [activeId],
         {
           q: query,
           show_zero: appSettings.allowZeroStock,

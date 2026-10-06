@@ -1,5 +1,14 @@
+import { config } from '../config';
+import { auth } from '../stores/auth.svelte';
 import { apiRequest, apiUpload, downloadFromApi } from './client';
-import type { StockImportJob, StockItemPayload, StockLevel, StockUpdate, StockWarehouse } from './types';
+import type {
+  StockImportJob,
+  StockItemPayload,
+  StockLevel,
+  StockPhoto,
+  StockUpdate,
+  StockWarehouse
+} from './types';
 
 export interface StockFilters {
   q?: string;
@@ -8,6 +17,8 @@ export interface StockFilters {
   sort?: string;
   show_zero?: boolean;
   group_id?: number;
+  group_ids?: number[];
+  no_group?: boolean;
 }
 
 function filterParams(filters: StockFilters): URLSearchParams {
@@ -21,6 +32,8 @@ function filterParams(filters: StockFilters): URLSearchParams {
   if (filters.sort) params.set('sort', filters.sort);
   if (filters.show_zero) params.set('show_zero', '1');
   if (filters.group_id && filters.group_id > 0) params.set('group_id', String(filters.group_id));
+  if (filters.group_ids && filters.group_ids.length > 0) params.set('group_ids', filters.group_ids.join(','));
+  if (filters.no_group) params.set('no_group', '1');
 
   return params;
 }
@@ -37,7 +50,7 @@ export function listWarehouses(): Promise<{
 }
 
 export function listLevels(
-  warehouseId: number,
+  warehouseIds: number[],
   filters: StockFilters,
   page = 1,
   perPage = 50,
@@ -51,9 +64,10 @@ export function listLevels(
   prices?: { enabled: boolean; type: { id: number; title: string } | null };
   groups?: { enabled: boolean };
   warehouse: { id: number; name: string };
+  warehouses?: { id: number; name: string }[];
 }> {
   const params = filterParams(filters);
-  params.set('warehouse_id', String(warehouseId));
+  params.set('warehouse_ids', warehouseIds.join(','));
   params.set('page', String(page));
   params.set('per_page', String(perPage));
 
@@ -104,22 +118,24 @@ export function searchCounts(filters: StockFilters): Promise<{ counts: Record<st
 }
 
 export function exportLevels(
+  warehouseIds: number[],
   filters: StockFilters,
   format: string
 ): Promise<void> {
   const params = filterParams(filters);
-  params.set('warehouse_id', '0');
+  params.set('warehouse_ids', warehouseIds.join(','));
   params.set('format', format);
 
-  return downloadFromApi(`/stocks/export?${params.toString()}`, `Остатки по складам ${new Date().toISOString().slice(0, 10)}.${format}`);
+  return downloadFromApi(`/stocks/export?${params.toString()}`, `Остатки ${new Date().toISOString().slice(0, 10)}.${format}`);
 }
 
 export function emailLevels(
+  warehouseIds: number[],
   filters: StockFilters,
   format: string
 ): Promise<{ sent: boolean; email: string }> {
   const params = filterParams(filters);
-  params.set('warehouse_id', '0');
+  params.set('warehouse_ids', warehouseIds.join(','));
   params.set('format', format);
   params.set('email', '1');
 
@@ -151,4 +167,54 @@ export function importHistory(): Promise<{ jobs: StockImportJob[]; updates: Stoc
   return apiRequest<{ jobs: StockImportJob[]; updates: StockUpdate[] }>('/stocks/import/history', {
     auth: true
   });
+}
+
+export function uploadItemPhoto(levelId: number, file: File): Promise<{ photos: StockPhoto[] }> {
+  const form = new FormData();
+  form.append('file', file);
+
+  return apiUpload<{ photos: StockPhoto[] }>(`/stocks/levels/${levelId}/photos`, form);
+}
+
+export function deleteItemPhoto(id: number): Promise<{ photos: StockPhoto[] }> {
+  return apiRequest<{ photos: StockPhoto[] }>(`/stocks/photos/${id}`, { method: 'DELETE', auth: true });
+}
+
+const photoUrlCache = new Map<number, string | null>();
+
+export async function loadItemPhotoUrl(id: number): Promise<string | null> {
+  if (photoUrlCache.has(id)) {
+    return photoUrlCache.get(id) ?? null;
+  }
+
+  try {
+    const response = await fetch(`${config.apiV2Base}/stocks/photos/${id}`, {
+      headers: auth.token ? { Authorization: `Bearer ${auth.token}` } : {}
+    });
+
+    if (!response.ok) {
+      photoUrlCache.set(id, null);
+
+      return null;
+    }
+
+    const url = URL.createObjectURL(await response.blob());
+    photoUrlCache.set(id, url);
+
+    return url;
+  } catch {
+    photoUrlCache.set(id, null);
+
+    return null;
+  }
+}
+
+export function invalidateItemPhoto(id: number): void {
+  const url = photoUrlCache.get(id);
+
+  if (url) {
+    URL.revokeObjectURL(url);
+  }
+
+  photoUrlCache.delete(id);
 }

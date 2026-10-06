@@ -9,6 +9,7 @@
     listUsers,
     resetUserPassword,
     saveRole,
+    searchLog,
     unblockUser,
     updateUser
   } from '../lib/api/admin';
@@ -20,7 +21,16 @@
     listAdminItemGroups,
     updateItemGroup
   } from '../lib/api/groups';
-  import type { AdminUser, AuditEntry, ItemGroup, PriceType, RoleCapability, RoleInfo } from '../lib/api/types';
+  import type {
+    AdminUser,
+    AuditEntry,
+    ItemGroup,
+    PriceType,
+    RoleCapability,
+    RoleInfo,
+    SearchLogEntry,
+    SearchQueryStat
+  } from '../lib/api/types';
   import { auth } from '../lib/stores/auth.svelte';
   import { appSettings } from '../lib/stores/app-settings.svelte';
   import { router } from '../lib/router.svelte';
@@ -47,7 +57,7 @@
   const userFilterDefaults = { level: 0, state: '' };
   const auditFilterDefaults = { from: '', to: '' };
 
-  let tab = $state<'users' | 'audit' | 'roles' | 'refs' | 'docs' | 'groups'>('users');
+  let tab = $state<'users' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs' | 'groups'>('users');
 
   let users = $state<AdminUser[]>([]);
   let usersTotal = $state(0);
@@ -86,6 +96,11 @@
   let auditFilters = $state({ ...initialAuditFilters });
   let auditDraft = $state({ ...initialAuditFilters });
   let auditLoading = $state(false);
+
+  let searchStats = $state({ total: 0, users: 0, unique_queries: 0 });
+  let searchTop = $state<SearchQueryStat[]>([]);
+  let searchRecent = $state<SearchLogEntry[]>([]);
+  let searchLoading = $state(false);
 
   let roles = $state<RoleInfo[]>([]);
   let roleCatalog = $state<RoleCapability[]>([]);
@@ -419,7 +434,9 @@
     }
   }
 
-  async function openTab(next: 'users' | 'audit' | 'roles' | 'refs' | 'docs' | 'groups'): Promise<void> {
+  async function openTab(
+    next: 'users' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs' | 'groups'
+  ): Promise<void> {
     tab = next;
 
     if (next === 'docs' && docs.length === 0) {
@@ -442,6 +459,10 @@
       await loadAudit();
     }
 
+    if (next === 'searches') {
+      await loadSearches();
+    }
+
     if (next === 'roles') {
       await loadRoles();
     }
@@ -454,6 +475,22 @@
       } catch {
         // некритично
       }
+    }
+  }
+
+  async function loadSearches(): Promise<void> {
+    searchLoading = true;
+    error = '';
+
+    try {
+      const data = await searchLog();
+      searchStats = data.stats;
+      searchTop = data.top;
+      searchRecent = data.recent;
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить журнал поиска';
+    } finally {
+      searchLoading = false;
     }
   }
 
@@ -603,6 +640,9 @@
     {/if}
     {#if canViewAudit}
       <button type="button" class:active={tab === 'audit'} onclick={() => void openTab('audit')}>Журнал аудита</button>
+    {/if}
+    {#if canViewAudit || auth.can('settings.manage')}
+      <button type="button" class:active={tab === 'searches'} onclick={() => void openTab('searches')}>Поиски позиций</button>
     {/if}
     <button type="button" class:active={tab === 'roles'} onclick={() => void openTab('roles')}>Роли</button>
     <button type="button" class:active={tab === 'refs'} onclick={() => void openTab('refs')}>Справочники</button>
@@ -869,6 +909,53 @@
         >
           Вперёд
         </Button>
+      </div>
+    {/if}
+  {/if}
+
+  {#if tab === 'searches'}
+    {#if searchLoading}
+      <div class="center"><Spinner size={26} /></div>
+    {:else}
+      <div class="search-stats">
+        <div class="stat"><span class="value">{searchStats.total}</span><span class="label">запросов всего</span></div>
+        <div class="stat"><span class="value">{searchStats.unique_queries}</span><span class="label">уникальных запросов</span></div>
+        <div class="stat"><span class="value">{searchStats.users}</span><span class="label">пользователей</span></div>
+      </div>
+
+      <div class="search-card">
+        <h2>Частые запросы</h2>
+        {#if searchTop.length === 0}
+          <p class="empty">Пока нет данных</p>
+        {:else}
+          <div class="search-table">
+            {#each searchTop as row (row.query)}
+              <div class="search-row">
+                <span class="query">{row.query}</span>
+                <span class="count">{row.searches}</span>
+                <span class="when">{formatDateTime(row.last_at)}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="search-card">
+        <h2>Последние поиски</h2>
+        {#if searchRecent.length === 0}
+          <p class="empty">Пока нет данных</p>
+        {:else}
+          <div class="search-table">
+            {#each searchRecent as row (row.id)}
+              <div class="search-row">
+                <span class="query">{row.query}</span>
+                <span class="count">{row.results}</span>
+                <span class="who">{row.user_name}</span>
+                <span class="when">{formatDateTime(row.created_at)}</span>
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
   {/if}
@@ -1613,5 +1700,77 @@
     display: grid;
     place-items: center;
     padding: var(--space-6);
+  }
+
+  .search-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+  }
+
+  .search-stats .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
+  .search-stats .value {
+    font-size: 22px;
+    font-weight: 600;
+  }
+
+  .search-stats .label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .search-card {
+    padding: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
+  .search-table {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .search-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+
+  .search-row:last-child {
+    border-bottom: none;
+  }
+
+  .search-row .query {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .search-row .count {
+    font-weight: 600;
+    color: var(--primary);
+    white-space: nowrap;
+  }
+
+  .search-row .who,
+  .search-row .when {
+    color: var(--muted);
+    font-size: 13px;
+    white-space: nowrap;
   }
 </style>

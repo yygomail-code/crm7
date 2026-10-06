@@ -43,6 +43,11 @@ final class SettingsRepository
         return $this->get('mail.export_enabled') !== '0';
     }
 
+    public function mailConfigured(): bool
+    {
+        return $this->get('mail.enabled') === '1' && trim((string) $this->get('mail.host')) !== '';
+    }
+
     public function stockReserveEnabled(): bool
     {
         return $this->get('stock.reserve_enabled') === '1';

@@ -3,13 +3,25 @@
 
   interface Props {
     open: boolean;
-    title: string;
+    title?: string;
+    label?: string;
     wide?: boolean;
+    closeButton?: boolean;
     onclose: () => void;
     children?: Snippet;
   }
 
-  let { open, title, wide = false, onclose, children }: Props = $props();
+  let {
+    open,
+    title = '',
+    label,
+    wide = false,
+    closeButton = true,
+    onclose,
+    children
+  }: Props = $props();
+
+  const hasHead = $derived(title !== '' || closeButton);
 
   function onKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
@@ -23,11 +35,23 @@
 {#if open}
   <div class="overlay">
     <button type="button" class="backdrop" aria-label="Закрыть окно" onclick={onclose}></button>
-    <div class="dialog" class:wide role="dialog" aria-modal="true" aria-label={title}>
-      <div class="dialog-head">
-        <h2>{title}</h2>
-        <button type="button" class="close" aria-label="Закрыть" onclick={onclose}>×</button>
-      </div>
+    <div
+      class="dialog"
+      class:wide
+      role="dialog"
+      aria-modal="true"
+      aria-label={label ?? (title !== '' ? title : 'Окно')}
+    >
+      {#if hasHead}
+        <div class="dialog-head" class:empty={title === ''}>
+          {#if title !== ''}
+            <h2>{title}</h2>
+          {/if}
+          {#if closeButton}
+            <button type="button" class="close" aria-label="Закрыть" onclick={onclose}>×</button>
+          {/if}
+        </div>
+      {/if}
       <div class="dialog-body">
         {@render children?.()}
       </div>
@@ -80,6 +104,10 @@
     margin-bottom: var(--space-3);
   }
 
+  .dialog-head.empty {
+    justify-content: flex-end;
+  }
+
   h2 {
     margin: 0;
     font-size: 16px;
@@ -107,6 +135,8 @@
   }
 
   .dialog-body {
+    flex: 1 1 auto;
+    min-height: 0;
     overflow: auto;
   }
 </style>

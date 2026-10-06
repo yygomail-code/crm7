@@ -1,4 +1,4 @@
-const PREFIX = 'crm.filters.';
+import { FILTER_STORAGE_PREFIX as PREFIX, filterPrefs } from './stores/filter-prefs.svelte';
 
 export function loadFilters<T extends Record<string, unknown>>(key: string, defaults: T): T {
   try {
@@ -40,6 +40,8 @@ export function saveFilters(key: string, value: Record<string, unknown>): void {
   } catch {
     // приватный режим - молча пропускаем
   }
+
+  filterPrefs.write(key, value);
 }
 
 export function clearFilters(key: string): void {
@@ -48,6 +50,8 @@ export function clearFilters(key: string): void {
   } catch {
     // приватный режим - молча пропускаем
   }
+
+  filterPrefs.remove(key);
 }
 
 export function countActive<T extends Record<string, unknown>>(value: T, defaults: T): number {

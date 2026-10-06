@@ -11,6 +11,7 @@ use App\Http\Request;
 use App\Http\Response;
 use App\Mail\MailService;
 use App\Prices\PriceService;
+use App\Repositories\SearchLogRepository;
 use App\Repositories\SettingsRepository;
 
 final class AdminController extends ApiController
@@ -19,7 +20,8 @@ final class AdminController extends ApiController
         private readonly MailService $mail = new MailService(),
         private readonly SettingsRepository $settings = new SettingsRepository(),
         private readonly PriceService $prices = new PriceService(),
-        private readonly ItemGroupService $groups = new ItemGroupService()
+        private readonly ItemGroupService $groups = new ItemGroupService(),
+        private readonly SearchLogRepository $searches = new SearchLogRepository()
     ) {
         parent::__construct();
     }
@@ -80,6 +82,7 @@ final class AdminController extends ApiController
             'spf_checklist' => $this->settings->get('mail.spf_checklist') === '1',
             'sales_enabled' => $this->settings->salesEnabled(),
             'email_export_enabled' => $this->settings->emailExportEnabled(),
+            'mail_configured' => $this->settings->mailConfigured(),
             'stock_reserve_enabled' => $this->settings->stockReserveEnabled(),
             'stock_allow_zero' => $this->settings->allowZeroStock(),
             'prices_enabled' => $this->settings->pricesEnabled(),
@@ -147,6 +150,21 @@ final class AdminController extends ApiController
         $this->requireSettings($request);
 
         return Response::ok(['items' => $this->groups->list()]);
+    }
+
+    public function searchLog(Request $request): Response
+    {
+        [, $capabilities] = $this->context($request);
+
+        if (!in_array('audit.view', $capabilities, true) && !in_array('settings.manage', $capabilities, true)) {
+            throw new HttpException(403, 'forbidden', 'Недостаточно прав');
+        }
+
+        return Response::ok([
+            'stats' => $this->searches->stats(),
+            'top' => $this->searches->top((int) $request->queryParam('limit', '50')),
+            'recent' => $this->searches->recent((int) $request->queryParam('limit', '100')),
+        ]);
     }
 
     public function createItemGroup(Request $request): Response

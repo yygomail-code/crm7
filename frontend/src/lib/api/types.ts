@@ -372,6 +372,7 @@ export interface SystemSettings {
   spf_checklist: boolean;
   sales_enabled: boolean;
   email_export_enabled: boolean;
+  mail_configured: boolean;
   stock_reserve_enabled: boolean;
   stock_allow_zero: boolean;
   prices_enabled: boolean;
@@ -488,6 +489,27 @@ export interface AuditEntry {
   created_at: string;
 }
 
+export interface SearchQueryStat {
+  query: string;
+  searches: number;
+  last_at: string;
+}
+
+export interface SearchLogEntry {
+  id: number;
+  query: string;
+  results: number;
+  user_id: number;
+  user_name: string;
+  created_at: string;
+}
+
+export interface SearchLogResponse {
+  stats: { total: number; users: number; unique_queries: number };
+  top: SearchQueryStat[];
+  recent: SearchLogEntry[];
+}
+
 export interface StockWarehouse {
   id: number;
   name: string;
@@ -495,6 +517,10 @@ export interface StockWarehouse {
   positions: number;
   actual_date: string | null;
   is_personal: boolean;
+}
+
+export interface StockPhoto {
+  id: number;
 }
 
 export interface StockLevel {
@@ -508,6 +534,9 @@ export interface StockLevel {
   prices?: Record<string, number>;
   group_id: number | null;
   group_title: string;
+  warehouse_id: number;
+  warehouse_name: string;
+  photos?: StockPhoto[];
 }
 
 export interface StockItemPayload {

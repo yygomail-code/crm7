@@ -8,6 +8,7 @@ import type {
   EmailTemplate,
   ReportSchedule,
   RolesResponse,
+  SearchLogResponse,
   SystemSettings
 } from './types';
 
@@ -233,4 +234,8 @@ export function listAudit(params: {
   const suffix = search.toString() !== '' ? `?${search.toString()}` : '';
 
   return apiRequest(`/admin/audit${suffix}`, { auth: true });
+}
+
+export function searchLog(): Promise<SearchLogResponse> {
+  return apiRequest<SearchLogResponse>('/admin/search-log', { auth: true });
 }

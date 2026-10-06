@@ -48,38 +48,113 @@ final class StocksRepository
         return $stmt->fetch() ?: null;
     }
 
-    public function levels(string $stockSid, array $filters, int $page, int $perPage): array
+    public function levels(array $stockSids, array $filters, int $page, int $perPage, ?int $priceTypeId = null): array
     {
-        $params = [$stockSid];
-        $where = 'l.STOCK_SID = ?' . $this->filterSql($filters, $params);
+        if ($stockSids === []) {
+            return [];
+        }
 
-        $offset = max(0, ($page - 1) * $perPage);
+        $sort = (string) ($filters['sort'] ?? '');
+        $priceJoin = '';
+
+        if (str_contains($sort, 'price_')) {
+            if ($priceTypeId !== null) {
+                $priceJoin = 'LEFT JOIN nomenclature_prices np ON np.stock_sid = l.STOCK_SID
+                    AND np.name_sid = l.NAME_SID AND np.price_type_id = ' . (int) $priceTypeId;
+            } else {
+                $sort = $this->stripPriceSort($sort);
+            }
+        }
+
+        $placeholders = implode(',', array_fill(0, count($stockSids), '?'));
+        $params = array_values($stockSids);
+        $where = 'l.STOCK_SID IN (' . $placeholders . ')' . $this->filterSql($filters, $params);
+
+        $limit = $perPage <= 0 ? 100000 : max(1, min(200, $perPage));
+        $offset = $perPage <= 0 ? 0 : max(0, ($page - 1) * $perPage);
 
         $stmt = Database::pdo()->prepare(
             'SELECT l.ID AS id, l.NAME AS name, l.NAME_SID AS name_sid, l.UNIT AS unit, l.QUANTITY AS quantity,
-                    l.ACTUAL_DATE AS actual_date, n.DESCRIPTION AS description,
+                    l.ACTUAL_DATE AS actual_date, l.STOCK_SID AS stock_sid, s.NAME AS stock_name,
+                    n.DESCRIPTION AS description,
                     n.group_id AS group_id, g.TITLE AS group_title
              FROM stock_levels l
              LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
              LEFT JOIN item_groups g ON g.ID = n.group_id
+             JOIN stocks s ON s.SID = l.STOCK_SID
+             ' . $priceJoin . '
              WHERE ' . $where . '
-             ' . $this->orderSql((string) ($filters['sort'] ?? '')) . '
-             LIMIT ' . max(1, min(200, $perPage)) . ' OFFSET ' . $offset
+             ' . $this->orderSql($sort) . '
+             LIMIT ' . $limit . ' OFFSET ' . $offset
         );
         $stmt->execute($params);
 
         return $stmt->fetchAll() ?: [];
     }
 
-    public function levelsCount(string $stockSid, array $filters): int
+    public function nameSidForLevel(int $id): ?string
     {
-        $params = [$stockSid];
-        $where = 'l.STOCK_SID = ?' . $this->filterSql($filters, $params);
+        $stmt = Database::pdo()->prepare('SELECT NAME_SID FROM stock_levels WHERE ID = ? LIMIT 1');
+        $stmt->execute([$id]);
+        $value = $stmt->fetchColumn();
+
+        return $value === false ? null : (string) $value;
+    }
+
+    public function levelsCount(array $stockSids, array $filters): int
+    {
+        if ($stockSids === []) {
+            return 0;
+        }
+
+        $placeholders = implode(',', array_fill(0, count($stockSids), '?'));
+        $params = array_values($stockSids);
+        $where = 'l.STOCK_SID IN (' . $placeholders . ')' . $this->filterSql($filters, $params);
 
         $stmt = Database::pdo()->prepare('SELECT COUNT(*) FROM stock_levels l WHERE ' . $where);
         $stmt->execute($params);
 
         return (int) $stmt->fetchColumn();
+    }
+
+    public function levelsAllMulti(array $stockSids, array $filters, ?int $priceTypeId = null, int $limit = 50000): array
+    {
+        if ($stockSids === []) {
+            return [];
+        }
+
+        $sort = (string) ($filters['sort'] ?? '');
+        $priceJoin = '';
+        $priceColumn = '';
+
+        if ($priceTypeId !== null) {
+            $priceJoin = 'LEFT JOIN nomenclature_prices np ON np.stock_sid = l.STOCK_SID
+                AND np.name_sid = l.NAME_SID AND np.price_type_id = ' . (int) $priceTypeId;
+            $priceColumn = ', np.price AS price';
+        } elseif (str_contains($sort, 'price_')) {
+            $sort = $this->stripPriceSort($sort);
+        }
+
+        $placeholders = implode(',', array_fill(0, count($stockSids), '?'));
+        $params = array_values($stockSids);
+        $where = 'l.STOCK_SID IN (' . $placeholders . ')' . $this->filterSql($filters, $params);
+
+        $stmt = Database::pdo()->prepare(
+            'SELECT l.NAME AS name, l.UNIT AS unit, l.QUANTITY AS quantity, l.ACTUAL_DATE AS actual_date,
+                    l.STOCK_SID AS stock_sid, s.NAME AS stock_name, s.SORT AS stock_sort,
+                    n.DESCRIPTION AS description, n.group_id AS group_id, g.TITLE AS group_title' . $priceColumn . '
+             FROM stock_levels l
+             LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
+             LEFT JOIN item_groups g ON g.ID = n.group_id
+             JOIN stocks s ON s.SID = l.STOCK_SID
+             ' . $priceJoin . '
+             WHERE ' . $where . '
+             ' . $this->orderSql($sort) . '
+             LIMIT ' . max(1, min(100000, $limit))
+        );
+        $stmt->execute($params);
+
+        return $stmt->fetchAll() ?: [];
     }
 
     public function searchCounts(array $stockSids, array $filters): array
@@ -106,25 +181,6 @@ final class StocksRepository
         return $counts;
     }
 
-    public function levelsAll(string $stockSid, array $filters, int $limit = 5000): array
-    {
-        $params = [$stockSid];
-        $where = 'l.STOCK_SID = ?' . $this->filterSql($filters, $params);
-
-        $stmt = Database::pdo()->prepare(
-            'SELECT l.NAME AS name, l.UNIT AS unit, l.QUANTITY AS quantity, l.ACTUAL_DATE AS actual_date,
-                    n.DESCRIPTION AS description
-             FROM stock_levels l
-             LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
-             WHERE ' . $where . '
-             ' . $this->orderSql((string) ($filters['sort'] ?? '')) . '
-             LIMIT ' . max(1, min(20000, $limit))
-        );
-        $stmt->execute($params);
-
-        return $stmt->fetchAll() ?: [];
-    }
-
     private function filterSql(array $filters, array &$params): string
     {
         $sql = '';
@@ -139,9 +195,26 @@ final class StocksRepository
             $params[] = $filters['qty'];
         }
 
-        if (($filters['group_id'] ?? null) !== null && (int) $filters['group_id'] > 0) {
-            $sql .= ' AND l.NAME_SID IN (SELECT SID FROM nomenclature WHERE group_id = ?)';
-            $params[] = (int) $filters['group_id'];
+        $groupIds = $filters['group_ids'] ?? [];
+        $noGroup = (bool) ($filters['no_group'] ?? false);
+
+        if ((is_array($groupIds) && $groupIds !== []) || $noGroup) {
+            $parts = [];
+
+            if (is_array($groupIds) && $groupIds !== []) {
+                $placeholders = implode(',', array_fill(0, count($groupIds), '?'));
+                $parts[] = 'group_id IN (' . $placeholders . ')';
+
+                foreach ($groupIds as $groupId) {
+                    $params[] = (int) $groupId;
+                }
+            }
+
+            if ($noGroup) {
+                $parts[] = 'group_id IS NULL';
+            }
+
+            $sql .= ' AND l.NAME_SID IN (SELECT SID FROM nomenclature WHERE ' . implode(' OR ', $parts) . ')';
         }
 
         if (!($filters['show_zero'] ?? false)) {
@@ -153,12 +226,60 @@ final class StocksRepository
 
     private function orderSql(string $sort): string
     {
+        $terms = [];
+
+        foreach (explode(',', $sort) as $criterion) {
+            $term = $this->orderTerm(trim($criterion));
+
+            if ($term !== null) {
+                $terms[] = $term;
+            }
+        }
+
+        $hasName = false;
+
+        foreach ($terms as $term) {
+            if (str_contains($term, 'l.NAME')) {
+                $hasName = true;
+                break;
+            }
+        }
+
+        if (!$hasName) {
+            $terms[] = 'l.NAME ASC';
+        }
+
+        return 'ORDER BY ' . implode(', ', $terms);
+    }
+
+    private function orderTerm(string $sort): ?string
+    {
         return match ($sort) {
-            'name_desc' => 'ORDER BY l.NAME DESC',
-            'qty_asc' => 'ORDER BY l.QUANTITY ASC, l.NAME ASC',
-            'qty_desc' => 'ORDER BY l.QUANTITY DESC, l.NAME ASC',
-            default => 'ORDER BY l.NAME ASC',
+            'name_asc' => 'l.NAME ASC',
+            'name_desc' => 'l.NAME DESC',
+            'qty_asc' => 'l.QUANTITY ASC',
+            'qty_desc' => 'l.QUANTITY DESC',
+            'warehouse', 'warehouse_asc' => 's.SORT ASC, s.NAME ASC',
+            'warehouse_desc' => 's.SORT DESC, s.NAME DESC',
+            'price_asc' => 'np.price IS NULL, np.price ASC',
+            'price_desc' => 'np.price IS NULL, np.price DESC',
+            default => null,
         };
+    }
+
+    private function stripPriceSort(string $sort): string
+    {
+        $parts = [];
+
+        foreach (explode(',', $sort) as $criterion) {
+            $criterion = trim($criterion);
+
+            if ($criterion !== '' && !str_starts_with($criterion, 'price_')) {
+                $parts[] = $criterion;
+            }
+        }
+
+        return $parts === [] ? 'name_asc' : implode(',', $parts);
     }
 
     public function warehouseExists(string $name): bool

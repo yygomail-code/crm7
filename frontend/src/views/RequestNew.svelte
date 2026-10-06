@@ -288,7 +288,7 @@
 
     for (const warehouseId of warehouseIds) {
       try {
-        const data = await listLevels(warehouseId, { show_zero: true }, 1, 200);
+        const data = await listLevels([warehouseId], { show_zero: true }, 1, 200);
 
         for (const level of data.items) {
           map[level.id] = level.quantity;

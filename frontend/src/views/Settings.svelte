@@ -213,6 +213,7 @@ async function saveSystem(): Promise<void> {
     appSettings.set(
       system.sales_enabled,
       system.email_export_enabled,
+      system.mail_configured,
       system.stock_reserve_enabled,
       system.stock_allow_zero,
       system.prices_enabled,

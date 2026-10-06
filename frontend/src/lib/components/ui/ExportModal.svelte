@@ -43,18 +43,6 @@
         <h2>{title}</h2>
         <button type="button" class="close" aria-label="Закрыть" onclick={onclose}>×</button>
       </div>
-      {#if emailAllowed}
-        <label class="delivery" class:disabled={email === ''}>
-          <input type="checkbox" bind:checked={sendByEmail} disabled={email === ''} />
-          <span class="delivery-text">
-            <span>Отправить на почту вместо скачивания</span>
-            <span class="delivery-hint">
-              {email !== '' ? email : 'e-mail не указан в профиле'}
-            </span>
-          </span>
-        </label>
-      {/if}
-
       <div class="formats">
         {#each formats as format (format.code)}
           <button type="button" class="format" onclick={() => onpick(format.code, sendByEmail)}>
@@ -66,6 +54,18 @@
           </button>
         {/each}
       </div>
+
+      {#if emailAllowed}
+        <label class="delivery" class:disabled={email === ''}>
+          <input type="checkbox" bind:checked={sendByEmail} disabled={email === ''} />
+          <span class="delivery-text">
+            <span>Отправить на почту вместо скачивания</span>
+            <span class="delivery-hint">
+              {email !== '' ? email : 'e-mail не указан в профиле'}
+            </span>
+          </span>
+        </label>
+      {/if}
     </div>
   </div>
 {/if}
@@ -136,7 +136,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    margin-bottom: var(--space-3);
+    margin-top: var(--space-3);
     padding: 9px 12px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);

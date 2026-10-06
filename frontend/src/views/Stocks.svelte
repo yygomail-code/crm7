@@ -3,18 +3,30 @@
   import { ApiError } from '../lib/api/client';
   import {
     createStockItem,
+    deleteItemPhoto,
     emailLevels,
     exportLevels,
     importHistory,
     importLevels,
+    invalidateItemPhoto,
     listLevels,
     listWarehouses,
+    loadItemPhotoUrl,
     renameWarehouse,
     searchCounts,
     updateStockItem,
+    uploadItemPhoto,
     type StockFilters
   } from '../lib/api/stocks';
-  import type { StockImportJob, StockLevel, StockUpdate, StockWarehouse, PriceType, ItemGroup } from '../lib/api/types';
+  import type {
+    StockImportJob,
+    StockLevel,
+    StockPhoto,
+    StockUpdate,
+    StockWarehouse,
+    PriceType,
+    ItemGroup
+  } from '../lib/api/types';
   import { listPriceTypes } from '../lib/api/prices';
   import { listItemGroups } from '../lib/api/groups';
   import Button from '../lib/components/ui/Button.svelte';
@@ -24,6 +36,7 @@
   import Modal from '../lib/components/ui/Modal.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
+  import PhotoGallery from '../lib/components/stocks/PhotoGallery.svelte';
   import { cart } from '../lib/stores/cart.svelte';
   import { auth } from '../lib/stores/auth.svelte';
   import { appSettings } from '../lib/stores/app-settings.svelte';
@@ -35,13 +48,13 @@
   let levels = $state<StockLevel[]>([]);
   let jobs = $state<StockImportJob[]>([]);
   let updates = $state<StockUpdate[]>([]);
-  let expandedLevels = $state<Set<number>>(new Set());
-  let activeId = $state<number | null>(null);
+  let detailOpen = $state(false);
+  let detailTarget = $state<StockLevel | null>(null);
+  let selectedIds = $state<number[]>([]);
   let query = $state('');
   let searchInput = $state('');
   let page = $state(1);
   let total = $state(0);
-  let perPage = $state(50);
   let loading = $state(true);
   let loadingLevels = $state(false);
   let error = $state('');
@@ -55,82 +68,6 @@
   let importOpen = $state(false);
   let exportOpen = $state(false);
   let counts = $state<Record<string, number>>({});
-
-  let tabsEl = $state<HTMLElement | null>(null);
-  let tabsOverflow = $state(false);
-  let tabsAtStart = $state(true);
-  let tabsAtEnd = $state(false);
-
-  function updateTabsScroll(): void {
-    const el = tabsEl;
-
-    if (!el) {
-      return;
-    }
-
-    tabsOverflow = el.scrollWidth - el.clientWidth > 4;
-    tabsAtStart = el.scrollLeft <= 4;
-    tabsAtEnd = el.scrollLeft + el.clientWidth >= el.scrollWidth - 4;
-  }
-
-  function scrollTabs(direction: number): void {
-    const el = tabsEl;
-
-    if (!el) {
-      return;
-    }
-
-    const step = Math.max(220, Math.round(el.clientWidth * 0.6));
-    el.scrollBy({ left: direction * step, behavior: 'smooth' });
-  }
-
-  function scrollActiveIntoView(): void {
-    const el = tabsEl;
-    const active = el?.querySelector<HTMLElement>('.tab.active');
-
-    if (!el || !active) {
-      return;
-    }
-
-    const left = active.offsetLeft;
-    const right = left + active.offsetWidth;
-
-    if (left < el.scrollLeft + 4) {
-      el.scrollLeft = Math.max(0, left - 8);
-    } else if (right > el.scrollLeft + el.clientWidth - 4) {
-      el.scrollLeft = right - el.clientWidth + 8;
-    }
-
-    updateTabsScroll();
-  }
-
-  $effect(() => {
-    void warehouses.length;
-    void activeId;
-
-    const el = tabsEl;
-
-    if (!el) {
-      return;
-    }
-
-    const update = (): void => {
-      updateTabsScroll();
-      scrollActiveIntoView();
-    };
-    const observer = new ResizeObserver(update);
-    observer.observe(el);
-    window.addEventListener('resize', update);
-    const frame = requestAnimationFrame(update);
-    const timer = setTimeout(update, 80);
-
-    return () => {
-      observer.disconnect();
-      window.removeEventListener('resize', update);
-      cancelAnimationFrame(frame);
-      clearTimeout(timer);
-    };
-  });
 
   let itemOpen = $state(false);
   let itemBusy = $state(false);
@@ -146,17 +83,58 @@
   let renameError = $state('');
   let renameName = $state('');
 
-  const stockFilterDefaults = { sort: 'name_asc', group_id: 0 };
+  const stockFilterDefaults = {
+    sort: 'name_asc',
+    group_ids: null as number[] | null,
+    group_no_group: true,
+    per_page: 20,
+    view: 'list',
+    photos: true
+  };
+  const sortFields = [
+    { field: 'name', label: 'Наименование' },
+    { field: 'qty', label: 'Остаток на складе' },
+    { field: 'warehouse', label: 'Склад' },
+    { field: 'price', label: 'Цена' }
+  ];
   const initialStockFilters = loadFilters('stocks', stockFilterDefaults);
+  const groupsPreselected =
+    Array.isArray(initialStockFilters.group_ids) && initialStockFilters.group_ids.length > 0;
   let stockSort = $state(initialStockFilters.sort);
-  let stockGroup = $state(Number(initialStockFilters.group_id) || 0);
+  let stockGroups = $state<number[]>(parseGroups(initialStockFilters.group_ids));
+  let stockNoGroup = $state<boolean>(initialStockFilters.group_no_group !== false);
+  let perPage = $state<number>(typeof initialStockFilters.per_page === 'number' ? initialStockFilters.per_page : 20);
+  let viewMode = $state<'list' | 'tiles'>(initialStockFilters.view === 'tiles' ? 'tiles' : 'list');
+  let showPhotos = $state<boolean>(initialStockFilters.photos !== false);
+  let viewOpen = $state(false);
+  let viewDraft = $state<'list' | 'tiles'>('list');
+  let photoDraft = $state<boolean>(true);
+  let photoOpen = $state(false);
+  let photoTarget = $state<StockLevel | null>(null);
+  let photoList = $state<StockPhoto[]>([]);
+  let photoUrls = $state<Record<number, string | null>>({});
+  let photoBusy = $state(false);
+  let photoError = $state('');
+  let sortOpen = $state(false);
+  let sortDraft = $state<string[]>(parseSort(initialStockFilters.sort));
+  let groupOpen = $state(false);
+  let groupDraft = $state<number[]>([]);
+  let groupNoGroupDraft = $state<boolean>(true);
+  let warehouseOpen = $state(false);
+  let warehouseDraft = $state<number[]>([]);
+  let helpOpen = $state(false);
+  let itemWarehouseId = $state<number>(0);
+  let renameWarehouseId = $state<number>(0);
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const canCreate = $derived(
-    auth.can('requests.create') && appSettings.salesEnabled && appSettings.cartEnabled && appSettings.requestsEnabled
-  );
-  const pages = $derived(Math.max(1, Math.ceil(total / perPage)));
+  const canCreate = $derived(auth.can('requests.create') && appSettings.cartEnabled);
+  const canManagePhotos = $derived(canEdit || canImport);
+  const pages = $derived(perPage <= 0 ? 1 : Math.max(1, Math.ceil(total / perPage)));
   const pricesEnabled = $derived(appSettings.pricesEnabled);
   const groupsEnabled = $derived(appSettings.groupsEnabled);
+  const listVars = $derived(
+    `--photo: ${showPhotos ? '56px' : '0px'}; --price: ${pricesEnabled ? '100px' : '0px'}; --cart: ${canCreate ? '120px' : '0px'}; --actions: ${canManagePhotos || canEdit ? '72px' : '0px'};`
+  );
 
   $effect(() => {
     if (pricesEnabled && canEdit && priceTypes.length === 0) {
@@ -168,6 +146,21 @@
     if (groupsEnabled && groups.length === 0) {
       void loadGroups();
     }
+  });
+
+  $effect(() => {
+    const term = searchInput.trim();
+    clearTimeout(searchTimer);
+
+    if (term === query) {
+      return;
+    }
+
+    searchTimer = setTimeout(() => {
+      void runSearch(false);
+    }, 400);
+
+    return () => clearTimeout(searchTimer);
   });
 
   async function loadPriceTypes(): Promise<void> {
@@ -186,52 +179,65 @@
     } catch {
       groups = [];
     }
+
+    if (!groupsPreselected && stockGroups.length === 0) {
+      stockGroups = groups.map((item) => item.id);
+    }
   }
 
-  const filters = $derived<StockFilters>({
-    q: query,
-    sort: stockSort,
-    show_zero: appSettings.allowZeroStock,
-    group_id: groupsEnabled && stockGroup > 0 ? stockGroup : undefined
+  const groupFilterActive = $derived.by(() => {
+    if (!groupsEnabled) {
+      return false;
+    }
+
+    const allGroups = groups.length > 0 && stockGroups.length === groups.length;
+    const noneSelected = stockGroups.length === 0 && !stockNoGroup;
+
+    return !(allGroups && stockNoGroup) && !noneSelected;
+  });
+
+  const filters = $derived.by((): StockFilters => {
+    const result: StockFilters = {
+      q: query,
+      sort: stockSort,
+      show_zero: appSettings.allowZeroStock
+    };
+
+    if (groupsEnabled && groupFilterActive) {
+      result.group_ids = stockGroups;
+      result.no_group = stockNoGroup;
+    }
+
+    return result;
   });
 
   const hasFilters = $derived(query !== '');
-  const currentWarehouse = $derived(warehouses.find((item) => item.id === activeId) ?? null);
+  const selectedWarehouses = $derived(warehouses.filter((item) => selectedIds.includes(item.id)));
+  const headDate = $derived(
+    selectedWarehouses.length === 1 ? selectedWarehouses[0].actual_date : null
+  );
 
-  function toggleLevelDescription(levelId: number): void {
-    const next = new Set(expandedLevels);
-
-    if (next.has(levelId)) {
-      next.delete(levelId);
-    } else {
-      next.add(levelId);
-    }
-
-    expandedLevels = next;
+  function openDetail(level: StockLevel): void {
+    detailTarget = level;
+    detailOpen = true;
   }
 
   function addToCart(level: StockLevel): void {
-    if (activeId === null) {
-      return;
-    }
-
-    const warehouse = warehouses.find((item) => item.id === activeId);
+    const warehouse = warehouses.find((item) => item.id === level.warehouse_id);
 
     cart.add({
-      warehouseId: activeId,
-      warehouseName: warehouse?.name ?? '',
+      warehouseId: level.warehouse_id,
+      warehouseName: level.warehouse_name || warehouse?.name || '',
       name: level.name,
       unit: level.unit,
       quantity: 1,
       stockLevelId: level.id,
       price: level.price ?? null
     });
-
-    message = `Добавлено в корзину: ${level.name}`;
   }
 
   function inCart(level: StockLevel): number {
-    return activeId === null ? 0 : cart.quantityOf(activeId, level.name);
+    return cart.quantityOf(level.warehouse_id, level.name);
   }
 
   onMount(() => {
@@ -249,7 +255,7 @@
       canEdit = data.can_edit;
 
       if (warehouses.length > 0) {
-        await select(warehouses[0].id);
+        await setWarehouses(warehouses.map((item) => item.id));
       }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить склады';
@@ -258,8 +264,8 @@
     }
   }
 
-  async function select(id: number): Promise<void> {
-    activeId = id;
+  async function setWarehouses(ids: number[]): Promise<void> {
+    selectedIds = [...ids].sort((a, b) => a - b);
     page = 1;
     query = searchInput.trim();
     void refreshCounts();
@@ -290,18 +296,266 @@
     return cart.items.filter((item) => item.warehouseId === warehouseId).length;
   }
 
+  function parseGroups(value: unknown): number[] {
+    if (Array.isArray(value)) {
+      return value.map((item) => Number(item)).filter((item) => item > 0);
+    }
+
+    const single = Number(value);
+
+    return single > 0 ? [single] : [];
+  }
+
+  function parseSort(value: string): string[] {
+    const parts = value
+      .split(',')
+      .map((part) => (part.trim() === 'warehouse' ? 'warehouse_asc' : part.trim()))
+      .filter((part) => part !== '');
+
+    return parts.length > 0 ? parts : ['name_asc'];
+  }
+
+  function sortOrderIndex(field: string): number {
+    return sortDraft.findIndex((value) => value.startsWith(`${field}_`)) + 1;
+  }
+
+  function toggleSortDir(field: string, dir: 'asc' | 'desc'): void {
+    const value = `${field}_${dir}`;
+    const other = `${field}_${dir === 'asc' ? 'desc' : 'asc'}`;
+    const otherIndex = sortDraft.indexOf(other);
+
+    if (sortDraft.includes(value)) {
+      sortDraft = sortDraft.filter((item) => item !== value);
+      return;
+    }
+
+    if (otherIndex >= 0) {
+      const next = [...sortDraft];
+      next[otherIndex] = value;
+      sortDraft = next;
+      return;
+    }
+
+    sortDraft = [...sortDraft, value];
+  }
+
+  function openSort(): void {
+    sortDraft = parseSort(stockSort);
+    sortOpen = true;
+  }
+
+  function applySort(): void {
+    sortOpen = false;
+
+    const next = sortDraft.length > 0 ? sortDraft.join(',') : 'name_asc';
+
+    if (next === stockSort) {
+      return;
+    }
+
+    stockSort = next;
+    changeSort();
+  }
+
+  function sortTerm(field: string): 'asc' | 'desc' | null {
+    const terms = parseSort(stockSort);
+
+    if (terms.includes(`${field}_asc`)) {
+      return 'asc';
+    }
+
+    if (terms.includes(`${field}_desc`)) {
+      return 'desc';
+    }
+
+    return null;
+  }
+
+  function sortIndex(field: string): number {
+    return parseSort(stockSort).findIndex((term) => term.startsWith(`${field}_`)) + 1;
+  }
+
+  function headerSort(field: string): void {
+    const terms = parseSort(stockSort);
+    const asc = `${field}_asc`;
+    const desc = `${field}_desc`;
+
+    let next: string[];
+
+    if (terms.includes(asc)) {
+      next = terms.map((term) => (term === asc ? desc : term));
+    } else if (terms.includes(desc)) {
+      next = terms.filter((term) => term !== desc);
+    } else {
+      next = [...terms, asc];
+    }
+
+    const value = next.length > 0 ? next.join(',') : 'name_asc';
+
+    if (value === stockSort) {
+      return;
+    }
+
+    stockSort = value;
+    changeSort();
+  }
+
+  function saveStockFilters(): void {
+    saveFilters('stocks', {
+      sort: stockSort,
+      group_ids: stockGroups,
+      group_no_group: stockNoGroup,
+      per_page: perPage,
+      view: viewMode,
+      photos: showPhotos
+    });
+  }
+
+  function openView(): void {
+    viewDraft = viewMode;
+    photoDraft = showPhotos;
+    viewOpen = true;
+  }
+
+  function applyView(): void {
+    viewOpen = false;
+
+    if (viewDraft === viewMode && photoDraft === showPhotos) {
+      return;
+    }
+
+    viewMode = viewDraft;
+    showPhotos = photoDraft;
+    saveStockFilters();
+  }
+
+  $effect(() => {
+    for (const photo of photoList) {
+      if (photoUrls[photo.id] !== undefined) {
+        continue;
+      }
+
+      void loadItemPhotoUrl(photo.id).then((url) => {
+        photoUrls[photo.id] = url;
+      });
+    }
+  });
+
+  function openPhotos(level: StockLevel): void {
+    photoTarget = level;
+    photoList = [...(level.photos ?? [])];
+    photoError = '';
+    photoOpen = true;
+  }
+
+  async function uploadPhotoFile(event: Event): Promise<void> {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0] ?? null;
+    input.value = '';
+
+    if (file === null || photoTarget === null) {
+      return;
+    }
+
+    photoBusy = true;
+    photoError = '';
+
+    try {
+      const result = await uploadItemPhoto(photoTarget.id, file);
+      photoList = result.photos;
+      photoTarget.photos = result.photos;
+    } catch (cause) {
+      photoError = cause instanceof ApiError ? cause.message : 'Не удалось загрузить фото';
+    } finally {
+      photoBusy = false;
+    }
+  }
+
+  async function removePhoto(id: number): Promise<void> {
+    if (photoTarget === null) {
+      return;
+    }
+
+    photoBusy = true;
+    photoError = '';
+
+    try {
+      const result = await deleteItemPhoto(id);
+      photoList = result.photos;
+      photoTarget.photos = result.photos;
+      invalidateItemPhoto(id);
+    } catch (cause) {
+      photoError = cause instanceof ApiError ? cause.message : 'Не удалось удалить фото';
+    } finally {
+      photoBusy = false;
+    }
+  }
+
   function changeSort(): void {
-    saveFilters('stocks', { sort: stockSort, group_id: stockGroup });
+    saveStockFilters();
     void applyFilters();
+  }
+
+  function openGroup(): void {
+    groupDraft = [...stockGroups];
+    groupNoGroupDraft = stockNoGroup;
+    groupOpen = true;
+  }
+
+  function toggleAllGroups(): void {
+    groupDraft = groupDraft.length === groups.length ? [] : groups.map((item) => item.id);
+  }
+
+  function applyGroup(): void {
+    groupOpen = false;
+
+    const next = [...groupDraft].sort((a, b) => a - b);
+
+    if (
+      next.length === stockGroups.length &&
+      next.every((id, index) => id === stockGroups[index]) &&
+      groupNoGroupDraft === stockNoGroup
+    ) {
+      return;
+    }
+
+    stockGroups = next;
+    stockNoGroup = groupNoGroupDraft;
+    changeGroup();
   }
 
   function changeGroup(): void {
-    saveFilters('stocks', { sort: stockSort, group_id: stockGroup });
+    saveStockFilters();
     void applyFilters();
   }
 
+  function openWarehouse(): void {
+    warehouseDraft = [...selectedIds];
+    warehouseOpen = true;
+  }
+
+  function toggleAllWarehouses(): void {
+    warehouseDraft = warehouseDraft.length === warehouses.length
+      ? []
+      : warehouses.map((item) => item.id);
+  }
+
+  function applyWarehouse(): void {
+    warehouseOpen = false;
+
+    const next = [...warehouseDraft].sort((a, b) => a - b);
+
+    if (next.length === selectedIds.length && next.every((id, index) => id === selectedIds[index])) {
+      return;
+    }
+
+    void setWarehouses(next);
+  }
+
   async function loadLevels(): Promise<void> {
-    if (activeId === null) {
+    if (selectedIds.length === 0) {
+      levels = [];
+      total = 0;
       return;
     }
 
@@ -309,7 +563,7 @@
     error = '';
 
     try {
-      const data = await listLevels(activeId, filters, page, perPage);
+      const data = await listLevels(selectedIds, filters, page, perPage);
       levels = data.items;
       total = data.total;
     } catch (cause) {
@@ -319,13 +573,26 @@
     }
   }
 
-  async function search(): Promise<void> {
+  async function runSearch(record: boolean): Promise<void> {
     query = searchInput.trim();
-    addHistory('stocks', query);
+
+    if (record && query !== '') {
+      addHistory('stocks', query);
+    }
+
     await applyFilters();
   }
 
+  async function search(): Promise<void> {
+    clearTimeout(searchTimer);
+    await runSearch(true);
+  }
+
   async function changePage(delta: number): Promise<void> {
+    if (perPage <= 0) {
+      return;
+    }
+
     const next = page + delta;
 
     if (next < 1 || (next - 1) * perPage >= total) {
@@ -338,13 +605,15 @@
 
   function changePerPage(): void {
     page = 1;
+    saveStockFilters();
     void loadLevels();
   }
 
   async function doExport(format: string, byEmail: boolean): Promise<void> {
     exportOpen = false;
 
-    if (warehouses.length === 0) {
+    if (selectedIds.length === 0) {
+      error = 'Выберите хотя бы один склад';
       return;
     }
 
@@ -354,10 +623,10 @@
 
     try {
       if (byEmail) {
-        const result = await emailLevels(filters, format);
-        message = `Остатки по всем складам отправлены на ${result.email}`;
+        const result = await emailLevels(selectedIds, filters, format);
+        message = `Остатки отправлены на ${result.email}`;
       } else {
-        await exportLevels(filters, format);
+        await exportLevels(selectedIds, filters, format);
       }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось выгрузить остатки';
@@ -424,6 +693,7 @@
 
   function openItemCreate(): void {
     itemTarget = null;
+    itemWarehouseId = selectedIds[0] ?? 0;
     itemForm = { name: '', unit: '', quantity: '0', description: '', group_id: 0 };
     itemPrices = {};
     itemError = '';
@@ -431,17 +701,22 @@
   }
 
   function openRename(): void {
-    if (activeId === null) {
+    if (selectedIds.length === 0) {
       return;
     }
 
-    renameName = currentWarehouse?.name ?? '';
+    renameWarehouseId = selectedIds[0];
+    renameName = warehouses.find((item) => item.id === renameWarehouseId)?.name ?? '';
     renameError = '';
     renameOpen = true;
   }
 
+  function changeRenameWarehouse(): void {
+    renameName = warehouses.find((item) => item.id === renameWarehouseId)?.name ?? '';
+  }
+
   async function saveRename(): Promise<void> {
-    if (activeId === null) {
+    if (renameWarehouseId <= 0) {
       return;
     }
 
@@ -456,7 +731,7 @@
     renameError = '';
 
     try {
-      const data = await renameWarehouse(activeId, name);
+      const data = await renameWarehouse(renameWarehouseId, name);
       warehouses = warehouses.map((item) =>
         item.id === data.warehouse.id ? { ...item, name: data.warehouse.name } : item
       );
@@ -471,6 +746,7 @@
 
   function openItemEdit(level: StockLevel): void {
     itemTarget = level;
+    itemWarehouseId = level.warehouse_id;
     itemForm = {
       name: level.name,
       unit: level.unit,
@@ -486,10 +762,6 @@
   }
 
   async function saveItem(): Promise<void> {
-    if (activeId === null) {
-      return;
-    }
-
     const name = itemForm.name.trim();
 
     if (name === '') {
@@ -497,10 +769,15 @@
       return;
     }
 
+    if (itemTarget === null && itemWarehouseId <= 0) {
+      itemError = 'Выберите склад';
+      return;
+    }
+
     const quantity = Number(itemForm.quantity);
 
     if (!Number.isFinite(quantity) || quantity < 0) {
-      itemError = 'Укажите корректное количество (не меньше нуля)';
+      itemError = 'Укажите корректный остаток (не меньше нуля)';
       return;
     }
 
@@ -540,7 +817,7 @@
       };
 
       if (itemTarget === null) {
-        await createStockItem(activeId, payload);
+        await createStockItem(itemWarehouseId, payload);
         message = `Позиция добавлена: ${name}`;
       } else {
         await updateStockItem(itemTarget.id, payload);
@@ -562,22 +839,28 @@
   <div class="head">
     <h1>
       Складские остатки
-      {#if currentWarehouse?.actual_date}
-        <span class="head-date">(на {formatDate(currentWarehouse.actual_date)})</span>
+      {#if headDate}
+        <span class="head-date">(на {formatDate(headDate)})</span>
       {/if}
     </h1>
     <div class="actions">
       {#if canEdit}
-        <Button variant="ghost" disabled={activeId === null} onclick={openItemCreate}>
+        <Button variant="ghost" disabled={selectedIds.length === 0} onclick={openItemCreate}>
           + Позиция
         </Button>
-        <Button variant="ghost" disabled={activeId === null} onclick={openRename}>
+        <Button variant="ghost" disabled={selectedIds.length === 0} onclick={openRename}>
           Переименовать склад
         </Button>
       {/if}
-      <Button variant="ghost" loading={busy} disabled={warehouses.length === 0} onclick={() => (exportOpen = true)}>
-        Экспорт
-      </Button>
+      <button
+        type="button"
+        class="icon-button"
+        title="Как пользоваться"
+        aria-label="Как пользоваться страницей"
+        onclick={() => (helpOpen = true)}
+      >
+        <Icon name="help" size={18} />
+      </button>
       {#if canImport}
         <Button variant="ghost" onclick={() => void toggleHistory()}>
           {showHistory ? 'Скрыть историю' : 'История импорта'}
@@ -596,8 +879,8 @@
         <span class="chev" aria-hidden="true"></span>
       </summary>
       <p class="hint">
-        Файл Excel (xls/xlsx) в формате 1С: строки «Склад …» и далее «товар; ед.; количество».
-        CSV: те же три колонки либо «склад; товар; ед.; количество». Импорт заменяет остатки целиком:
+        Файл Excel (xls/xlsx) в формате 1С: строки «Склад …» и далее «товар; ед.; остаток на складе».
+        CSV: те же три колонки либо «склад; товар; ед.; остаток на складе». Импорт заменяет остатки целиком:
         позиции, которых нет в файле, обнуляются и скрываются, пока в настройках системы не разрешены
         нулевые остатки. Новые склады из файла добавляются автоматически.
       </p>
@@ -647,75 +930,6 @@
   {:else if warehouses.length === 0}
     <div class="empty">Нет доступных складов</div>
   {:else}
-    <select
-      class="warehouse-select"
-      aria-label="Склад"
-      value={activeId ?? ''}
-      onchange={(event) => void select(Number((event.currentTarget as HTMLSelectElement).value))}
-    >
-      {#each warehouses as warehouse (warehouse.id)}
-        <option value={warehouse.id}>{warehouse.name} — {warehouse.positions}</option>
-      {/each}
-    </select>
-
-    <div class="tabs-row">
-      {#if tabsOverflow}
-        <button
-          type="button"
-          class="tabs-nav"
-          title="Прокрутить влево"
-          aria-label="Прокрутить список складов влево"
-          disabled={tabsAtStart}
-          onclick={() => scrollTabs(-1)}
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M15 6l-6 6 6 6" />
-          </svg>
-        </button>
-      {/if}
-
-      <div class="tabs-wrap" class:overflow={tabsOverflow && !tabsAtEnd}>
-        <div class="tabs" bind:this={tabsEl} onscroll={updateTabsScroll}>
-          {#each warehouses as warehouse (warehouse.id)}
-            <button
-              type="button"
-              class="tab"
-              class:active={warehouse.id === activeId}
-              onclick={() => void select(warehouse.id)}
-            >
-              {warehouse.name}
-              {#if warehouse.is_personal}<span class="personal" title="Персональный доступ">•</span>{/if}
-              {#if hasFilters}
-                <span class="count" class:found={(counts[warehouse.id] ?? 0) > 0} class:zero={(counts[warehouse.id] ?? 0) === 0}>
-                  {counts[warehouse.id] ?? 0}
-                </span>
-              {:else}
-                <span class="count">{warehouse.positions}</span>
-              {/if}
-              {#if cartCount(warehouse.id) > 0}
-                <span class="picked" title="Позиций в корзине заявки">в заявке: {cartCount(warehouse.id)}</span>
-              {/if}
-            </button>
-          {/each}
-        </div>
-      </div>
-
-      {#if tabsOverflow}
-        <button
-          type="button"
-          class="tabs-nav"
-          title="Прокрутить вправо"
-          aria-label="Прокрутить список складов вправо"
-          disabled={tabsAtEnd}
-          onclick={() => scrollTabs(1)}
-        >
-          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M9 6l6 6-6 6" />
-          </svg>
-        </button>
-      {/if}
-    </div>
-
     <div class="filters">
       <form
         class="search"
@@ -731,153 +945,668 @@
           onclear={() => void search()}
           onpick={() => void search()}
         />
-        <Button type="submit" variant="ghost">Найти</Button>
       </form>
 
-      <label class="sort-field">
-        <span>Сортировка</span>
-        <select bind:value={stockSort} onchange={changeSort}>
-          <option value="name_asc">Наименование: А–Я</option>
-          <option value="name_desc">Наименование: Я–А</option>
-          <option value="qty_desc">Количество: по убыванию</option>
-          <option value="qty_asc">Количество: по возрастанию</option>
-        </select>
-      </label>
+      <div class="filter-icons">
+        <button
+          type="button"
+          class="sort-button"
+          class:active={stockSort !== stockFilterDefaults.sort}
+          title="Сортировка"
+          aria-label="Сортировка"
+          onclick={openSort}
+        >
+          <Icon name="sort" size={18} />
+        </button>
 
-      {#if groupsEnabled}
-        <label class="sort-field">
-          <span>Группа</span>
-          <select bind:value={stockGroup} onchange={changeGroup}>
-            <option value={0}>Все группы</option>
-            {#each groups as group (group.id)}
-              <option value={group.id}>{group.title}</option>
-            {/each}
-          </select>
-        </label>
-      {/if}
+        <button
+          type="button"
+          class="sort-button"
+          title="Склад"
+          aria-label="Выбрать склад"
+          onclick={openWarehouse}
+        >
+          <Icon name="stocks" size={18} />
+        </button>
+
+        {#if groupsEnabled}
+          <button
+            type="button"
+            class="sort-button"
+            class:active={groupFilterActive}
+            title="Группа"
+            aria-label="Группа"
+            onclick={openGroup}
+          >
+            <Icon name="group" size={18} />
+          </button>
+        {/if}
+
+        <button
+          type="button"
+          class="sort-button"
+          class:active={viewMode === 'tiles'}
+          title="Отображение"
+          aria-label="Отображение: списком или плитками"
+          onclick={openView}
+        >
+          <Icon name="view" size={18} />
+        </button>
+
+        <button
+          type="button"
+          class="sort-button"
+          title="Экспорт"
+          aria-label="Экспорт остатков"
+          disabled={busy || selectedIds.length === 0}
+          onclick={() => (exportOpen = true)}
+        >
+          <Icon name="export" size={18} />
+        </button>
+      </div>
     </div>
+
+    <Modal open={sortOpen} title="Сортировка" onclose={() => (sortOpen = false)}>
+      <p class="sort-hint">
+        Можно задать несколько условий — они применяются сверху вниз. Нажмите стрелку,
+        чтобы добавить условие, и повторно — чтобы убрать.
+      </p>
+      <div class="sort-list">
+        {#each sortFields as item (item.field)}
+          {#if item.field !== 'price' || pricesEnabled}
+            <div class="sort-row" class:active={sortOrderIndex(item.field) > 0}>
+              {#if sortOrderIndex(item.field) > 0}
+                <span class="sort-order">{sortOrderIndex(item.field)}</span>
+              {/if}
+              <span class="sort-row-label">{item.label}</span>
+              <button
+                type="button"
+                class="dir-btn"
+                class:on={sortDraft.includes(`${item.field}_asc`)}
+                title="По возрастанию"
+                aria-label={`${item.label}: по возрастанию`}
+                onclick={() => toggleSortDir(item.field, 'asc')}
+              >
+                <Icon name="arrow-up" size={16} />
+              </button>
+              <button
+                type="button"
+                class="dir-btn"
+                class:on={sortDraft.includes(`${item.field}_desc`)}
+                title="По убыванию"
+                aria-label={`${item.label}: по убыванию`}
+                onclick={() => toggleSortDir(item.field, 'desc')}
+              >
+                <Icon name="arrow-down" size={16} />
+              </button>
+            </div>
+          {/if}
+        {/each}
+      </div>
+      <div class="modal-actions">
+        <Button variant="ghost" onclick={() => (sortDraft = ['name_asc'])}>Сбросить</Button>
+        <Button variant="ghost" onclick={() => (sortOpen = false)}>Отмена</Button>
+        <Button onclick={applySort}>Применить</Button>
+      </div>
+    </Modal>
+
+    <Modal open={groupOpen} title="Группы позиций" onclose={() => (groupOpen = false)}>
+      <div class="sort-options">
+        <label class="sort-option">
+          <input
+            type="checkbox"
+            checked={groupDraft.length === groups.length && groups.length > 0}
+            onchange={toggleAllGroups}
+          />
+          <span>Все группы</span>
+        </label>
+
+        <label class="sort-option">
+          <input type="checkbox" bind:checked={groupNoGroupDraft} />
+          <span>Без группы</span>
+        </label>
+
+        {#each groups as group (group.id)}
+          <label class="sort-option">
+            <input type="checkbox" value={group.id} bind:group={groupDraft} />
+            <span>{group.title}</span>
+          </label>
+        {/each}
+      </div>
+      <div class="modal-actions">
+        <Button variant="ghost" onclick={() => (groupOpen = false)}>Отмена</Button>
+        <Button onclick={applyGroup}>Применить</Button>
+      </div>
+    </Modal>
+
+    <Modal open={warehouseOpen} title="Склады" onclose={() => (warehouseOpen = false)}>
+      <div class="sort-options">
+        <label class="sort-option">
+          <input
+            type="checkbox"
+            checked={warehouseDraft.length === warehouses.length && warehouses.length > 0}
+            onchange={toggleAllWarehouses}
+          />
+          <span>Все склады</span>
+        </label>
+
+        {#each warehouses as warehouse (warehouse.id)}
+          <label class="sort-option warehouse-option">
+            <input type="checkbox" value={warehouse.id} bind:group={warehouseDraft} />
+            <span class="warehouse-option-name">{warehouse.name}</span>
+            {#if warehouse.is_personal}<span class="personal" title="Персональный доступ">•</span>{/if}
+            <span
+              class="count"
+              class:found={hasFilters && (counts[warehouse.id] ?? 0) > 0}
+              class:zero={hasFilters && (counts[warehouse.id] ?? 0) === 0}
+            >
+              {hasFilters ? (counts[warehouse.id] ?? 0) : warehouse.positions}
+            </span>
+            {#if cartCount(warehouse.id) > 0}
+              <span class="picked" title="Позиций в корзине заявки">в заявке: {cartCount(warehouse.id)}</span>
+            {/if}
+          </label>
+        {/each}
+      </div>
+      <div class="modal-actions">
+        <Button variant="ghost" onclick={() => (warehouseOpen = false)}>Отмена</Button>
+        <Button onclick={applyWarehouse}>Применить</Button>
+      </div>
+    </Modal>
+
+    <Modal open={viewOpen} title="Отображение" onclose={() => (viewOpen = false)}>
+      <div class="view-columns">
+        <div class="view-column">
+          <p class="sort-hint">Вид</p>
+          <div class="sort-options">
+            <label class="sort-option">
+              <input type="radio" name="stock-view" value="list" bind:group={viewDraft} />
+              <span>Списком</span>
+            </label>
+            <label class="sort-option">
+              <input type="radio" name="stock-view" value="tiles" bind:group={viewDraft} />
+              <span>Плитками</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="view-column">
+          <p class="sort-hint">Фото в позициях</p>
+          <div class="sort-options">
+            <label class="sort-option">
+              <input type="radio" name="stock-photos" value={true} bind:group={photoDraft} />
+              <span>С фото</span>
+            </label>
+            <label class="sort-option">
+              <input type="radio" name="stock-photos" value={false} bind:group={photoDraft} />
+              <span>Без фото</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <Button variant="ghost" onclick={() => (viewOpen = false)}>Отмена</Button>
+        <Button onclick={applyView}>Применить</Button>
+      </div>
+    </Modal>
+
+    <Modal open={photoOpen} title="Фото товара" onclose={() => (photoOpen = false)}>
+      {#if photoTarget}
+        <p class="sort-hint">{photoTarget.name}</p>
+      {/if}
+
+      <div class="photo-grid">
+        {#each photoList as photo (photo.id)}
+          <div class="photo-item">
+            {#if photoUrls[photo.id]}
+              <img src={photoUrls[photo.id]} alt="" />
+            {/if}
+            <button
+              type="button"
+              class="photo-remove"
+              title="Удалить фото"
+              aria-label="Удалить фото"
+              onclick={() => void removePhoto(photo.id)}
+              disabled={photoBusy}
+            >
+              ×
+            </button>
+          </div>
+        {/each}
+
+        {#if photoList.length < 10}
+          <label class="photo-add" class:busy={photoBusy}>
+            <input
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              onchange={uploadPhotoFile}
+              disabled={photoBusy}
+            />
+            <Icon name="camera" size={20} />
+            <span>Добавить</span>
+          </label>
+        {/if}
+      </div>
+
+      <p class="sort-hint">До 10 фото. Форматы: jpg, png, webp. Размер до 5 МБ.</p>
+
+      {#if photoError}<div class="alert">{photoError}</div>{/if}
+
+      <div class="modal-actions">
+        <Button onclick={() => (photoOpen = false)}>Готово</Button>
+      </div>
+    </Modal>
+
+    <Modal
+      open={detailOpen}
+      label={detailTarget?.name ?? 'Позиция'}
+      wide
+      closeButton={false}
+      onclose={() => (detailOpen = false)}
+    >
+      {#if detailTarget}
+        {@const target = detailTarget}
+        {@const detailCartQty = inCart(target)}
+        <div class="detail">
+          <div class="detail-photo">
+            <PhotoGallery photos={target.photos ?? []} variant="tile" />
+          </div>
+
+          <div class="detail-info">
+            <h3 class="detail-name">{target.name}</h3>
+
+            {#if target.warehouse_name || (groupsEnabled && target.group_title)}
+              <div class="meta">
+                {#if target.warehouse_name}<span class="wh">{target.warehouse_name}</span>{/if}
+                {#if groupsEnabled && target.group_title}<span class="group">{target.group_title}</span>{/if}
+              </div>
+            {/if}
+
+            {#if target.description !== ''}
+              <p class="detail-desc">{target.description}</p>
+            {/if}
+
+            <div class="detail-stats">
+              <div class="stat">
+                <span class="stat-label">Остаток на складе</span>
+                <span class="quantity" class:on-order={target.quantity < 0}>
+                  {stockQuantityText(target.quantity, target.unit)}
+                </span>
+              </div>
+
+              {#if pricesEnabled}
+                <div class="stat">
+                  <span class="stat-label">Цена</span>
+                  <span class="price" class:missing={target.price === null}>
+                    {formatPrice(target.price)}
+                  </span>
+                </div>
+              {/if}
+            </div>
+
+            {#if canCreate}
+              <div class="detail-cart">
+                {#if detailCartQty > 0}
+                  <span class="stat-label">В корзине</span>
+                  <span class="add">
+                    <button
+                      type="button"
+                      class="step"
+                      aria-label={`Уменьшить: ${target.name}`}
+                      onclick={() => cart.decreaseAt(target.warehouse_id, target.name)}
+                    >
+                      −
+                    </button>
+                    <span class="qty" aria-label={`В корзине: ${target.name}`}>
+                      {detailCartQty.toLocaleString('ru-RU', { maximumFractionDigits: 3 })}
+                    </span>
+                    <button
+                      type="button"
+                      class="step"
+                      aria-label={`Увеличить: ${target.name}`}
+                      onclick={() => cart.increaseAt(target.warehouse_id, target.name)}
+                    >
+                      +
+                    </button>
+                  </span>
+                {:else}
+                  <Button onclick={() => addToCart(target)}>Добавить в корзину</Button>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </div>
+      {/if}
+    </Modal>
+
+    <Modal open={helpOpen} title="Как пользоваться" onclose={() => (helpOpen = false)} wide>
+      <div class="help">
+        <p class="help-intro">
+          Эта страница показывает, сколько товаров есть на складах. Ниже — что делает каждая
+          кнопка и как всё устроено. Всё просто, разберётся даже школьник.
+        </p>
+
+        <div class="help-block">
+          <h3>Кнопки сверху</h3>
+          <ul>
+            <li>
+              <b>Значок склада</b> — выбрать склады. Отметь галочками один или сразу несколько:
+              тогда товары покажутся вместе, а у каждой строки будет написан склад. Если не
+              выбрать ни одного — список будет пустым.
+            </li>
+            <li>
+              <b>Значок сортировки</b> (стрелочки ↑↓) — расставить товары по порядку. Можно
+              задать несколько условий: например, «сначала по складу, потом по цене». Стрелка
+              вверх — от меньшего к большему, вниз — наоборот.
+            </li>
+            {#if groupsEnabled}
+              <li>
+                <b>Значок групп</b> (слои) — оставить только нужные группы товаров. Галочками
+                отметь группы; «Без группы» — товары без группы. По умолчанию отмечены все.
+              </li>
+            {/if}
+            <li>
+              <b>Значок отображения</b> (квадратики) — показать товары списком или плитками, а
+              также включить или скрыть фото. На телефоне плитки идут в 2 столбика, на компьютере —
+              в 3. Выбор запоминается.
+            </li>
+            {#if canManagePhotos}
+              <li>
+                <b>Фото товара</b> (фотоаппарат) — добавить до 10 фото к позиции (jpg, png, webp,
+                до 5 МБ) или удалить их. Фото видны всем, у кого включено отображение фото.
+              </li>
+            {/if}
+            <li>
+              <b>Значок экспорта</b> (стрелка вниз) — скачать список товаров файлом: Excel,
+              CSV, TXT или PDF. Можно отправить файл на почту, если почта настроена.
+            </li>
+            {#if canImport}
+              <li><b>История импорта</b> — посмотреть, когда и что загружали на склад.</li>
+            {/if}
+          </ul>
+        </div>
+
+        <div class="help-block">
+          <h3>Поиск</h3>
+          <p>
+            Поле слева — это поиск. Напиши часть названия (например, <b>iPhone</b>) — список сам
+            покажет подходящие товары, нажимать ничего не надо. Крестик в поле очищает поиск.
+            Если щёлкнуть по пустому полю, покажутся прошлые запросы.
+          </p>
+        </div>
+
+        <div class="help-block">
+          <h3>Сколько показывать</h3>
+          <p>
+            Внизу списка есть «Показывать»: 10, 20, 50, 100 или «Все». Так ты решаешь, сколько
+            строк видно за раз. Твой выбор запоминается.
+          </p>
+        </div>
+
+        {#if canCreate}
+          <div class="help-block">
+            <h3>Как заказать товар (сделать заявку)</h3>
+            <ol>
+              <li>Найди нужный товар через поиск.</li>
+              <li>Нажми в строке товара <b>кнопку с корзинкой</b> — товар попадёт в заявку.</li>
+              <li>Нужно больше — нажми <b>«+»</b>; <b>«−»</b> — уменьшить количество.</li>
+              <li>
+                Когда всё выбрано, открой <b>корзину</b> (значок корзины вверху, там видно число
+                товаров) и отправь заявку.
+              </li>
+            </ol>
+            <p class="help-note">
+              Чтобы убрать товар из заявки: нажми «−», пока количество не станет 0, либо удали
+              его на странице корзины.
+            </p>
+          </div>
+        {/if}
+
+        <div class="help-block">
+          <h3>Что означают отметки</h3>
+          <ul>
+            <li><b>«нет в наличии»</b> — на складе сейчас 0 штук.</li>
+            <li><b>«поз заказ»</b> — товар можно заказать даже в минус (если так разрешено).</li>
+            {#if pricesEnabled}
+              <li><b>Цена</b> — сколько товар стоит для тебя.</li>
+            {/if}
+            {#if groupsEnabled}
+              <li><b>Группа</b> — к какой группе относится товар.</li>
+            {/if}
+          </ul>
+        </div>
+
+        {#if canEdit}
+          <div class="help-block">
+            <h3>Для администратора</h3>
+            <ul>
+              <li><b>«+ Позиция»</b> — добавить новый товар на склад.</li>
+              <li><b>«Переименовать склад»</b> — поменять название склада.</li>
+              <li><b>Карандаш</b> в строке товара — изменить название, остаток на складе, цену или группу.</li>
+            </ul>
+          </div>
+        {/if}
+
+        {#if canImport}
+          <div class="help-block">
+            <h3>Для менеджера</h3>
+            <ul>
+              <li><b>«Импорт остатков из 1С»</b> — загрузить свежие остатки из файла.</li>
+            </ul>
+          </div>
+        {/if}
+      </div>
+    </Modal>
 
     {#if loadingLevels}
       <div class="center"><Spinner size={26} /></div>
+    {:else if selectedIds.length === 0}
+      <div class="empty">Нет выбранных складов — нет позиций</div>
     {:else if levels.length === 0}
       <div class="empty">Ничего не найдено</div>
     {:else}
-      <div class="levels">
+      <div class="levels-wrap">
+      {#if viewMode === 'list'}
+        <div class="levels-head" style={listVars}>
+          <button type="button" class="levels-head-cell col-name" onclick={() => headerSort('name')}>
+            <span class="levels-head-label">Название</span>
+            {#if sortIndex('name') > 0}
+              <span class="sort-badge">
+                <Icon name={sortTerm('name') === 'desc' ? 'arrow-down' : 'arrow-up'} size={12} />
+                <span class="sort-num">{sortIndex('name')}</span>
+              </span>
+            {/if}
+          </button>
+          <button type="button" class="levels-head-cell col-stock" onclick={() => headerSort('qty')}>
+            <span class="levels-head-label">Остаток на складе</span>
+            {#if sortIndex('qty') > 0}
+              <span class="sort-badge">
+                <Icon name={sortTerm('qty') === 'desc' ? 'arrow-down' : 'arrow-up'} size={12} />
+                <span class="sort-num">{sortIndex('qty')}</span>
+              </span>
+            {/if}
+          </button>
+          {#if pricesEnabled}
+            <button type="button" class="levels-head-cell col-price" onclick={() => headerSort('price')}>
+              <span class="levels-head-label">Цена</span>
+              {#if sortIndex('price') > 0}
+                <span class="sort-badge">
+                  <Icon name={sortTerm('price') === 'desc' ? 'arrow-down' : 'arrow-up'} size={12} />
+                  <span class="sort-num">{sortIndex('price')}</span>
+                </span>
+              {/if}
+            </button>
+          {/if}
+          {#if canCreate}<span class="levels-head-cell head-cart col-cart">Корзина</span>{/if}
+        </div>
+      {/if}
+      <div class="levels" class:tiles={viewMode === 'tiles'} style={listVars}>
         {#each levels as level (level.id)}
           {@const cartQty = inCart(level)}
-          <div class="level" class:in-cart={cartQty > 0}>
-            <div class="name-col">
+          <div
+            class="level"
+            class:in-cart={cartQty > 0}
+            class:cart-over={cartQty > 0 && cartQty > level.quantity}
+          >
+            {#if showPhotos}
+              <div class="cell col-photo">
+                <PhotoGallery
+                  photos={level.photos ?? []}
+                  variant={viewMode === 'tiles' ? 'tile' : 'list'}
+                  flush={viewMode === 'tiles'}
+                  onopen={() => openDetail(level)}
+                />
+              </div>
+            {/if}
+            <div class="name-col col-name">
               <button
                 type="button"
                 class="name"
                 class:has-desc={level.description !== ''}
-                title={level.description !== ''
-                  ? expandedLevels.has(level.id)
-                    ? 'Скрыть описание'
-                    : 'Показать описание'
-                  : ''}
-                onclick={() => toggleLevelDescription(level.id)}
+                title="Подробнее о позиции"
+                onclick={() => openDetail(level)}
               >
                 {level.name}
               </button>
 
-              {#if expandedLevels.has(level.id) && level.description !== ''}
-                <div class="desc">{level.description}</div>
-              {/if}
-
-              {#if groupsEnabled && level.group_title}
-                <span class="group">{level.group_title}</span>
+              {#if level.warehouse_name || (groupsEnabled && level.group_title)}
+                <button
+                  type="button"
+                  class="meta meta-btn"
+                  title="Подробнее о позиции"
+                  onclick={() => openDetail(level)}
+                >
+                  {#if level.warehouse_name}<span class="wh">{level.warehouse_name}</span>{/if}
+                  {#if groupsEnabled && level.group_title}<span class="group">{level.group_title}</span>{/if}
+                </button>
               {/if}
             </div>
-            {#if level.quantity === 0}
-              <span class="zero-mark">нет в наличии</span>
-            {/if}
-            <span class="quantity" class:on-order={level.quantity < 0}>
-              {stockQuantityText(level.quantity, level.unit)}
-            </span>
-            {#if pricesEnabled}
-              <span class="price" class:missing={level.price === null} title={level.price === null ? 'Цена не задана' : 'Цена'}>
-                {formatPrice(level.price)}
-              </span>
-            {/if}
-            {#if canEdit}
-              <button
-                type="button"
-                class="icon-btn"
-                title="Изменить позицию"
-                aria-label={`Изменить: ${level.name}`}
-                onclick={() => openItemEdit(level)}
-              >
-                <Icon name="edit" size={16} />
-              </button>
-            {/if}
-            {#if canCreate}
-              <span class="add">
-                {#if cartQty > 0}
-                  <button
-                    type="button"
-                    class="step"
-                    aria-label={`Уменьшить: ${level.name}`}
-                    onclick={() => activeId !== null && cart.decreaseAt(activeId, level.name)}
+            <div class="level-bottom">
+              <div class="stat col-stock">
+                <span class="stat-label">Остаток на складе</span>
+                <span class="quantity" class:on-order={level.quantity < 0}>
+                  {stockQuantityText(level.quantity, level.unit)}
+                </span>
+                {#if level.quantity === 0}
+                  <span class="zero-mark">нет в наличии</span>
+                {/if}
+              </div>
+
+              {#if pricesEnabled}
+                <div class="stat col-price">
+                  <span class="stat-label">Цена</span>
+                  <span
+                    class="price"
+                    class:missing={level.price === null}
+                    title={level.price === null ? 'Цена не задана' : 'Цена'}
                   >
-                    −
-                  </button>
-                  <span class="qty" aria-label={`В корзине: ${level.name}`}>
-                    {cartQty.toLocaleString('ru-RU', { maximumFractionDigits: 3 })}
+                    {formatPrice(level.price)}
                   </span>
+                </div>
+              {/if}
+
+              {#if canCreate}
+                <div class="stat cart-stat col-cart">
+                  <span class="stat-label">В корзине</span>
+                  {#if cartQty > 0}
+                    <span class="add">
+                      <button
+                        type="button"
+                        class="step"
+                        aria-label={`Уменьшить: ${level.name}`}
+                        onclick={() => cart.decreaseAt(level.warehouse_id, level.name)}
+                      >
+                        −
+                      </button>
+                      <span class="qty" aria-label={`В корзине: ${level.name}`}>
+                        {cartQty.toLocaleString('ru-RU', { maximumFractionDigits: 3 })}
+                      </span>
+                      <button
+                        type="button"
+                        class="step"
+                        aria-label={`Увеличить: ${level.name}`}
+                        onclick={() => cart.increaseAt(level.warehouse_id, level.name)}
+                      >
+                        +
+                      </button>
+                    </span>
+                  {:else}
+                    <span class="add add-empty">
+                      <button
+                        type="button"
+                        class="cart-btn"
+                        title="Добавить в корзину"
+                        aria-label={`Добавить в корзину: ${level.name}`}
+                        onclick={() => addToCart(level)}
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          width="16"
+                          height="16"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          aria-hidden="true"
+                        >
+                          <circle cx="9" cy="20" r="1.5" />
+                          <circle cx="18" cy="20" r="1.5" />
+                          <path d="M2.5 3h2.3l2.2 11.8a1.6 1.6 0 0 0 1.6 1.3h8.9a1.6 1.6 0 0 0 1.6-1.3L20.5 7H6" />
+                        </svg>
+                      </button>
+                    </span>
+                  {/if}
+                </div>
+              {/if}
+
+              <div class="cell-actions col-actions">
+                {#if canManagePhotos}
                   <button
                     type="button"
-                    class="step"
-                    aria-label={`Увеличить: ${level.name}`}
-                    onclick={() => activeId !== null && cart.increaseAt(activeId, level.name)}
+                    class="icon-btn"
+                    title="Фото товара"
+                    aria-label={`Фото: ${level.name}`}
+                    onclick={() => openPhotos(level)}
                   >
-                    +
-                  </button>
-                {:else}
-                  <button
-                    type="button"
-                    class="cart-btn"
-                    title="Добавить в корзину"
-                    aria-label={`Добавить в корзину: ${level.name}`}
-                    onclick={() => addToCart(level)}
-                  >
-                    <svg
-                      viewBox="0 0 24 24"
-                      width="16"
-                      height="16"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      aria-hidden="true"
-                    >
-                      <circle cx="9" cy="20" r="1.5" />
-                      <circle cx="18" cy="20" r="1.5" />
-                      <path d="M2.5 3h2.3l2.2 11.8a1.6 1.6 0 0 0 1.6 1.3h8.9a1.6 1.6 0 0 0 1.6-1.3L20.5 7H6" />
-                    </svg>
+                    <Icon name="camera" size={16} />
                   </button>
                 {/if}
-              </span>
-            {/if}
+                {#if canEdit}
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    title="Изменить позицию"
+                    aria-label={`Изменить: ${level.name}`}
+                    onclick={() => openItemEdit(level)}
+                  >
+                    <Icon name="edit" size={16} />
+                  </button>
+                {/if}
+              </div>
+            </div>
           </div>
         {/each}
+      </div>
       </div>
 
       <div class="pager">
         <label class="per-page">
           <span>Показывать</span>
           <select bind:value={perPage} onchange={changePerPage}>
+            <option value={10}>10</option>
             <option value={20}>20</option>
             <option value={50}>50</option>
             <option value={100}>100</option>
+            <option value={0}>Все</option>
           </select>
         </label>
 
         <div class="pager-nav">
           <Button variant="ghost" disabled={page <= 1} onclick={() => void changePage(-1)}>Назад</Button>
           <span>Стр. {page} из {pages} · всего {total}</span>
-          <Button variant="ghost" disabled={page * perPage >= total} onclick={() => void changePage(1)}>
+          <Button variant="ghost" disabled={perPage <= 0 || page * perPage >= total} onclick={() => void changePage(1)}>
             Вперёд
           </Button>
         </div>
@@ -887,9 +1616,9 @@
 
   <ExportModal
     open={exportOpen}
-    title="Экспорт остатков по всем складам"
+    title="Экспорт остатков по выбранным складам"
     email={auth.user?.email ?? ''}
-    emailAllowed={appSettings.emailExportEnabled}
+    emailAllowed={appSettings.emailExportEnabled && appSettings.mailConfigured}
     onclose={() => (exportOpen = false)}
     onpick={(format, byEmail) => void doExport(format, byEmail)}
   />
@@ -900,11 +1629,22 @@
     onclose={() => (itemOpen = false)}
   >
     <div class="item-form">
+      {#if itemTarget === null && selectedWarehouses.length > 0}
+        <label class="field">
+          <span class="label">Склад</span>
+          <select bind:value={itemWarehouseId}>
+            {#each selectedWarehouses as warehouse (warehouse.id)}
+              <option value={warehouse.id}>{warehouse.name}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
       <Input label="Название" bind:value={itemForm.name} placeholder="Например: Смартфон Pixel 9" />
 
       <div class="item-grid">
         <Input label="Единица измерения" bind:value={itemForm.unit} placeholder="шт" />
-        <Input label="Количество" type="number" bind:value={itemForm.quantity} />
+        <Input label="Остаток на складе" type="number" bind:value={itemForm.quantity} />
       </div>
 
       {#if groupsEnabled && groups.length > 0}
@@ -962,6 +1702,17 @@
 
   <Modal open={renameOpen} title="Название склада" onclose={() => (renameOpen = false)}>
     <div class="item-form">
+      {#if selectedWarehouses.length > 0}
+        <label class="field">
+          <span class="label">Склад</span>
+          <select bind:value={renameWarehouseId} onchange={changeRenameWarehouse}>
+            {#each selectedWarehouses as warehouse (warehouse.id)}
+              <option value={warehouse.id}>{warehouse.name}</option>
+            {/each}
+          </select>
+        </label>
+      {/if}
+
       <Input
         label="Название"
         bind:value={renameName}
@@ -1091,90 +1842,6 @@
     font: inherit;
   }
 
-  .tabs-row {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .tabs-nav {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 auto;
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    background: var(--surface);
-    color: var(--text);
-    cursor: pointer;
-    transition: border-color 0.12s ease, color 0.12s ease;
-  }
-
-  .tabs-nav:hover:not(:disabled) {
-    border-color: var(--primary);
-    color: var(--primary);
-  }
-
-  .tabs-nav:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  .tabs-wrap {
-    position: relative;
-    flex: 1 1 auto;
-    min-width: 0;
-  }
-
-  .tabs-wrap.overflow::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    right: 0;
-    bottom: 0;
-    width: 40px;
-    pointer-events: none;
-    background: linear-gradient(to right, transparent, var(--bg) 85%);
-  }
-
-  .tabs {
-    display: flex;
-    flex-wrap: nowrap;
-    gap: var(--space-2);
-    overflow-x: auto;
-    scrollbar-width: none;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 2px;
-  }
-
-  .tabs::-webkit-scrollbar {
-    display: none;
-  }
-
-  .tab {
-    flex: 0 0 auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 14px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface);
-    color: var(--muted);
-    font: inherit;
-    font-size: 13px;
-    cursor: pointer;
-  }
-
-  .tab.active {
-    border-color: var(--primary);
-    color: var(--primary);
-    font-weight: 500;
-  }
-
   .count {
     font-size: 11px;
     color: var(--muted);
@@ -1199,25 +1866,12 @@
     white-space: nowrap;
   }
 
-  .warehouse-select {
-    display: none;
-    width: 100%;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    font: inherit;
-    color: var(--text);
-  }
-
-  @media (max-width: 720px) {
-    .tabs-row {
-      display: none;
-    }
-
-    .warehouse-select {
-      display: block;
-    }
+  .warehouse-option-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .personal {
@@ -1231,6 +1885,7 @@
     flex-wrap: wrap;
     gap: var(--space-3);
     align-items: center;
+    justify-content: space-between;
   }
 
   select {
@@ -1244,25 +1899,187 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-    flex: 1 1 260px;
+    flex: 1 1 220px;
+    max-width: 360px;
     min-width: 0;
   }
 
-  .sort-field {
+  .filter-icons {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .icon-button,
+  .sort-button {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--muted);
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .icon-button:hover,
+  .sort-button:hover {
+    color: var(--text);
+    background: rgba(23, 25, 28, 0.04);
+  }
+
+  .icon-button:disabled,
+  .sort-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .sort-button.active {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .sort-options {
+    display: flex;
+    flex-direction: column;
     gap: var(--space-2);
-    margin-left: var(--space-2);
-    padding-left: var(--space-4);
-    border-left: 1px solid var(--border);
+  }
+
+  .sort-hint {
+    margin: 0 0 var(--space-2);
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .sort-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .sort-order {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .sort-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+  }
+
+  .sort-row.active {
+    border-color: var(--border);
+    background: var(--bg);
+  }
+
+  .sort-row-label {
+    flex: 1;
+    min-width: 0;
+    font-size: 14px;
+  }
+
+  .dir-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--muted);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+
+  .dir-btn:hover {
+    color: var(--text);
+    background: rgba(23, 25, 28, 0.04);
+  }
+
+  .dir-btn.on {
+    border-color: var(--primary);
+    color: var(--primary);
+    background: color-mix(in srgb, var(--primary) 10%, white);
+  }
+
+  .sort-option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-4);
+  }
+
+  .help-intro {
+    margin: 0 0 var(--space-4);
     font-size: 14px;
     color: var(--muted);
-    white-space: nowrap;
+  }
+
+  .help-block {
+    margin-bottom: var(--space-4);
+  }
+
+  .help-block:last-child {
+    margin-bottom: 0;
+  }
+
+  .help-block h3 {
+    margin: 0 0 var(--space-2);
+    font-size: 15px;
+  }
+
+  .help-block p {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  .help ul,
+  .help ol {
+    margin: 0;
+    padding-left: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    font-size: 14px;
+  }
+
+  .help-note {
+    margin: var(--space-2) 0 0;
+    font-size: 13px;
+    color: var(--muted);
   }
 
   @media (max-width: 720px) {
     .search {
       flex: 1 1 100%;
+      max-width: none;
     }
   }
 
@@ -1281,6 +2098,168 @@
     overflow: hidden;
   }
 
+  .levels-wrap {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .levels-head {
+    display: none;
+  }
+
+  .cell {
+    flex: 0 0 auto;
+    min-width: 0;
+  }
+
+  .cell-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .col-photo {
+    grid-column: 1;
+  }
+
+  .col-name {
+    grid-column: 2;
+  }
+
+  .col-stock {
+    grid-column: 3;
+  }
+
+  .col-price {
+    grid-column: 4;
+  }
+
+  .col-cart {
+    grid-column: 5;
+  }
+
+  .col-actions {
+    grid-column: 6;
+  }
+
+  .levels-head-cell {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+  }
+
+  .levels-head-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  button.levels-head-cell {
+    cursor: pointer;
+  }
+
+  button.levels-head-cell:hover {
+    color: var(--primary);
+  }
+
+  .head-cart {
+    justify-content: center;
+    cursor: default;
+  }
+
+  .sort-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    flex: 0 0 auto;
+    color: var(--primary);
+  }
+
+  .sort-num {
+    min-width: 15px;
+    height: 15px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 14%, white);
+    font-size: 10px;
+    line-height: 15px;
+    text-align: center;
+  }
+
+  @media (min-width: 720px) {
+    .levels-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: grid;
+      grid-template-columns:
+        var(--photo, 56px) minmax(0, 1fr) minmax(0, 130px) var(--price, 100px)
+        var(--cart, 120px) var(--actions, 72px);
+      align-items: center;
+      gap: var(--space-3);
+      padding: 10px var(--space-4);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-bottom: none;
+      border-radius: var(--radius-md) var(--radius-md) 0 0;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--muted);
+    }
+
+    .levels:not(.tiles) {
+      border-top: none;
+      border-radius: 0 0 var(--radius-md) var(--radius-md);
+    }
+
+    .levels:not(.tiles) .level {
+      display: grid;
+      grid-template-columns:
+        var(--photo, 56px) minmax(0, 1fr) minmax(0, 130px) var(--price, 100px)
+        var(--cart, 120px) var(--actions, 72px);
+      align-items: center;
+      gap: var(--space-3);
+    }
+
+    .levels:not(.tiles) .level-bottom {
+      display: contents;
+    }
+
+    .levels:not(.tiles) .stat-label {
+      display: none;
+    }
+
+    .levels:not(.tiles) .name {
+      font-weight: 600;
+    }
+
+    .levels:not(.tiles) .col-stock,
+    .levels:not(.tiles) .col-price {
+      align-items: flex-start;
+    }
+
+    .cell-actions {
+      justify-content: flex-end;
+    }
+
+    .levels:not(.tiles) .cart-stat {
+      align-items: center;
+    }
+
+    .levels:not(.tiles) .cart-stat .add-empty {
+      justify-content: center;
+    }
+  }
+
   .level {
     display: flex;
     align-items: center;
@@ -1293,11 +2272,195 @@
   }
 
   .level:hover {
-    background: var(--bg);
+    background: color-mix(in srgb, var(--primary) 6%, white);
   }
 
   .level:last-child {
     border-bottom: none;
+  }
+
+  .level-bottom {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 6px var(--space-3);
+    min-width: 0;
+  }
+
+  .stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .stat-label {
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .detail {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: start;
+  }
+
+  .detail-photo {
+    min-width: 0;
+  }
+
+  .detail-info {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+  }
+
+  .detail-name {
+    margin: 0;
+    font-size: 16px;
+    overflow-wrap: anywhere;
+  }
+
+  .detail-desc {
+    margin: 0;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .detail-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3) var(--space-5);
+  }
+
+  .detail-cart {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+
+  @media (max-width: 560px) {
+    .detail {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  .levels.tiles {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-5);
+    padding: var(--space-4) 0 0;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    overflow: visible;
+  }
+
+  @media (min-width: 640px) {
+    .levels.tiles {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .levels.tiles {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 719.98px) {
+    .levels:not(.tiles) .level {
+      flex-wrap: wrap;
+      row-gap: var(--space-2);
+    }
+
+    .levels:not(.tiles) .name-col {
+      flex: 1 1 60%;
+    }
+
+    .levels:not(.tiles) .level-bottom {
+      flex: 1 1 100%;
+      justify-content: flex-start;
+    }
+  }
+
+  .levels.tiles .level {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 0;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    overflow: hidden;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .levels.tiles .level:hover {
+    border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
+    box-shadow: var(--shadow-sm);
+  }
+
+  .levels.tiles .level:last-child {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .levels.tiles .cell.col-photo {
+    width: 100%;
+  }
+
+  .levels.tiles .name-col {
+    padding: var(--space-3) var(--space-3) 0;
+  }
+
+  .levels.tiles .name {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-weight: 600;
+    line-height: 1.3;
+  }
+
+  .levels.tiles .meta {
+    flex-wrap: nowrap;
+    font-size: 12px;
+  }
+
+  .levels.tiles .meta .wh,
+  .levels.tiles .meta .group {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .levels.tiles .stat-label {
+    display: none;
+  }
+
+  .levels.tiles .level-bottom {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    margin-top: auto;
+    padding: var(--space-3);
+  }
+
+  .levels.tiles .cart-stat {
+    min-width: 0;
+    margin-left: auto;
   }
 
   .name-col {
@@ -1306,6 +2469,29 @@
     gap: 4px;
     flex: 1;
     min-width: 0;
+  }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .meta-btn {
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .meta-btn:hover .wh,
+  .meta-btn:hover .group {
+    color: var(--primary);
+    text-decoration: underline;
   }
 
   .name {
@@ -1319,21 +2505,8 @@
     overflow-wrap: anywhere;
   }
 
-  .name.has-desc {
-    border-bottom: 1px dashed var(--border);
-  }
-
   .name:hover {
     color: var(--primary);
-  }
-
-  .desc {
-    padding: 8px 10px;
-    border-radius: var(--radius-sm);
-    background: var(--bg);
-    color: var(--muted);
-    font-size: 13px;
-    white-space: pre-wrap;
   }
 
   .level .quantity {
@@ -1347,6 +2520,11 @@
   }
 
   .level .group {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .level .wh {
     color: var(--muted);
     font-size: 12px;
   }
@@ -1385,6 +2563,88 @@
   .icon-btn:hover {
     border-color: var(--primary);
     color: var(--primary);
+  }
+
+  .view-columns {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-4);
+  }
+
+  .view-column {
+    min-width: 0;
+  }
+
+  .photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+
+  .photo-item {
+    position: relative;
+    aspect-ratio: 1;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  .photo-item img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .photo-remove {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .photo-remove:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .photo-add {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    aspect-ratio: 1;
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .photo-add:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .photo-add.busy {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  .photo-add input {
+    display: none;
   }
 
   .item-form {
@@ -1465,19 +2725,44 @@
     gap: var(--space-2);
   }
 
-  .level.in-cart {
-    background: color-mix(in srgb, var(--primary) 7%, white);
+  .levels .level.in-cart {
+    background: color-mix(in srgb, var(--success) 12%, white);
+  }
+
+  .levels .level.in-cart:hover {
+    background: color-mix(in srgb, var(--success) 18%, white);
+  }
+
+  .levels .level.in-cart.cart-over {
+    background: color-mix(in srgb, var(--danger) 12%, white);
+  }
+
+  .levels .level.in-cart.cart-over:hover {
+    background: color-mix(in srgb, var(--danger) 18%, white);
   }
 
   .add {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: 2px;
     flex: 0 0 auto;
   }
 
+  .cart-stat {
+    min-width: 120px;
+  }
+
+  .cart-stat .add {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .cart-stat .add-empty {
+    justify-content: flex-end;
+  }
+
   .qty {
-    min-width: 44px;
+    min-width: 26px;
     text-align: center;
     font-weight: 500;
     white-space: nowrap;
@@ -1490,17 +2775,15 @@
     width: 32px;
     height: 32px;
     padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 50%;
-    background: var(--surface);
+    border: none;
+    background: none;
     color: var(--text);
-    font-size: 16px;
+    font-size: 18px;
     line-height: 1;
     cursor: pointer;
   }
 
   .step:hover {
-    border-color: var(--primary);
     color: var(--primary);
   }
 
@@ -1511,16 +2794,14 @@
     width: 32px;
     height: 32px;
     padding: 0;
-    border: 1px solid var(--border);
-    border-radius: 50%;
+    border: none;
     background: none;
     color: var(--primary);
     cursor: pointer;
   }
 
   .cart-btn:hover {
-    border-color: var(--primary);
-    background: color-mix(in srgb, var(--primary) 8%, white);
+    color: var(--primary-hover);
   }
 
   .pager {

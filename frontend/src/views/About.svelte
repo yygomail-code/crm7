@@ -1,5 +1,15 @@
 <script lang="ts">
-  import { APP_NAME, APP_VERSION, CONTACTS, SITE_URL, SITE_LABEL } from '../lib/about';
+  import {
+    APP_NAME,
+    APP_VERSION,
+    CONTACTS,
+    SITE_URL,
+    SITE_LABEL,
+    LICENSE_TYPE,
+    LICENSE_HOLDER,
+    LICENSE_YEAR,
+    LICENSE_URL
+  } from '../lib/about';
   import Logo from '../lib/components/ui/Logo.svelte';
   import { router } from '../lib/router.svelte';
 </script>
@@ -105,6 +115,20 @@
       <li>попробовать приложение без регистрации;</li>
       <li>почитать документацию.</li>
     </ul>
+  </div>
+
+  <div class="card">
+    <h2>Лицензия</h2>
+    <p class="license-note">
+      Программа распространяется «как есть» (AS IS), без каких-либо гарантий.
+      Её можно свободно использовать, дорабатывать, изменять и распространять, в том
+      числе в коммерческих целях, — достаточно сохранить уведомление об авторстве.
+    </p>
+    <p class="license-line">
+      Лицензия:
+      <a class="site-link" href={LICENSE_URL} target="_blank" rel="noopener">{LICENSE_TYPE}</a>.
+      Правообладатель: © {LICENSE_YEAR} {LICENSE_HOLDER}.
+    </p>
   </div>
 
   <div class="card">
@@ -243,6 +267,17 @@
     margin: 0;
     padding-left: 20px;
     color: var(--muted);
+    font-size: 14px;
+  }
+
+  .license-note {
+    margin: 0 0 var(--space-2);
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  .license-line {
+    margin: 0;
     font-size: 14px;
   }
 

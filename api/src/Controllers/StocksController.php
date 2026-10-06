@@ -6,6 +6,7 @@ namespace App\Controllers;
 
 use App\Export\ExportMailer;
 use App\Http\DownloadResponse;
+use App\Http\FileResponse;
 use App\Http\Request;
 use App\Http\Response;
 use App\Stocks\StocksService;
@@ -42,7 +43,7 @@ final class StocksController extends ApiController
         return Response::ok($this->service->levels(
             $user,
             $capabilities,
-            (int) $request->queryParam('warehouse_id', '0'),
+            $this->warehouseIds($request),
             $this->filters($request),
             (int) $request->queryParam('page', '1'),
             (int) $request->queryParam('per_page', '50'),
@@ -57,7 +58,7 @@ final class StocksController extends ApiController
         $result = $this->service->export(
             $user,
             $capabilities,
-            (int) $request->queryParam('warehouse_id', '0'),
+            $this->warehouseIds($request),
             $this->filters($request),
             (string) $request->queryParam('format', 'csv')
         );
@@ -124,6 +125,58 @@ final class StocksController extends ApiController
         ));
     }
 
+    public function uploadPhoto(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->uploadPhoto(
+            $user,
+            $capabilities,
+            (int) ($params['itemId'] ?? 0),
+            $_FILES['file'] ?? []
+        ));
+    }
+
+    public function deletePhoto(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->deletePhoto($user, $capabilities, (int) ($params['id'] ?? 0)));
+    }
+
+    public function photo(Request $request, array $params): FileResponse
+    {
+        [$user] = $this->context($request);
+
+        return $this->service->photo($user, (int) ($params['id'] ?? 0));
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function warehouseIds(Request $request): array
+    {
+        $raw = trim((string) $request->queryParam('warehouse_ids', ''));
+
+        if ($raw === '') {
+            $single = (int) $request->queryParam('warehouse_id', '0');
+
+            return $single > 0 ? [$single] : [];
+        }
+
+        $ids = [];
+
+        foreach (explode(',', $raw) as $part) {
+            $id = (int) trim($part);
+
+            if ($id > 0) {
+                $ids[] = $id;
+            }
+        }
+
+        return $ids;
+    }
+
     private function filters(Request $request): array
     {
         return [
@@ -132,7 +185,34 @@ final class StocksController extends ApiController
             'qty' => $request->queryParam('qty', ''),
             'sort' => (string) $request->queryParam('sort', ''),
             'show_zero' => (string) $request->queryParam('show_zero', ''),
-            'group_id' => (int) $request->queryParam('group_id', '0'),
+            'group_ids' => $this->groupIds($request),
+            'no_group' => (string) $request->queryParam('no_group', ''),
         ];
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function groupIds(Request $request): array
+    {
+        $raw = trim((string) $request->queryParam('group_ids', ''));
+
+        if ($raw === '') {
+            $single = (int) $request->queryParam('group_id', '0');
+
+            return $single > 0 ? [$single] : [];
+        }
+
+        $ids = [];
+
+        foreach (explode(',', $raw) as $part) {
+            $id = (int) trim($part);
+
+            if ($id > 0) {
+                $ids[] = $id;
+            }
+        }
+
+        return $ids;
     }
 }
