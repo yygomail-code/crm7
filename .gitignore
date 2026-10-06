@@ -18,6 +18,7 @@ api/config/database.json.tmp
 db-old/
 php_info/
 api/db/backups/
+ssh-private/
 
 # uploaded production files
 site-old/back/upload_file/*

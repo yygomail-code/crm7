@@ -1,0 +1,29 @@
+name: Deploy test
+
+# Требует self-hosted runner на dev-сервере (метки: self-hosted, crm7).
+# Runner делает исходящие соединения в GitHub — проброс портов не нужен.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Тег образа (например sha-abcdef1 или 1.4.0)'
+        required: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, crm7]
+    steps:
+      - name: Release to test
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -e
+          cd /srv/projects/crm7-test
+          sed -i "s/^CRM7_VERSION=.*/CRM7_VERSION=$TAG/" .env
+          grep -q '^CRM7_VERSION=' .env || echo "CRM7_VERSION=$TAG" >> .env
+          docker compose pull
+          docker compose run --rm php php /var/www/html/api/bin/migrate.php
+          docker compose up -d
+          sleep 4
+          docker exec crm7-test-web wget -qO- http://127.0.0.1/api/v2/health

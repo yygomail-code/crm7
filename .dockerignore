@@ -1,0 +1,22 @@
+# build context = staging (api/ + frontend/dist/ + deploy/)
+.git
+.gitignore
+ssh-private
+**/node_modules
+frontend/src
+frontend/.vite
+frontend/artifacts
+deploy/*.py
+deploy/*.md
+api/config/.env
+api/config/database.json
+api/config/database.json.bak
+api/config/database.json.tmp
+api/var
+api/storage
+api/db/backups
+**/*.log
+db-old
+site-old
+back
+php_info
