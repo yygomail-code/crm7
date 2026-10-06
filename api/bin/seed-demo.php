@@ -26,6 +26,7 @@ require __DIR__ . '/../src/autoload.php';
 Config::load(__DIR__ . '/../config/.env');
 
 $force = in_array('--force', $argv, true);
+$allowNonDemo = in_array('--allow-non-demo', $argv, true);
 $password = null;
 $passwordsFile = null;
 
@@ -42,6 +43,14 @@ foreach ($argv as $argument) {
 if (!$force) {
     fwrite(STDERR, "seed-demo удаляет все текущие данные (заявки, чаты, пользователей, остатки).\n");
     fwrite(STDERR, "Запустите с флагом --force, предварительно сделав дамп базы.\n");
+
+    exit(1);
+}
+
+if (!Config::demoMode() && !$allowNonDemo) {
+    fwrite(STDERR, "Это окружение НЕ в режиме demo (DEMO_MODE != true).\n");
+    fwrite(STDERR, "seed-demo полностью очищает базу и не должен запускаться на k/prod.\n");
+    fwrite(STDERR, "Если это осознанно (например, test), добавьте флаг --allow-non-demo.\n");
 
     exit(1);
 }

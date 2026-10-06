@@ -20,6 +20,12 @@ php_info/
 api/db/backups/
 ssh-private/
 
+# client data imports / dumps (never commit)
+imports/
+*.sql.gz
+*.dump
+*.dump.gz
+
 # uploaded production files
 site-old/back/upload_file/*
 !site-old/back/upload_file/.gitkeep
