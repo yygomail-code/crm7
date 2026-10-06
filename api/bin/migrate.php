@@ -2,12 +2,34 @@
 
 declare(strict_types=1);
 
+/**
+ * CRM7 — применение миграций БД.
+ *
+ * Правила (важно, чтобы не потерять данные):
+ *   1. Каждое изменение схемы — НОВЫЙ файл api/db/migrations/NNN_*.sql.
+ *      Уже применённые файлы НЕ редактируются (учитываются по имени).
+ *   2. Сначала аддитивно (CREATE/ADD COLUMN), удаление — отдельным поздним
+ *      релизом, когда код уже не использует объект.
+ *   3. Один файл — одно логическое изменение; запросы делайте идемпотентными
+ *      (IF NOT EXISTS / IF EXISTS). Транзакций и down-миграций нет.
+ *   4. Перед применением на k/prod — БЭКАП БД.
+ *   5. Сиды (seed-demo.php --force) запускаются ТОЛЬКО на demo.
+ *
+ * Использование:
+ *   php api/bin/migrate.php                     применить ожидающие
+ *   php api/bin/migrate.php --status            показать применённые/ожидающие
+ *   php api/bin/migrate.php --allow-destructive разрешить DROP/TRUNCATE/DELETE
+ */
+
 use App\Core\Config;
 use App\Core\Database;
 
 require __DIR__ . '/../src/autoload.php';
 
 Config::load(__DIR__ . '/../config/.env');
+
+$statusOnly = in_array('--status', $argv, true);
+$allowDestructive = in_array('--allow-destructive', $argv, true);
 
 $pdo = Database::pdo();
 
@@ -25,15 +47,65 @@ $applied = $pdo->query('SELECT filename FROM schema_migrations')->fetchAll(PDO::
 $files = glob(__DIR__ . '/../db/migrations/*.sql') ?: [];
 sort($files);
 
-foreach ($files as $file) {
-    $name = basename($file);
+$all = array_map('basename', $files);
+$pending = array_values(array_diff($all, $applied));
 
-    if (in_array($name, $applied, true)) {
-        echo "skip $name\n";
-        continue;
+echo "CRM7 migrations\n";
+echo 'applied: ' . count($applied) . ', pending: ' . count($pending) . "\n";
+
+if ($statusOnly) {
+    if ($applied !== []) {
+        echo "\napplied:\n";
+        foreach ($applied as $name) {
+            echo "  ok   $name\n";
+        }
     }
 
-    $sql = (string) file_get_contents($file);
+    if ($pending !== []) {
+        echo "\npending:\n";
+        foreach ($pending as $name) {
+            echo "  new  $name\n";
+        }
+    } else {
+        echo "\nnothing to apply\n";
+    }
+
+    exit(0);
+}
+
+if ($pending === []) {
+    echo "nothing to apply\n";
+    exit(0);
+}
+
+$destructive = [];
+foreach ($pending as $name) {
+    $sql = (string) file_get_contents(__DIR__ . '/../db/migrations/' . $name);
+
+    if (preg_match('/\b(DROP\s+(TABLE|COLUMN|DATABASE)|TRUNCATE|DELETE\s+FROM)\b/i', $sql) === 1) {
+        $destructive[] = $name;
+    }
+}
+
+echo "\npending:\n";
+foreach ($pending as $name) {
+    $mark = in_array($name, $destructive, true) ? ' [destructive]' : '';
+    echo "  new  $name$mark\n";
+}
+
+if ($destructive !== [] && !$allowDestructive) {
+    fwrite(STDERR, "\nОТКАЗ: ожидающие миграции содержат деструктивные операции (DROP/TRUNCATE/DELETE):\n");
+    foreach ($destructive as $name) {
+        fwrite(STDERR, "  $name\n");
+    }
+    fwrite(STDERR, "\nСделайте БЭКАП БД и запустите с --allow-destructive, если удаление осознанно.\n");
+    exit(1);
+}
+
+fwrite(STDERR, "\nВНИМАНИЕ: перед применением на k/prod убедитесь, что есть бэкап БД.\n");
+
+foreach ($pending as $name) {
+    $sql = (string) file_get_contents(__DIR__ . '/../db/migrations/' . $name);
 
     foreach (splitStatements($sql) as $statement) {
         $pdo->exec($statement);
