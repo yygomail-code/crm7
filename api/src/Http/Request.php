@@ -56,7 +56,40 @@ final class Request
             $body = $_POST;
         }
 
-        return new self($method, $path, $_GET, $body, $headers, (string) ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0'));
+        return new self($method, $path, $_GET, $body, $headers, self::resolveIp($headers));
+    }
+
+    /**
+     * Реальный IP клиента. За обратным прокси (Caddy) REMOTE_ADDR — это адрес
+     * прокси, поэтому берём последний адрес из X-Forwarded-For (его добавляет
+     * наш доверенный прокси), затем X-Real-IP, затем REMOTE_ADDR.
+     *
+     * @param array<string,string> $headers
+     */
+    private static function resolveIp(array $headers): string
+    {
+        $forwarded = (string) ($headers['x-forwarded-for'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '');
+
+        if ($forwarded !== '') {
+            $parts = array_values(array_filter(
+                array_map('trim', explode(',', $forwarded)),
+                static fn (string $part): bool => $part !== ''
+            ));
+
+            $candidate = $parts === [] ? '' : (string) end($parts);
+
+            if (filter_var($candidate, FILTER_VALIDATE_IP) !== false) {
+                return $candidate;
+            }
+        }
+
+        $real = (string) ($headers['x-real-ip'] ?? $_SERVER['HTTP_X_REAL_IP'] ?? '');
+
+        if (filter_var($real, FILTER_VALIDATE_IP) !== false) {
+            return $real;
+        }
+
+        return (string) ($_SERVER['REMOTE_ADDR'] ?? '0.0.0.0');
     }
 
     public function withPath(string $path): self

@@ -22,6 +22,10 @@ final class AuthService
 
     private const LOGIN_WINDOW_MINUTES = 15;
 
+    private const MAX_IP_ATTEMPTS = 15;
+
+    private const IP_WINDOW_MINUTES = 15;
+
     private const MAX_RESET_REQUESTS = 3;
 
     private const RESET_WINDOW_MINUTES = 60;
@@ -48,8 +52,12 @@ final class AuthService
             throw new HttpException(422, 'validation_error', 'Укажите логин и пароль');
         }
 
-        if ($this->attempts->countRecent('login', $login, $ip, self::LOGIN_WINDOW_MINUTES) >= self::MAX_LOGIN_ATTEMPTS) {
+        if ($this->attempts->countRecentForLogin('login', $login, Config::int('LOGIN_WINDOW_MINUTES', self::LOGIN_WINDOW_MINUTES)) >= Config::int('LOGIN_MAX_ATTEMPTS', self::MAX_LOGIN_ATTEMPTS)) {
             throw new HttpException(429, 'rate_limited', 'Слишком много попыток входа. Повторите через 15 минут');
+        }
+
+        if ($this->attempts->countRecentForIp('login', $ip, Config::int('IP_WINDOW_MINUTES', self::IP_WINDOW_MINUTES)) >= Config::int('IP_MAX_ATTEMPTS', self::MAX_IP_ATTEMPTS)) {
+            throw new HttpException(429, 'rate_limited_device', 'Слишком много попыток входа с этого устройства. Повторите через 15 минут');
         }
 
         $user = $this->users->findByLogin($login);

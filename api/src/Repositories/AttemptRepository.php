@@ -23,6 +23,42 @@ final class AttemptRepository
         return (int) $stmt->fetchColumn();
     }
 
+    /**
+     * Неудачные попытки по конкретному логину (с любых IP) — защита аккаунта.
+     */
+    public function countRecentForLogin(string $type, string $login, int $minutes, bool $onlyFailed = true): int
+    {
+        $sql = 'SELECT COUNT(*) FROM login_attempts
+                WHERE type = ? AND login = ? AND created_at > (NOW() - INTERVAL ? MINUTE)';
+
+        if ($onlyFailed) {
+            $sql .= ' AND success = 0';
+        }
+
+        $stmt = Database::pdo()->prepare($sql);
+        $stmt->execute([$type, $login, $minutes]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * Неудачные попытки с конкретного IP (по любым логинам) — защита от перебора.
+     */
+    public function countRecentForIp(string $type, string $ip, int $minutes, bool $onlyFailed = true): int
+    {
+        $sql = 'SELECT COUNT(*) FROM login_attempts
+                WHERE type = ? AND ip = ? AND created_at > (NOW() - INTERVAL ? MINUTE)';
+
+        if ($onlyFailed) {
+            $sql .= ' AND success = 0';
+        }
+
+        $stmt = Database::pdo()->prepare($sql);
+        $stmt->execute([$type, $ip, $minutes]);
+
+        return (int) $stmt->fetchColumn();
+    }
+
     public function record(string $type, string $login, string $ip, bool $success): void
     {
         $stmt = Database::pdo()->prepare(

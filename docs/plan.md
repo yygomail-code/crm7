@@ -677,3 +677,12 @@ Demo-режим (`DEMO_MODE=true` в `api/config/.env`):
 Выкладка (образы): `python deploy/build_images.py --push` (сборка на dev-сервере, теги `<version>` + `sha-<commit>`, приватный GHCR) → `python deploy/release_crm7.py --env all --tag <ver>` (pull → миграции → перезапуск; тома с данными не трогаются). Подробности — `docs/images.md`. Провижининг нового окружения — `provision_crm7_env.sh`; прежний `deploy/deploy_crm7.py` (SFTP-код) оставлен как legacy для bind-mount.
 
 Правила миграций БД — `docs/migrations.md` (аддитивность, бэкап перед k/prod, сиды только demo; `migrate.php --status` и защита `--allow-destructive`).
+
+## 15. Защита входа от перебора (выполнено)
+
+- Реальный IP клиента берётся из `X-Forwarded-For` (последний адрес, добавленный доверенным Caddy) — за прокси `REMOTE_ADDR` указывал на контейнер nginx, из-за чего все клиенты «сливались» в один IP. Подделка XFF клиентом не проходит.
+- Два независимых лимита (настраиваются через `.env`):
+  - per-login: `LOGIN_MAX_ATTEMPTS=5` / `LOGIN_WINDOW_MINUTES=15` → `429 rate_limited`;
+  - per-IP (устройство): `IP_MAX_ATTEMPTS=15` / `IP_WINDOW_MINUTES=15` → `429 rate_limited_device` — закрывает перебор с ротацией логинов.
+- Миграция `036_login_attempts_ip_index.sql` (индекс по `type, ip, created_at`).
+- Проверено: 6-я неудачная попытка по логину и 16-я с одного IP блокируются; подставленный `X-Forwarded-For` игнорируется.
