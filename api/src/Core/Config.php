@@ -53,4 +53,9 @@ final class Config
 
         return $value !== null && is_numeric($value) ? (int) $value : $default;
     }
+
+    public static function demoMode(): bool
+    {
+        return filter_var(self::get('DEMO_MODE', 'false'), FILTER_VALIDATE_BOOL);
+    }
 }

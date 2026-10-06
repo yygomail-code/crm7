@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Core\Config;
+use App\Demo\DemoAccounts;
 use App\Groups\ItemGroupService;
 use App\Http\Request;
 use App\Http\Response;
@@ -31,6 +33,23 @@ final class AppSettingsController extends ApiController
             'stock_allow_zero' => $this->settings->allowZeroStock(),
             'prices_enabled' => $this->settings->pricesEnabled(),
             'groups_enabled' => $this->settings->groupsEnabled(),
+            'demo_mode' => Config::demoMode(),
+        ]);
+    }
+
+    public function publicSettings(Request $request): Response
+    {
+        $demo = Config::demoMode();
+
+        return Response::ok([
+            'demo_mode' => $demo,
+            'demo_accounts' => $demo
+                ? array_map(static fn (array $account): array => [
+                    'login' => $account['login'],
+                    'role' => $account['role'],
+                    'password' => DemoAccounts::PASSWORD,
+                ], DemoAccounts::all())
+                : [],
         ]);
     }
 

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Core\Config;
 use App\Http\HttpException;
 use App\Http\Request;
 use App\Http\Response;
@@ -17,6 +18,13 @@ final class UserController extends ApiController
         private readonly UserAdminService $admin = new UserAdminService()
     ) {
         parent::__construct();
+    }
+
+    private function denyInDemo(): void
+    {
+        if (Config::demoMode()) {
+            throw new HttpException(403, 'demo_mode', 'Действие недоступно в демо-режиме');
+        }
     }
 
     public function managers(Request $request): Response
@@ -51,6 +59,8 @@ final class UserController extends ApiController
 
     public function create(Request $request): Response
     {
+        $this->denyInDemo();
+
         [$user, $capabilities] = $this->context($request);
 
         $result = $this->admin->create($user, $capabilities, $request->bodyAll());
@@ -61,6 +71,8 @@ final class UserController extends ApiController
 
     public function update(Request $request, array $params): Response
     {
+        $this->denyInDemo();
+
         [$user, $capabilities] = $this->context($request);
 
         $result = $this->admin->update($user, $capabilities, (int) ($params['id'] ?? 0), $request->bodyAll());
@@ -73,6 +85,8 @@ final class UserController extends ApiController
 
     public function block(Request $request, array $params): Response
     {
+        $this->denyInDemo();
+
         [$user, $capabilities] = $this->context($request);
 
         $result = $this->admin->block($user, $capabilities, (int) ($params['id'] ?? 0), true);
@@ -83,6 +97,8 @@ final class UserController extends ApiController
 
     public function unblock(Request $request, array $params): Response
     {
+        $this->denyInDemo();
+
         [$user, $capabilities] = $this->context($request);
 
         $result = $this->admin->block($user, $capabilities, (int) ($params['id'] ?? 0), false);
@@ -93,6 +109,8 @@ final class UserController extends ApiController
 
     public function resetPassword(Request $request, array $params): Response
     {
+        $this->denyInDemo();
+
         [$user, $capabilities] = $this->context($request);
 
         $result = $this->admin->resetPassword($user, $capabilities, (int) ($params['id'] ?? 0));

@@ -22,6 +22,7 @@
   } from '../lib/api/groups';
   import type { AdminUser, AuditEntry, ItemGroup, PriceType, RoleCapability, RoleInfo } from '../lib/api/types';
   import { auth } from '../lib/stores/auth.svelte';
+  import { appSettings } from '../lib/stores/app-settings.svelte';
   import { router } from '../lib/router.svelte';
   import { addHistory } from '../lib/search-history';
   import { clearFilters, countActive, loadFilters, saveFilters } from '../lib/filters';
@@ -666,12 +667,16 @@
         </label>
       </FiltersModal>
 
-      <Button onclick={() => (showCreate = !showCreate)}>
+      <Button onclick={() => (showCreate = !showCreate)} disabled={appSettings.demoMode}>
         {showCreate ? 'Отменить' : 'Создать пользователя'}
       </Button>
     </div>
 
-    {#if showCreate}
+    {#if appSettings.demoMode}
+      <div class="alert">В демо-режиме управление пользователями (создание, правка, пароли, блокировка) недоступно.</div>
+    {/if}
+
+    {#if showCreate && !appSettings.demoMode}
       <div class="card form">
         <h2>Новый пользователь</h2>
         <div class="grid">
@@ -710,7 +715,7 @@
       </div>
     {/if}
 
-    {#if editing}
+    {#if editing && !appSettings.demoMode}
       <div class="card form">
         <h2>Изменение: {editing.name}</h2>
         <div class="grid">
@@ -767,11 +772,13 @@
               </div>
             </div>
             <div class="row-actions">
-              <Button variant="ghost" onclick={() => startEdit(user)}>Изменить</Button>
-              <Button variant="ghost" onclick={() => void resetPassword(user)}>Сбросить пароль</Button>
-              <Button variant="ghost" onclick={() => void toggleBlock(user)}>
-                {user.active ? 'Заблокировать' : 'Разблокировать'}
-              </Button>
+              {#if !appSettings.demoMode}
+                <Button variant="ghost" onclick={() => startEdit(user)}>Изменить</Button>
+                <Button variant="ghost" onclick={() => void resetPassword(user)}>Сбросить пароль</Button>
+                <Button variant="ghost" onclick={() => void toggleBlock(user)}>
+                  {user.active ? 'Заблокировать' : 'Разблокировать'}
+                </Button>
+              {/if}
             </div>
           </div>
         {/each}

@@ -257,6 +257,13 @@
     </div>
   </header>
 
+  {#if appSettings.demoMode}
+    <div class="demo-banner">
+      Демо-режим: данные вымышленные, изменения не сохраняются. Смена паролей и управление
+      пользователями недоступны.
+    </div>
+  {/if}
+
 <main>
   {@render children?.()}
 </main>
@@ -302,6 +309,15 @@
     min-height: 100vh;
     display: flex;
     flex-direction: column;
+  }
+
+  .demo-banner {
+    padding: var(--space-2) var(--space-5);
+    background: var(--warning-bg, #fff4d6);
+    color: var(--warning, #8a6d00);
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+    text-align: center;
   }
 
   header {

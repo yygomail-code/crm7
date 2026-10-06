@@ -1,13 +1,42 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { auth } from '../lib/stores/auth.svelte';
   import { router } from '../lib/router.svelte';
+  import { apiRequest } from '../lib/api/client';
   import Button from '../lib/components/ui/Button.svelte';
   import Input from '../lib/components/ui/Input.svelte';
+
+  interface DemoAccount {
+    login: string;
+    role: string;
+    password: string;
+  }
 
   let login = $state('');
   let password = $state('');
   let error = $state('');
   let loading = $state(false);
+  let demoMode = $state(false);
+  let demoAccounts = $state<DemoAccount[]>([]);
+
+  onMount(async () => {
+    try {
+      const data = await apiRequest<{ demo_mode: boolean; demo_accounts: DemoAccount[] }>(
+        '/settings/public'
+      );
+      demoMode = data.demo_mode === true;
+      demoAccounts = Array.isArray(data.demo_accounts) ? data.demo_accounts : [];
+    } catch {
+      demoMode = false;
+      demoAccounts = [];
+    }
+  });
+
+  function useDemo(account: DemoAccount): void {
+    login = account.login;
+    password = account.password;
+    error = '';
+  }
 
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -47,13 +76,29 @@
       Войти
     </Button>
 
-    <button type="button" class="link" onclick={() => router.navigate('/forgot')}>
-      Забыли пароль?
-    </button>
+    {#if demoMode}
+      {#if demoAccounts.length > 0}
+        <div class="demo-accounts">
+          <p class="hint">Демо-доступ: выберите роль — логин и пароль подставятся.</p>
+          {#each demoAccounts as account (account.login)}
+            <button type="button" class="demo-account" onclick={() => useDemo(account)}>
+              <span class="demo-role">{account.role}</span>
+              <span class="demo-cred">{account.login} / {account.password}</span>
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <p class="hint">Демо-режим: вход по демонстрационным учётным записям</p>
+      {/if}
+    {:else}
+      <button type="button" class="link" onclick={() => router.navigate('/forgot')}>
+        Забыли пароль?
+      </button>
 
-    <button type="button" class="link" onclick={() => router.navigate('/register')}>
-      Нет аккаунта? Зарегистрироваться
-    </button>
+      <button type="button" class="link" onclick={() => router.navigate('/register')}>
+        Нет аккаунта? Зарегистрироваться
+      </button>
+    {/if}
   </form>
 </div>
 
@@ -107,5 +152,41 @@
     cursor: pointer;
     font-size: 13px;
     text-align: center;
+  }
+
+  .demo-accounts {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: var(--space-2);
+  }
+
+  .demo-account {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    cursor: pointer;
+    font-size: 13px;
+    text-align: left;
+  }
+
+  .demo-account:hover {
+    border-color: var(--primary);
+    background: var(--bg);
+  }
+
+  .demo-role {
+    font-weight: 600;
+  }
+
+  .demo-cred {
+    color: var(--muted);
+    font-family: ui-monospace, monospace;
+    font-size: 12px;
   }
 </style>

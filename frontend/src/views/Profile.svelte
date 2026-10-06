@@ -10,6 +10,7 @@
   } from '../lib/api/notifications';
   import { auth } from '../lib/stores/auth.svelte';
   import { avatars } from '../lib/stores/avatar.svelte';
+  import { appSettings } from '../lib/stores/app-settings.svelte';
   import Button from '../lib/components/ui/Button.svelte';
   import Input from '../lib/components/ui/Input.svelte';
 
@@ -345,27 +346,34 @@
   {/if}
 
   {#if tab === 'security'}
-    <form class="card form" onsubmit={submitPassword}>
-      <h2>Смена пароля</h2>
+    {#if appSettings.demoMode}
+      <div class="card">
+        <h2>Смена пароля</h2>
+        <p class="hint">В демо-режиме смена пароля недоступна.</p>
+      </div>
+    {:else}
+      <form class="card form" onsubmit={submitPassword}>
+        <h2>Смена пароля</h2>
 
-      <Input label="Текущий пароль" type="password" bind:value={current} autocomplete="current-password" />
-      <Input label="Новый пароль" type="password" bind:value={next} autocomplete="new-password" />
-      <Input label="Повторите новый пароль" type="password" bind:value={confirmation} autocomplete="new-password" />
+        <Input label="Текущий пароль" type="password" bind:value={current} autocomplete="current-password" />
+        <Input label="Новый пароль" type="password" bind:value={next} autocomplete="new-password" />
+        <Input label="Повторите новый пароль" type="password" bind:value={confirmation} autocomplete="new-password" />
 
-      <p class="hint">Пароль: не менее 10 символов, буквы и цифры.</p>
+        <p class="hint">Пароль: не менее 10 символов, буквы и цифры.</p>
 
-      {#if error}
-        <div class="alert error">{error}</div>
-      {/if}
+        {#if error}
+          <div class="alert error">{error}</div>
+        {/if}
 
-      {#if success}
-        <div class="alert success">{success}</div>
-      {/if}
+        {#if success}
+          <div class="alert success">{success}</div>
+        {/if}
 
-      <Button type="submit" loading={loading} disabled={!current || !next || !confirmation}>
-        Изменить пароль
-      </Button>
-    </form>
+        <Button type="submit" loading={loading} disabled={!current || !next || !confirmation}>
+          Изменить пароль
+        </Button>
+      </form>
+    {/if}
   {/if}
 
   {#if tab === 'logout'}

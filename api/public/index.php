@@ -83,6 +83,7 @@ $profile = new ProfileController();
 
 $router->get('/health', [$health, 'index']);
 $router->get('/settings/app', [$appSettings, 'index']);
+$router->get('/settings/public', [$appSettings, 'publicSettings']);
 $router->get('/price-types', [$appSettings, 'priceTypes']);
 $router->get('/item-groups', [$appSettings, 'itemGroups']);
 $router->post('/auth/login', [$auth, 'login']);

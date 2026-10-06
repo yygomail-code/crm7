@@ -5,6 +5,8 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Auth\AuthService;
+use App\Core\Config;
+use App\Http\HttpException;
 use App\Http\Request;
 use App\Http\Response;
 
@@ -12,6 +14,13 @@ final class AuthController
 {
     public function __construct(private readonly AuthService $auth = new AuthService())
     {
+    }
+
+    private function denyInDemo(): void
+    {
+        if (Config::demoMode()) {
+            throw new HttpException(403, 'demo_mode', 'Действие недоступно в демо-режиме');
+        }
     }
 
     public function login(Request $request): Response
@@ -28,6 +37,8 @@ final class AuthController
 
     public function register(Request $request): Response
     {
+        $this->denyInDemo();
+
         $data = $this->auth->register($request->bodyAll(), $request->ip);
 
         return Response::ok($data, 201);
@@ -66,6 +77,8 @@ final class AuthController
 
     public function changePassword(Request $request): Response
     {
+        $this->denyInDemo();
+
         [$user, $tokenRow] = $this->auth->authenticate($request->bearerToken());
 
         $this->auth->changePassword(
@@ -80,6 +93,8 @@ final class AuthController
 
     public function requestReset(Request $request): Response
     {
+        $this->denyInDemo();
+
         $this->auth->requestPasswordReset($request->str('email'), $request->ip);
 
         return Response::ok(['sent' => true]);
@@ -87,6 +102,8 @@ final class AuthController
 
     public function resetPassword(Request $request): Response
     {
+        $this->denyInDemo();
+
         $this->auth->resetPassword(
             $request->str('token'),
             (string) $request->input('new_password', '')

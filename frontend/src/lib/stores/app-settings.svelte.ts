@@ -8,6 +8,7 @@ interface AppSettingsResponse {
   stock_allow_zero: boolean;
   prices_enabled: boolean;
   groups_enabled: boolean;
+  demo_mode: boolean;
 }
 
 class AppSettingsStore {
@@ -22,6 +23,8 @@ class AppSettingsStore {
   pricesEnabled = $state(false);
 
   groupsEnabled = $state(false);
+
+  demoMode = $state(false);
 
   loadedFor = $state<number | null>(null);
 
@@ -48,6 +51,7 @@ class AppSettingsStore {
       this.allowZeroStock = data.stock_allow_zero === true;
       this.pricesEnabled = data.prices_enabled === true;
       this.groupsEnabled = data.groups_enabled === true;
+      this.demoMode = data.demo_mode === true;
       this.loadedFor = userId;
     } catch {
       // служебная настройка: интерфейс не блокируем при сбое загрузки
@@ -79,6 +83,7 @@ class AppSettingsStore {
     this.allowZeroStock = false;
     this.pricesEnabled = false;
     this.groupsEnabled = false;
+    this.demoMode = false;
     this.loadedFor = null;
   }
 }
