@@ -5,7 +5,7 @@ Pipeline: build frontend -> pack dist + api (runtime data excluded) ->
 upload over SFTP -> extract, fix perms, run migrations, restart php/cron.
 
 Usage:
-    python deploy/deploy_crm7.py [--server root@172.30.171.254]
+    python deploy/deploy_crm7.py [--server root@www.crm7.ru:21023]
                                  [--key ~/.ssh/id_ed25519]
                                  [--dir /srv/projects/crm7]
                                  [--skip-build]
@@ -80,7 +80,7 @@ echo DEPLOY_OK
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="root@172.30.171.254")
+    ap.add_argument("--server", default="root@www.crm7.ru:21023")
     ap.add_argument("--key", default=str(pathlib.Path.home() / ".ssh" / "id_ed25519"))
     ap.add_argument("--env", choices=sorted(ENV_DIRS), default=None)
     ap.add_argument("--dir", default=None)

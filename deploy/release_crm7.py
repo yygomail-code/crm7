@@ -46,7 +46,7 @@ def main() -> int:
     ap.add_argument("--env", required=True, help="test|k|demo|all")
     ap.add_argument("--tag", required=True)
     ap.add_argument("--no-pull", action="store_true")
-    ap.add_argument("--server", default="root@172.30.171.254")
+    ap.add_argument("--server", default="root@www.crm7.ru:21023")
     ap.add_argument("--key", default=str(pathlib.Path.home() / ".ssh" / "id_ed25519"))
     args = ap.parse_args()
 

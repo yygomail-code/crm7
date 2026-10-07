@@ -5,7 +5,7 @@ Pipeline: build frontend -> pack api + dist + deploy files -> upload ->
 docker build app+web tagged by version and git sha -> optional push to GHCR.
 
 Usage:
-    python deploy/build_images.py [--server root@172.30.171.254]
+    python deploy/build_images.py [--server root@www.crm7.ru:21023]
                                   [--key ~/.ssh/id_ed25519]
                                   [--registry ghcr.io/yygomail-code]
                                   [--tag 1.3.0] [--skip-build] [--push]
@@ -82,7 +82,7 @@ def make_context() -> bytes:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--server", default="root@172.30.171.254")
+    ap.add_argument("--server", default="root@www.crm7.ru:21023")
     ap.add_argument("--key", default=str(pathlib.Path.home() / ".ssh" / "id_ed25519"))
     ap.add_argument("--registry", default="ghcr.io/yygomail-code")
     ap.add_argument("--tag", default=None)
