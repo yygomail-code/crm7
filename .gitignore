@@ -43,3 +43,7 @@ Thumbs.db
 .idea/
 .vscode/
 frontend/artifacts/
+
+# python
+__pycache__/
+*.pyc
