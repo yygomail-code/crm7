@@ -357,7 +357,7 @@
         void searchSubmit();
       }}
     >
-      <input class="text-input" bind:value={searchInput} placeholder="Поиск товара" />
+      <input class="text-input" bind:value={searchInput} placeholder="Поиск позиции" />
       {#if groupsEnabled && groups.length > 0}
         <select
           class="group-select"

@@ -216,6 +216,7 @@ $router->get('/chat/attachments/{id}', [$chat, 'downloadAttachment']);
 
 $router->get('/stocks/warehouses', [$stocks, 'warehouses']);
 $router->get('/stocks/levels', [$stocks, 'levels']);
+$router->get('/stocks/levels/{itemId}', [$stocks, 'level']);
 $router->get('/stocks/search-counts', [$stocks, 'searchCounts']);
 $router->get('/stocks/export', [$stocks, 'export']);
 $router->post('/stocks/import', [$stocks, 'import']);

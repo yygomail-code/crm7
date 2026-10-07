@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import Icon from './Icon.svelte';
 
   interface Props {
     open: boolean;
@@ -7,6 +8,7 @@
     label?: string;
     wide?: boolean;
     closeButton?: boolean;
+    bodyMinHeight?: number;
     onclose: () => void;
     children?: Snippet;
   }
@@ -17,6 +19,7 @@
     label,
     wide = false,
     closeButton = true,
+    bodyMinHeight,
     onclose,
     children
   }: Props = $props();
@@ -48,11 +51,16 @@
             <h2>{title}</h2>
           {/if}
           {#if closeButton}
-            <button type="button" class="close" aria-label="Закрыть" onclick={onclose}>×</button>
+            <button type="button" class="close" aria-label="Закрыть" onclick={onclose}>
+              <Icon name="close" size={16} />
+            </button>
           {/if}
         </div>
       {/if}
-      <div class="dialog-body">
+      <div
+        class="dialog-body"
+        style:min-height={bodyMinHeight === undefined ? undefined : `${bodyMinHeight}px`}
+      >
         {@render children?.()}
       </div>
     </div>
@@ -75,7 +83,7 @@
     inset: 0;
     border: none;
     padding: 0;
-    background: rgba(15, 23, 42, 0.45);
+    background: rgba(0, 0, 0, 0.45);
     cursor: default;
   }
 
@@ -90,7 +98,7 @@
     width: min(560px, 100%);
     min-width: 0;
     max-height: min(82vh, 760px);
-    padding: var(--space-4);
+    padding: 20px 24px;
     background: var(--surface);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-md);
@@ -101,7 +109,7 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-    margin-bottom: var(--space-3);
+    margin-bottom: var(--space-2);
   }
 
   .dialog-head.empty {
@@ -111,27 +119,29 @@
   h2 {
     margin: 0;
     font-size: 16px;
+    font-weight: 600;
+    line-height: 1.5;
+    color: var(--text);
   }
 
   .close {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     border: none;
-    border-radius: 50%;
+    border-radius: 4px;
     background: none;
-    color: var(--muted);
-    font-size: 20px;
-    line-height: 1;
+    color: rgba(0, 0, 0, 0.45);
     cursor: pointer;
+    transition: color 0.2s ease, background-color 0.2s ease;
   }
 
   .close:hover {
-    color: var(--text);
-    background: var(--bg);
+    color: rgba(0, 0, 0, 0.88);
+    background: rgba(0, 0, 0, 0.06);
   }
 
   .dialog-body {

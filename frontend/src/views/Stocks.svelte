@@ -2,37 +2,27 @@
   import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
   import {
-    createStockItem,
-    deleteItemPhoto,
     emailLevels,
     exportLevels,
     importHistory,
     importLevels,
-    invalidateItemPhoto,
     listLevels,
     listWarehouses,
-    loadItemPhotoUrl,
-    renameWarehouse,
     searchCounts,
-    updateStockItem,
-    uploadItemPhoto,
+    type ImportPriceType,
     type StockFilters
   } from '../lib/api/stocks';
   import type {
     StockImportJob,
     StockLevel,
-    StockPhoto,
     StockUpdate,
     StockWarehouse,
-    PriceType,
     ItemGroup
   } from '../lib/api/types';
-  import { listPriceTypes } from '../lib/api/prices';
   import { listItemGroups } from '../lib/api/groups';
   import Button from '../lib/components/ui/Button.svelte';
   import ExportModal from '../lib/components/ui/ExportModal.svelte';
   import Icon from '../lib/components/ui/Icon.svelte';
-  import Input from '../lib/components/ui/Input.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
@@ -42,6 +32,7 @@
   import { appSettings } from '../lib/stores/app-settings.svelte';
   import { addHistory } from '../lib/search-history';
   import { loadFilters, saveFilters } from '../lib/filters';
+  import { router } from '../lib/router.svelte';
   import { formatDate, formatDateTime, formatPrice, stockQuantityText } from '../lib/format';
 
   let warehouses = $state<StockWarehouse[]>([]);
@@ -55,6 +46,7 @@
   let searchInput = $state('');
   let page = $state(1);
   let total = $state(0);
+  let jumpPage = $state<number | null>(null);
   let loading = $state(true);
   let loadingLevels = $state(false);
   let error = $state('');
@@ -64,24 +56,16 @@
   let busy = $state(false);
   let file = $state<File | null>(null);
   let actualDate = $state(new Date().toISOString().slice(0, 10));
-  let showHistory = $state(false);
   let importOpen = $state(false);
+  let importError = $state('');
+  let importTab = $state<'import' | 'history'>('import');
+  let importMappingColumns = $state<string[]>([]);
+  let importMappingTypes = $state<ImportPriceType[]>([]);
+  let importMapping = $state<Record<string, number>>({});
   let exportOpen = $state(false);
   let counts = $state<Record<string, number>>({});
 
-  let itemOpen = $state(false);
-  let itemBusy = $state(false);
-  let itemError = $state('');
-  let itemTarget = $state<StockLevel | null>(null);
-  let itemForm = $state({ name: '', unit: '', quantity: '0', description: '', group_id: 0 });
-  let itemPrices = $state<Record<string, string>>({});
-  let priceTypes = $state<PriceType[]>([]);
   let groups = $state<ItemGroup[]>([]);
-
-  let renameOpen = $state(false);
-  let renameBusy = $state(false);
-  let renameError = $state('');
-  let renameName = $state('');
 
   const stockFilterDefaults = {
     sort: 'name_asc',
@@ -109,12 +93,6 @@
   let viewOpen = $state(false);
   let viewDraft = $state<'list' | 'tiles'>('list');
   let photoDraft = $state<boolean>(true);
-  let photoOpen = $state(false);
-  let photoTarget = $state<StockLevel | null>(null);
-  let photoList = $state<StockPhoto[]>([]);
-  let photoUrls = $state<Record<number, string | null>>({});
-  let photoBusy = $state(false);
-  let photoError = $state('');
   let sortOpen = $state(false);
   let sortDraft = $state<string[]>(parseSort(initialStockFilters.sort));
   let groupOpen = $state(false);
@@ -123,24 +101,18 @@
   let warehouseOpen = $state(false);
   let warehouseDraft = $state<number[]>([]);
   let helpOpen = $state(false);
-  let itemWarehouseId = $state<number>(0);
-  let renameWarehouseId = $state<number>(0);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
   const canCreate = $derived(auth.can('requests.create') && appSettings.cartEnabled);
-  const canManagePhotos = $derived(canEdit || canImport);
   const pages = $derived(perPage <= 0 ? 1 : Math.max(1, Math.ceil(total / perPage)));
+  const rangeFrom = $derived(perPage <= 0 ? (total === 0 ? 0 : 1) : Math.min((page - 1) * perPage + 1, total));
+  const rangeTo = $derived(perPage <= 0 ? total : Math.min(page * perPage, total));
+  const pageItems = $derived(buildPageItems(page, pages));
   const pricesEnabled = $derived(appSettings.pricesEnabled);
   const groupsEnabled = $derived(appSettings.groupsEnabled);
   const listVars = $derived(
-    `--photo: ${showPhotos ? '56px' : '0px'}; --price: ${pricesEnabled ? '100px' : '0px'}; --cart: ${canCreate ? '120px' : '0px'}; --actions: ${canManagePhotos || canEdit ? '72px' : '0px'};`
+    `--photo: ${showPhotos ? '88px' : '0px'}; --price: ${pricesEnabled ? '100px' : '0px'}; --cart: ${canCreate ? '120px' : '0px'};`
   );
-
-  $effect(() => {
-    if (pricesEnabled && canEdit && priceTypes.length === 0) {
-      void loadPriceTypes();
-    }
-  });
 
   $effect(() => {
     if (groupsEnabled && groups.length === 0) {
@@ -162,15 +134,6 @@
 
     return () => clearTimeout(searchTimer);
   });
-
-  async function loadPriceTypes(): Promise<void> {
-    try {
-      const data = await listPriceTypes();
-      priceTypes = data.items;
-    } catch {
-      priceTypes = [];
-    }
-  }
 
   async function loadGroups(): Promise<void> {
     try {
@@ -429,68 +392,6 @@
     saveStockFilters();
   }
 
-  $effect(() => {
-    for (const photo of photoList) {
-      if (photoUrls[photo.id] !== undefined) {
-        continue;
-      }
-
-      void loadItemPhotoUrl(photo.id).then((url) => {
-        photoUrls[photo.id] = url;
-      });
-    }
-  });
-
-  function openPhotos(level: StockLevel): void {
-    photoTarget = level;
-    photoList = [...(level.photos ?? [])];
-    photoError = '';
-    photoOpen = true;
-  }
-
-  async function uploadPhotoFile(event: Event): Promise<void> {
-    const input = event.currentTarget as HTMLInputElement;
-    const file = input.files?.[0] ?? null;
-    input.value = '';
-
-    if (file === null || photoTarget === null) {
-      return;
-    }
-
-    photoBusy = true;
-    photoError = '';
-
-    try {
-      const result = await uploadItemPhoto(photoTarget.id, file);
-      photoList = result.photos;
-      photoTarget.photos = result.photos;
-    } catch (cause) {
-      photoError = cause instanceof ApiError ? cause.message : 'Не удалось загрузить фото';
-    } finally {
-      photoBusy = false;
-    }
-  }
-
-  async function removePhoto(id: number): Promise<void> {
-    if (photoTarget === null) {
-      return;
-    }
-
-    photoBusy = true;
-    photoError = '';
-
-    try {
-      const result = await deleteItemPhoto(id);
-      photoList = result.photos;
-      photoTarget.photos = result.photos;
-      invalidateItemPhoto(id);
-    } catch (cause) {
-      photoError = cause instanceof ApiError ? cause.message : 'Не удалось удалить фото';
-    } finally {
-      photoBusy = false;
-    }
-  }
-
   function changeSort(): void {
     saveStockFilters();
     void applyFilters();
@@ -588,19 +489,72 @@
     await runSearch(true);
   }
 
-  async function changePage(delta: number): Promise<void> {
+  function buildPageItems(current: number, count: number): (number | '...')[] {
+    if (count <= 7) {
+      return Array.from({ length: count }, (_, index) => index + 1);
+    }
+
+    const items: (number | '...')[] = [];
+
+    if (current <= 3) {
+      for (let index = 1; index <= 5; index += 1) {
+        items.push(index);
+      }
+
+      items.push('...');
+      items.push(count);
+
+      return items;
+    }
+
+    if (current >= count - 2) {
+      items.push(1);
+      items.push('...');
+
+      for (let index = count - 4; index <= count; index += 1) {
+        items.push(index);
+      }
+
+      return items;
+    }
+
+    items.push(1);
+    items.push('...');
+
+    for (let index = current - 1; index <= current + 1; index += 1) {
+      items.push(index);
+    }
+
+    items.push('...');
+    items.push(count);
+
+    return items;
+  }
+
+  async function goToPage(target: number): Promise<void> {
     if (perPage <= 0) {
       return;
     }
 
-    const next = page + delta;
+    const next = Math.min(Math.max(1, Math.trunc(target)), pages);
 
-    if (next < 1 || (next - 1) * perPage >= total) {
+    if (next === page) {
       return;
     }
 
     page = next;
     await loadLevels();
+  }
+
+  async function submitJump(event: Event): Promise<void> {
+    event.preventDefault();
+
+    if (jumpPage === null) {
+      return;
+    }
+
+    await goToPage(jumpPage);
+    jumpPage = null;
   }
 
   function changePerPage(): void {
@@ -635,34 +589,46 @@
     }
   }
 
-  async function doImport(): Promise<void> {
+  async function doImport(mapping?: Record<string, number>): Promise<void> {
     if (file === null) {
-      error = 'Выберите файл (xls, xlsx или csv)';
+      importError = 'Выберите файл (xls, xlsx или csv)';
       return;
     }
 
     busy = true;
-    error = '';
+    importError = '';
     message = '';
 
     try {
-      const result = await importLevels(file, actualDate);
+      const result = await importLevels(file, actualDate, mapping);
+
+      if (result.status === 'needs_mapping') {
+        importMappingColumns = result.columns;
+        importMappingTypes = result.types;
+        importMapping = Object.fromEntries(result.columns.map((column) => [column, 0]));
+        return;
+      }
+
       message =
         `Импорт: загружено ${result.rows_imported} строк` +
         (result.rows_created > 0 ? `, новых позиций ${result.rows_created}` : '') +
         (result.warehouses_created > 0 ? `, новых складов ${result.warehouses_created}` : '') +
         (result.rows_zeroed > 0 ? `, обнулено ${result.rows_zeroed}` : '') +
-        (result.rows_skipped > 0 ? `, пропущено ${result.rows_skipped}` : '');
+        (result.rows_skipped > 0 ? `, пропущено ${result.rows_skipped}` : '') +
+        (result.prices_imported > 0 ? `, цен ${result.prices_imported}` : '');
 
       if (result.errors.length > 0) {
         message += `. ${result.errors.slice(0, 3).join('; ')}`;
       }
 
       file = null;
+      importOpen = false;
+      importMappingColumns = [];
+      importMapping = {};
       await init();
       await loadHistory();
     } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось импортировать файл';
+      importError = cause instanceof ApiError ? cause.message : 'Не удалось импортировать файл';
     } finally {
       busy = false;
     }
@@ -678,12 +644,19 @@
     }
   }
 
-  async function toggleHistory(): Promise<void> {
-    showHistory = !showHistory;
+  function selectImportTab(tab: 'import' | 'history'): void {
+    importTab = tab;
 
-    if (showHistory) {
-      await loadHistory();
+    if (tab === 'history') {
+      void loadHistory();
     }
+  }
+
+  function openImport(tab: 'import' | 'history' = 'import'): void {
+    selectImportTab(tab);
+    importMappingColumns = [];
+    importMapping = {};
+    importOpen = true;
   }
 
   function onFileChange(event: Event): void {
@@ -691,237 +664,31 @@
     file = input.files?.[0] ?? null;
   }
 
-  function openItemCreate(): void {
-    itemTarget = null;
-    itemWarehouseId = selectedIds[0] ?? 0;
-    itemForm = { name: '', unit: '', quantity: '0', description: '', group_id: 0 };
-    itemPrices = {};
-    itemError = '';
-    itemOpen = true;
+  function openItemPage(level: StockLevel): void {
+    detailOpen = false;
+    router.navigate(`/stocks/items/${level.id}/edit`);
   }
 
-  function openRename(): void {
-    if (selectedIds.length === 0) {
-      return;
-    }
-
-    renameWarehouseId = selectedIds[0];
-    renameName = warehouses.find((item) => item.id === renameWarehouseId)?.name ?? '';
-    renameError = '';
-    renameOpen = true;
-  }
-
-  function changeRenameWarehouse(): void {
-    renameName = warehouses.find((item) => item.id === renameWarehouseId)?.name ?? '';
-  }
-
-  async function saveRename(): Promise<void> {
-    if (renameWarehouseId <= 0) {
-      return;
-    }
-
-    const name = renameName.trim();
-
-    if (name === '') {
-      renameError = 'Укажите название склада';
-      return;
-    }
-
-    renameBusy = true;
-    renameError = '';
-
-    try {
-      const data = await renameWarehouse(renameWarehouseId, name);
-      warehouses = warehouses.map((item) =>
-        item.id === data.warehouse.id ? { ...item, name: data.warehouse.name } : item
-      );
-      renameOpen = false;
-      message = `Склад переименован: ${data.warehouse.name}`;
-    } catch (cause) {
-      renameError = cause instanceof ApiError ? cause.message : 'Не удалось переименовать склад';
-    } finally {
-      renameBusy = false;
-    }
-  }
-
-  function openItemEdit(level: StockLevel): void {
-    itemTarget = level;
-    itemWarehouseId = level.warehouse_id;
-    itemForm = {
-      name: level.name,
-      unit: level.unit,
-      quantity: String(level.quantity),
-      description: level.description ?? '',
-      group_id: level.group_id ?? 0
-    };
-    itemPrices = Object.fromEntries(
-      Object.entries(level.prices ?? {}).map(([typeId, value]) => [typeId, String(value)])
-    );
-    itemError = '';
-    itemOpen = true;
-  }
-
-  async function saveItem(): Promise<void> {
-    const name = itemForm.name.trim();
-
-    if (name === '') {
-      itemError = 'Укажите название позиции';
-      return;
-    }
-
-    if (itemTarget === null && itemWarehouseId <= 0) {
-      itemError = 'Выберите склад';
-      return;
-    }
-
-    const quantity = Number(itemForm.quantity);
-
-    if (!Number.isFinite(quantity) || quantity < 0) {
-      itemError = 'Укажите корректный остаток (не меньше нуля)';
-      return;
-    }
-
-    const prices: Record<string, number | null> = {};
-
-    if (pricesEnabled && canEdit && priceTypes.length > 0) {
-      for (const type of priceTypes) {
-        const raw = (itemPrices[String(type.id)] ?? '').trim();
-
-        if (raw === '') {
-          prices[String(type.id)] = null;
-          continue;
-        }
-
-        const value = Number(raw.replace(',', '.'));
-
-        if (!Number.isFinite(value) || value < 0) {
-          itemError = `Некорректная цена «${type.title}»`;
-          return;
-        }
-
-        prices[String(type.id)] = value;
-      }
-    }
-
-    itemBusy = true;
-    itemError = '';
-
-    try {
-      const payload = {
-        name,
-        unit: itemForm.unit.trim(),
-        quantity,
-        description: itemForm.description.trim(),
-        ...(Object.keys(prices).length > 0 ? { prices } : {}),
-        ...(groupsEnabled ? { group_id: itemForm.group_id > 0 ? itemForm.group_id : null } : {})
-      };
-
-      if (itemTarget === null) {
-        await createStockItem(itemWarehouseId, payload);
-        message = `Позиция добавлена: ${name}`;
-      } else {
-        await updateStockItem(itemTarget.id, payload);
-        message = `Позиция сохранена: ${name}`;
-      }
-
-      itemOpen = false;
-      await loadLevels();
-      void refreshCounts();
-    } catch (cause) {
-      itemError = cause instanceof ApiError ? cause.message : 'Не удалось сохранить позицию';
-    } finally {
-      itemBusy = false;
-    }
-  }
 </script>
 
 <section class="page page-wide">
   <div class="head">
-    <h1>
-      Складские остатки
-      {#if headDate}
-        <span class="head-date">(на {formatDate(headDate)})</span>
-      {/if}
-    </h1>
-    <div class="actions">
-      {#if canEdit}
-        <Button variant="ghost" disabled={selectedIds.length === 0} onclick={openItemCreate}>
-          + Позиция
-        </Button>
-        <Button variant="ghost" disabled={selectedIds.length === 0} onclick={openRename}>
-          Переименовать склад
-        </Button>
-      {/if}
-      <button
-        type="button"
-        class="icon-button"
-        title="Как пользоваться"
-        aria-label="Как пользоваться страницей"
-        onclick={() => (helpOpen = true)}
-      >
-        <Icon name="help" size={18} />
-      </button>
-      {#if canImport}
-        <Button variant="ghost" onclick={() => void toggleHistory()}>
-          {showHistory ? 'Скрыть историю' : 'История импорта'}
-        </Button>
-      {/if}
-    </div>
+    <h1>Номенклатура</h1>
+    {#if headDate}
+      <p class="head-subtitle">Остатки на {formatDate(headDate)}</p>
+    {/if}
   </div>
 
-  {#if error}<div class="alert">{error}</div>{/if}
-  {#if message}<div class="notice">{message}</div>{/if}
-
-  {#if canImport}
-    <details class="card import" open={importOpen}>
-      <summary>
-        <h2>Импорт остатков из 1С</h2>
-        <span class="chev" aria-hidden="true"></span>
-      </summary>
-      <p class="hint">
-        Файл Excel (xls/xlsx) в формате 1С: строки «Склад …» и далее «товар; ед.; остаток на складе».
-        CSV: те же три колонки либо «склад; товар; ед.; остаток на складе». Импорт заменяет остатки целиком:
-        позиции, которых нет в файле, обнуляются и скрываются, пока в настройках системы не разрешены
-        нулевые остатки. Новые склады из файла добавляются автоматически.
-      </p>
-      <div class="import-row">
-        <input type="file" accept=".xls,.xlsx,.csv,.txt" onchange={onFileChange} />
-        <label class="date">
-          <span>Дата остатков</span>
-          <input type="date" bind:value={actualDate} />
-        </label>
-        <Button loading={busy} disabled={file === null} onclick={() => void doImport()}>Загрузить</Button>
-      </div>
-    </details>
+  {#if error}
+    <div class="alert">
+      <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+      <span>{error}</span>
+    </div>
   {/if}
-
-  {#if showHistory}
-    <div class="card">
-      <h2>История импорта</h2>
-      {#if jobs.length === 0}
-        <p class="empty">Импортов ещё не было</p>
-      {:else}
-        <div class="history">
-          {#each jobs as job (job.id)}
-            <div class="job">
-              <div class="row">
-                <span class="file">{job.file_name}</span>
-                <span class="status" class:failed={job.status === 'failed'}>
-                  {job.status === 'done' ? 'загружен' : job.status === 'failed' ? 'ошибка' : 'в работе'}
-                </span>
-              </div>
-              <div class="meta">
-                <span>{formatDateTime(job.created_at)}</span>
-                <span>{job.user}</span>
-                <span>строк: {job.rows_imported} из {job.rows_total}</span>
-                {#if job.rows_skipped > 0}<span class="warn">пропущено: {job.rows_skipped}</span>{/if}
-                <span>на дату {job.actual_date}</span>
-              </div>
-              {#if job.errors}<div class="errors">{job.errors}</div>{/if}
-            </div>
-          {/each}
-        </div>
-      {/if}
+  {#if message}
+    <div class="notice">
+      <span class="notice-icon"><Icon name="check-circle" size={16} /></span>
+      <span>{message}</span>
     </div>
   {/if}
 
@@ -941,7 +708,7 @@
         <SearchInput
           bind:value={searchInput}
           historyKey="stocks"
-          placeholder="Поиск товара"
+          placeholder="Поиск позиции"
           onclear={() => void search()}
           onpick={() => void search()}
         />
@@ -956,7 +723,7 @@
           aria-label="Сортировка"
           onclick={openSort}
         >
-          <Icon name="sort" size={18} />
+            <Icon name="sort" size={16} />
         </button>
 
         <button
@@ -966,7 +733,7 @@
           aria-label="Выбрать склад"
           onclick={openWarehouse}
         >
-          <Icon name="stocks" size={18} />
+          <Icon name="stocks" size={16} />
         </button>
 
         {#if groupsEnabled}
@@ -978,7 +745,7 @@
             aria-label="Группа"
             onclick={openGroup}
           >
-            <Icon name="group" size={18} />
+            <Icon name="group" size={16} />
           </button>
         {/if}
 
@@ -990,8 +757,34 @@
           aria-label="Отображение: списком или плитками"
           onclick={openView}
         >
-          <Icon name="view" size={18} />
+          <Icon name="view" size={16} />
         </button>
+
+        <span class="toolbar-divider" aria-hidden="true"></span>
+
+        {#if canEdit}
+          <button
+            type="button"
+            class="sort-button"
+            title="Добавить позицию"
+            aria-label="Добавить позицию"
+            onclick={() => router.navigate('/stocks/items/new')}
+          >
+            <Icon name="plus" size={16} />
+          </button>
+        {/if}
+
+        {#if canImport}
+          <button
+            type="button"
+            class="sort-button"
+            title="Импорт остатков из 1С"
+            aria-label="Импорт остатков из 1С"
+            onclick={() => openImport('import')}
+          >
+            <Icon name="import" size={16} />
+          </button>
+        {/if}
 
         <button
           type="button"
@@ -1001,10 +794,130 @@
           disabled={busy || selectedIds.length === 0}
           onclick={() => (exportOpen = true)}
         >
-          <Icon name="export" size={18} />
+          <Icon name="export" size={16} />
+        </button>
+
+        <span class="toolbar-divider" aria-hidden="true"></span>
+
+        <button
+          type="button"
+          class="sort-button"
+          title="Как пользоваться"
+          aria-label="Как пользоваться страницей"
+          onclick={() => (helpOpen = true)}
+        >
+          <Icon name="help" size={16} />
         </button>
       </div>
     </div>
+
+    <Modal
+      open={importOpen}
+      title="Импорт остатков из 1С"
+      bodyMinHeight={372}
+      onclose={() => (importOpen = false)}
+    >
+      <div class="tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          class="tab"
+          class:active={importTab === 'import'}
+          aria-selected={importTab === 'import'}
+          onclick={() => selectImportTab('import')}
+        >
+          Импорт
+        </button>
+        <button
+          type="button"
+          role="tab"
+          class="tab"
+          class:active={importTab === 'history'}
+          aria-selected={importTab === 'history'}
+          onclick={() => selectImportTab('history')}
+        >
+          История
+        </button>
+      </div>
+
+      {#if importTab === 'import'}
+        {#if importMappingColumns.length > 0}
+          <p class="import-hint">
+            В файле есть типы цен, которых нет у нас. Укажите, как распределить цены — выбор запомнится и
+            применится в следующий раз автоматически.
+          </p>
+          {#each importMappingColumns as column (column)}
+            <div class="import-field">
+              <span class="import-label">{column}</span>
+              <select bind:value={importMapping[column]}>
+                <option value={0}>Не импортировать</option>
+                {#each importMappingTypes as type (type.id)}
+                  <option value={type.id}>{type.title}</option>
+                {/each}
+              </select>
+            </div>
+          {/each}
+          {#if importError}
+            <div class="alert">
+              <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+              <span>{importError}</span>
+            </div>
+          {/if}
+          <div class="modal-actions">
+            <Button variant="ghost" onclick={() => (importMappingColumns = [])}>Назад</Button>
+            <Button loading={busy} onclick={() => void doImport(importMapping)}>Продолжить импорт</Button>
+          </div>
+        {:else}
+          <p class="import-hint">
+            Файл Excel (xls/xlsx) в формате 1С: строки «Склад …» и далее «товар; ед.; остаток на складе».
+            CSV: те же три колонки либо «склад; товар; ед.; остаток на складе». Импорт заменяет остатки целиком:
+            позиции, которых нет в файле, обнуляются и скрываются, пока в настройках системы не разрешены
+            нулевые остатки. Новые склады из файла добавляются автоматически.
+          </p>
+          <div class="import-field">
+            <label class="import-label" for="import-file">Файл</label>
+            <input id="import-file" type="file" accept=".xls,.xlsx,.csv,.txt" onchange={onFileChange} />
+          </div>
+          <div class="import-field">
+            <label class="import-label" for="import-date">Дата остатков</label>
+            <input id="import-date" type="date" bind:value={actualDate} />
+          </div>
+          {#if importError}
+            <div class="alert">
+              <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+              <span>{importError}</span>
+            </div>
+          {/if}
+          <div class="modal-actions">
+            <Button variant="ghost" onclick={() => (importOpen = false)}>Отмена</Button>
+            <Button loading={busy} disabled={file === null} onclick={() => void doImport()}>Загрузить</Button>
+          </div>
+        {/if}
+      {:else if jobs.length === 0}
+        <p class="empty">Импортов ещё не было</p>
+      {:else}
+        <div class="history">
+          {#each jobs as job (job.id)}
+            <div class="job">
+              <div class="row">
+                <span class="file">{job.file_name}</span>
+                <span class="status" class:failed={job.status === 'failed'}>
+                  {job.status === 'done' ? 'загружен' : job.status === 'failed' ? 'ошибка' : 'в работе'}
+                </span>
+              </div>
+              <div class="job-meta">
+                <span>{formatDateTime(job.created_at)}</span>
+                <span>{job.user}</span>
+                <span>строк: {job.rows_imported} из {job.rows_total}</span>
+                {#if job.rows_skipped > 0}<span class="warn">пропущено: {job.rows_skipped}</span>{/if}
+                <span>на дату {job.actual_date}</span>
+              </div>
+              {#if job.errors}<div class="errors">{job.errors}</div>{/if}
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </Modal>
 
     <Modal open={sortOpen} title="Сортировка" onclose={() => (sortOpen = false)}>
       <p class="sort-hint">
@@ -1151,53 +1064,6 @@
       </div>
     </Modal>
 
-    <Modal open={photoOpen} title="Фото товара" onclose={() => (photoOpen = false)}>
-      {#if photoTarget}
-        <p class="sort-hint">{photoTarget.name}</p>
-      {/if}
-
-      <div class="photo-grid">
-        {#each photoList as photo (photo.id)}
-          <div class="photo-item">
-            {#if photoUrls[photo.id]}
-              <img src={photoUrls[photo.id]} alt="" />
-            {/if}
-            <button
-              type="button"
-              class="photo-remove"
-              title="Удалить фото"
-              aria-label="Удалить фото"
-              onclick={() => void removePhoto(photo.id)}
-              disabled={photoBusy}
-            >
-              ×
-            </button>
-          </div>
-        {/each}
-
-        {#if photoList.length < 10}
-          <label class="photo-add" class:busy={photoBusy}>
-            <input
-              type="file"
-              accept="image/jpeg,image/png,image/webp"
-              onchange={uploadPhotoFile}
-              disabled={photoBusy}
-            />
-            <Icon name="camera" size={20} />
-            <span>Добавить</span>
-          </label>
-        {/if}
-      </div>
-
-      <p class="sort-hint">До 10 фото. Форматы: jpg, png, webp. Размер до 5 МБ.</p>
-
-      {#if photoError}<div class="alert">{photoError}</div>{/if}
-
-      <div class="modal-actions">
-        <Button onclick={() => (photoOpen = false)}>Готово</Button>
-      </div>
-    </Modal>
-
     <Modal
       open={detailOpen}
       label={detailTarget?.name ?? 'Позиция'}
@@ -1214,7 +1080,22 @@
           </div>
 
           <div class="detail-info">
-            <h3 class="detail-name">{target.name}</h3>
+            <div class="detail-head">
+              <h3 class="detail-name">{target.name}</h3>
+              {#if canEdit}
+                <div class="detail-actions">
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    title="Редактировать карточку позиции"
+                    aria-label={`Редактировать позицию: ${target.name}`}
+                    onclick={() => openItemPage(target)}
+                  >
+                    <Icon name="edit" size={16} />
+                  </button>
+                </div>
+              {/if}
+            </div>
 
             {#if target.warehouse_name || (groupsEnabled && target.group_title)}
               <div class="meta">
@@ -1227,18 +1108,18 @@
               <p class="detail-desc">{target.description}</p>
             {/if}
 
-            <div class="detail-stats">
-              <div class="stat">
-                <span class="stat-label">Остаток на складе</span>
-                <span class="quantity" class:on-order={target.quantity < 0}>
+            <div class="detail-fields">
+              <div class="field-row">
+                <span class="field-label">Остаток на складе</span>
+                <span class="field-value quantity" class:on-order={target.quantity < 0}>
                   {stockQuantityText(target.quantity, target.unit)}
                 </span>
               </div>
 
               {#if pricesEnabled}
-                <div class="stat">
-                  <span class="stat-label">Цена</span>
-                  <span class="price" class:missing={target.price === null}>
+                <div class="field-row">
+                  <span class="field-label">Цена</span>
+                  <span class="field-value price" class:missing={target.price === null}>
                     {formatPrice(target.price)}
                   </span>
                 </div>
@@ -1311,10 +1192,10 @@
               также включить или скрыть фото. На телефоне плитки идут в 2 столбика, на компьютере —
               в 3. Выбор запоминается.
             </li>
-            {#if canManagePhotos}
+            {#if canEdit}
               <li>
-                <b>Фото товара</b> (фотоаппарат) — добавить до 10 фото к позиции (jpg, png, webp,
-                до 5 МБ) или удалить их. Фото видны всем, у кого включено отображение фото.
+                <b>Карандаш</b> — в карточке позиции открывает страницу редактирования: там можно
+                изменить параметры и управлять фото (до 10 штук, jpg/png/webp, до 5 МБ).
               </li>
             {/if}
             <li>
@@ -1349,7 +1230,7 @@
             <h3>Как заказать товар (сделать заявку)</h3>
             <ol>
               <li>Найди нужный товар через поиск.</li>
-              <li>Нажми в строке товара <b>кнопку с корзинкой</b> — товар попадёт в заявку.</li>
+              <li>Нажми в строке товара <b>«Добавить в корзину»</b> — товар попадёт в заявку.</li>
               <li>Нужно больше — нажми <b>«+»</b>; <b>«−»</b> — уменьшить количество.</li>
               <li>
                 Когда всё выбрано, открой <b>корзину</b> (значок корзины вверху, там видно число
@@ -1383,7 +1264,7 @@
             <ul>
               <li><b>«+ Позиция»</b> — добавить новый товар на склад.</li>
               <li><b>«Переименовать склад»</b> — поменять название склада.</li>
-              <li><b>Карандаш</b> в строке товара — изменить название, остаток на складе, цену или группу.</li>
+              <li><b>Карандаш</b> в карточке позиции — открыть редактирование позиции.</li>
             </ul>
           </div>
         {/if}
@@ -1446,7 +1327,6 @@
           {@const cartQty = inCart(level)}
           <div
             class="level"
-            class:in-cart={cartQty > 0}
             class:cart-over={cartQty > 0 && cartQty > level.quantity}
           >
             {#if showPhotos}
@@ -1533,58 +1413,19 @@
                     </span>
                   {:else}
                     <span class="add add-empty">
-                      <button
-                        type="button"
-                        class="cart-btn"
+                      <Button
+                        variant="text"
+                        size="sm"
                         title="Добавить в корзину"
-                        aria-label={`Добавить в корзину: ${level.name}`}
+                        ariaLabel={`Добавить в корзину: ${level.name}`}
                         onclick={() => addToCart(level)}
                       >
-                        <svg
-                          viewBox="0 0 24 24"
-                          width="16"
-                          height="16"
-                          fill="none"
-                          stroke="currentColor"
-                          stroke-width="2"
-                          stroke-linecap="round"
-                          stroke-linejoin="round"
-                          aria-hidden="true"
-                        >
-                          <circle cx="9" cy="20" r="1.5" />
-                          <circle cx="18" cy="20" r="1.5" />
-                          <path d="M2.5 3h2.3l2.2 11.8a1.6 1.6 0 0 0 1.6 1.3h8.9a1.6 1.6 0 0 0 1.6-1.3L20.5 7H6" />
-                        </svg>
-                      </button>
+                        <Icon name="cart" size={16} /> Добавить
+                      </Button>
                     </span>
                   {/if}
                 </div>
               {/if}
-
-              <div class="cell-actions col-actions">
-                {#if canManagePhotos}
-                  <button
-                    type="button"
-                    class="icon-btn"
-                    title="Фото товара"
-                    aria-label={`Фото: ${level.name}`}
-                    onclick={() => openPhotos(level)}
-                  >
-                    <Icon name="camera" size={16} />
-                  </button>
-                {/if}
-                {#if canEdit}
-                  <button
-                    type="button"
-                    class="icon-btn"
-                    title="Изменить позицию"
-                    aria-label={`Изменить: ${level.name}`}
-                    onclick={() => openItemEdit(level)}
-                  >
-                    <Icon name="edit" size={16} />
-                  </button>
-                {/if}
-              </div>
             </div>
           </div>
         {/each}
@@ -1603,13 +1444,77 @@
           </select>
         </label>
 
-        <div class="pager-nav">
-          <Button variant="ghost" disabled={page <= 1} onclick={() => void changePage(-1)}>Назад</Button>
-          <span>Стр. {page} из {pages} · всего {total}</span>
-          <Button variant="ghost" disabled={perPage <= 0 || page * perPage >= total} onclick={() => void changePage(1)}>
-            Вперёд
-          </Button>
-        </div>
+        {#if pages > 1}
+          <div class="pager-main">
+            <span class="pager-total">{rangeFrom}–{rangeTo} из {total}</span>
+
+            <div class="pager-pages" aria-label="Постраничная навигация">
+              <button
+                type="button"
+                class="page-btn"
+                disabled={page <= 1}
+                aria-label="Предыдущая страница"
+                onclick={() => void goToPage(page - 1)}
+              >
+                <Icon name="arrow-left" size={14} />
+              </button>
+
+              {#each pageItems as item, index (`${item}-${index}`)}
+                {#if item === '...'}
+                  <span class="page-ellipsis" aria-hidden="true">…</span>
+                {:else}
+                  <button
+                    type="button"
+                    class="page-btn"
+                    class:active={item === page}
+                    aria-current={item === page ? 'page' : undefined}
+                    aria-label={`Страница ${item}`}
+                    onclick={() => void goToPage(Number(item))}
+                  >
+                    {item}
+                  </button>
+                {/if}
+              {/each}
+
+              <button
+                type="button"
+                class="page-btn"
+                disabled={page >= pages}
+                aria-label="Следующая страница"
+                onclick={() => void goToPage(page + 1)}
+              >
+                <Icon name="arrow-right" size={14} />
+              </button>
+            </div>
+
+            <div class="pager-simple" aria-label="Постраничная навигация">
+              <button
+                type="button"
+                class="page-btn"
+                disabled={page <= 1}
+                aria-label="Предыдущая страница"
+                onclick={() => void goToPage(page - 1)}
+              >
+                <Icon name="arrow-left" size={14} />
+              </button>
+              <span class="pager-simple-count">{page} / {pages}</span>
+              <button
+                type="button"
+                class="page-btn"
+                disabled={page >= pages}
+                aria-label="Следующая страница"
+                onclick={() => void goToPage(page + 1)}
+              >
+                <Icon name="arrow-right" size={14} />
+              </button>
+            </div>
+
+            <form class="pager-jump" onsubmit={submitJump}>
+              <span>Перейти</span>
+              <input type="number" min="1" max={pages} bind:value={jumpPage} aria-label="Номер страницы" />
+            </form>
+          </div>
+        {/if}
       </div>
     {/if}
   {/if}
@@ -1623,227 +1528,104 @@
     onpick={(format, byEmail) => void doExport(format, byEmail)}
   />
 
-  <Modal
-    open={itemOpen}
-    title={itemTarget === null ? 'Новая позиция' : 'Позиция'}
-    onclose={() => (itemOpen = false)}
-  >
-    <div class="item-form">
-      {#if itemTarget === null && selectedWarehouses.length > 0}
-        <label class="field">
-          <span class="label">Склад</span>
-          <select bind:value={itemWarehouseId}>
-            {#each selectedWarehouses as warehouse (warehouse.id)}
-              <option value={warehouse.id}>{warehouse.name}</option>
-            {/each}
-          </select>
-        </label>
-      {/if}
-
-      <Input label="Название" bind:value={itemForm.name} placeholder="Например: Смартфон Pixel 9" />
-
-      <div class="item-grid">
-        <Input label="Единица измерения" bind:value={itemForm.unit} placeholder="шт" />
-        <Input label="Остаток на складе" type="number" bind:value={itemForm.quantity} />
-      </div>
-
-      {#if groupsEnabled && groups.length > 0}
-        <label class="field">
-          <span class="label">Группа позиции</span>
-          <select bind:value={itemForm.group_id}>
-            <option value={0}>Без группы</option>
-            {#each groups as group (group.id)}
-              <option value={group.id}>{group.title}</option>
-            {/each}
-          </select>
-        </label>
-      {/if}
-
-      <label class="field">
-        <span class="label">Описание</span>
-        <textarea
-          bind:value={itemForm.description}
-          rows="3"
-          placeholder="Характеристики, цвет, память — покажется в подсказке при наведении"
-        ></textarea>
-      </label>
-
-      {#if pricesEnabled && canEdit && priceTypes.length > 0}
-        <div class="field">
-          <span class="label">Цены по типам профиля (пусто — цена не задана)</span>
-          <div class="item-grid">
-            {#each priceTypes as type (type.id)}
-              <label class="price-field">
-                <span>{type.title}</span>
-                <input
-                  type="text"
-                  inputmode="decimal"
-                  placeholder="0,00"
-                  bind:value={itemPrices[String(type.id)]}
-                />
-              </label>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
-      {#if itemError}
-        <div class="alert">{itemError}</div>
-      {/if}
-
-      <div class="modal-actions">
-        <Button variant="ghost" onclick={() => (itemOpen = false)}>Отмена</Button>
-        <Button loading={itemBusy} onclick={() => void saveItem()}>
-          {itemTarget === null ? 'Добавить' : 'Сохранить'}
-        </Button>
-      </div>
-    </div>
-  </Modal>
-
-  <Modal open={renameOpen} title="Название склада" onclose={() => (renameOpen = false)}>
-    <div class="item-form">
-      {#if selectedWarehouses.length > 0}
-        <label class="field">
-          <span class="label">Склад</span>
-          <select bind:value={renameWarehouseId} onchange={changeRenameWarehouse}>
-            {#each selectedWarehouses as warehouse (warehouse.id)}
-              <option value={warehouse.id}>{warehouse.name}</option>
-            {/each}
-          </select>
-        </label>
-      {/if}
-
-      <Input
-        label="Название"
-        bind:value={renameName}
-        placeholder="Например: Склад Тест-Центральный"
-      />
-
-      {#if renameError}
-        <div class="alert">{renameError}</div>
-      {/if}
-
-      <div class="modal-actions">
-        <Button variant="ghost" onclick={() => (renameOpen = false)}>Отмена</Button>
-        <Button loading={renameBusy} onclick={() => void saveRename()}>Сохранить</Button>
-      </div>
-    </div>
-  </Modal>
 </section>
 
 <style>
   .page {
     display: flex;
     flex-direction: column;
-    gap: var(--space-4);
+    gap: var(--space-5);
   }
 
   .head {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
   }
 
   h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--text);
   }
 
-  h2 {
-    margin: 0 0 var(--space-2);
-    font-size: 16px;
-  }
-
-  .actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2);
-  }
-
-  .card {
-    padding: var(--space-4);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-sm);
-  }
-
-  .hint {
-    margin: 0 0 var(--space-3);
-    font-size: 13px;
-    color: var(--muted);
-  }
-
-  .import-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3);
-    align-items: flex-end;
-  }
-
-  .import summary {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    cursor: pointer;
-    list-style: none;
-  }
-
-  .import summary::-webkit-details-marker {
-    display: none;
-  }
-
-  .import summary h2 {
+  .head-subtitle {
     margin: 0;
+    font-size: 14px;
+    color: var(--text-description);
   }
 
-  .import summary .chev {
-    width: 8px;
-    height: 8px;
-    border: solid var(--muted);
-    border-width: 0 1.5px 1.5px 0;
-    transform: rotate(45deg);
-    transition: transform 0.15s ease;
+  .tabs {
+    display: flex;
+    gap: var(--space-6);
+    margin-bottom: var(--space-4);
+    border-bottom: 1px solid var(--border-secondary);
   }
 
-  .import[open] summary .chev {
-    transform: rotate(-135deg);
+  .tab {
+    position: relative;
+    padding: 10px 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
   }
 
-  .import summary:hover .chev {
-    border-color: var(--primary);
+  .tab:hover {
+    color: var(--primary);
   }
 
-  .import .hint {
-    margin-top: var(--space-2);
+  .tab.active {
+    color: var(--primary);
   }
 
-  .import-row input[type='file'] {
-    flex: 1;
-    min-width: 220px;
+  .tab.active::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: -1px;
+    height: 2px;
+    background: var(--primary);
+  }
+
+  .import-hint {
+    margin: 0 0 var(--space-4);
     font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-description);
   }
 
-  .date {
+  .import-field {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--muted);
+    gap: var(--space-2);
+    margin-bottom: var(--space-4);
   }
 
-  .date input {
-    padding: 8px 10px;
+  .import-label {
+    font-size: 14px;
+    color: var(--text);
+  }
+
+  .import-field input[type='file'],
+  .import-field input[type='date'],
+  .import-field select {
+    padding: 4px 11px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
+    background: var(--surface);
     font: inherit;
+    font-size: 14px;
   }
 
   .count {
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
   }
 
@@ -1860,7 +1642,7 @@
   }
 
   .picked {
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--primary);
     white-space: nowrap;
@@ -1883,16 +1665,9 @@
   .filters {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-3);
+    gap: var(--space-4);
     align-items: center;
     justify-content: space-between;
-  }
-
-  select {
-    padding: 9px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
   }
 
   .search {
@@ -1907,32 +1682,29 @@
   .filter-icons {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
   }
 
-  .icon-button,
   .sort-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
-    color: var(--muted);
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-  }
-
-  .icon-button:hover,
-  .sort-button:hover {
     color: var(--text);
-    background: rgba(23, 25, 28, 0.04);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
   }
 
-  .icon-button:disabled,
+  .sort-button:hover:not(:disabled) {
+    border-color: var(--primary-hover);
+    color: var(--primary-hover);
+  }
+
   .sort-button:disabled {
     opacity: 0.55;
     cursor: not-allowed;
@@ -1941,6 +1713,13 @@
   .sort-button.active {
     border-color: var(--primary);
     color: var(--primary);
+  }
+
+  .toolbar-divider {
+    width: 1px;
+    height: 24px;
+    margin: 0 var(--space-1);
+    background: var(--border-secondary);
   }
 
   .sort-options {
@@ -1952,7 +1731,7 @@
   .sort-hint {
     margin: 0 0 var(--space-2);
     font-size: 13px;
-    color: var(--muted);
+    color: var(--text-description);
   }
 
   .sort-list {
@@ -1985,8 +1764,8 @@
   }
 
   .sort-row.active {
-    border-color: var(--border);
-    background: var(--bg);
+    border-color: var(--primary-border);
+    background: var(--primary-bg);
   }
 
   .sort-row-label {
@@ -1999,26 +1778,26 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 30px;
-    height: 30px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
-    color: var(--muted);
+    color: var(--text);
     cursor: pointer;
     transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
   }
 
   .dir-btn:hover {
-    color: var(--text);
-    background: rgba(23, 25, 28, 0.04);
+    border-color: var(--primary);
+    color: var(--primary);
   }
 
   .dir-btn.on {
     border-color: var(--primary);
     color: var(--primary);
-    background: color-mix(in srgb, var(--primary) 10%, white);
+    background: var(--primary-bg);
   }
 
   .sort-option {
@@ -2029,11 +1808,20 @@
     cursor: pointer;
   }
 
+  .sort-option input[type='checkbox'],
+  .sort-option input[type='radio'] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
+  }
+
   .modal-actions {
     display: flex;
     justify-content: flex-end;
     gap: var(--space-2);
-    margin-top: var(--space-4);
+    margin-top: var(--space-3);
   }
 
   .help-intro {
@@ -2083,17 +1871,11 @@
     }
   }
 
-  .head-date {
-    font-size: 14px;
-    font-weight: 400;
-    color: var(--muted);
-  }
-
   .levels {
     display: flex;
     flex-direction: column;
     background: var(--surface);
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-secondary);
     border-radius: var(--radius-md);
     overflow: hidden;
   }
@@ -2110,12 +1892,6 @@
   .cell {
     flex: 0 0 auto;
     min-width: 0;
-  }
-
-  .cell-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
   }
 
   .col-photo {
@@ -2136,10 +1912,6 @@
 
   .col-cart {
     grid-column: 5;
-  }
-
-  .col-actions {
-    grid-column: 6;
   }
 
   .levels-head-cell {
@@ -2202,18 +1974,39 @@
       z-index: 2;
       display: grid;
       grid-template-columns:
-        var(--photo, 56px) minmax(0, 1fr) minmax(0, 130px) var(--price, 100px)
-        var(--cart, 120px) var(--actions, 72px);
-      align-items: center;
-      gap: var(--space-3);
-      padding: 10px var(--space-4);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-bottom: none;
+        var(--photo, 88px) minmax(0, 1fr) minmax(0, 130px) var(--price, 100px)
+        var(--cart, 120px);
+      align-items: stretch;
+      gap: 0;
+      padding: 0;
+      background: var(--fill-tertiary);
+      border: 1px solid var(--border-secondary);
+      border-bottom: 1px solid var(--border-secondary);
       border-radius: var(--radius-md) var(--radius-md) 0 0;
-      font-size: 12px;
+      font-size: 14px;
       font-weight: 600;
-      color: var(--muted);
+      color: var(--text);
+    }
+
+    .levels-head-cell {
+      position: relative;
+      padding: 12px var(--space-4);
+    }
+
+    .levels-head-cell:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      right: 0;
+      width: 1px;
+      height: 1.6em;
+      background: var(--border-secondary);
+      transform: translateY(-50%);
+    }
+
+    .levels-head .col-stock,
+    .levels-head .col-price {
+      justify-content: flex-end;
     }
 
     .levels:not(.tiles) {
@@ -2224,10 +2017,17 @@
     .levels:not(.tiles) .level {
       display: grid;
       grid-template-columns:
-        var(--photo, 56px) minmax(0, 1fr) minmax(0, 130px) var(--price, 100px)
-        var(--cart, 120px) var(--actions, 72px);
+        var(--photo, 88px) minmax(0, 1fr) minmax(0, 130px) var(--price, 100px)
+        var(--cart, 120px);
       align-items: center;
-      gap: var(--space-3);
+      gap: 0;
+      padding: 0;
+    }
+
+    .levels:not(.tiles) .level > .cell,
+    .levels:not(.tiles) .level > .name-col,
+    .levels:not(.tiles) .level > .level-bottom > .stat {
+      padding: 12px var(--space-4);
     }
 
     .levels:not(.tiles) .level-bottom {
@@ -2244,11 +2044,8 @@
 
     .levels:not(.tiles) .col-stock,
     .levels:not(.tiles) .col-price {
-      align-items: flex-start;
-    }
-
-    .cell-actions {
-      justify-content: flex-end;
+      align-items: flex-end;
+      text-align: right;
     }
 
     .levels:not(.tiles) .cart-stat {
@@ -2266,13 +2063,13 @@
     justify-content: space-between;
     gap: var(--space-3);
     padding: 10px var(--space-4);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-secondary);
     font-size: 14px;
     transition: background 0.12s ease;
   }
 
   .level:hover {
-    background: color-mix(in srgb, var(--primary) 6%, white);
+    background: var(--fill-tertiary);
   }
 
   .level:last-child {
@@ -2296,7 +2093,7 @@
   }
 
   .stat-label {
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.2;
     color: var(--muted);
     white-space: nowrap;
@@ -2335,10 +2132,54 @@
     overflow-wrap: anywhere;
   }
 
-  .detail-stats {
+  .detail-head {
     display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3) var(--space-5);
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .detail-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 0 0 auto;
+  }
+
+  .detail-fields {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-3);
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+  }
+
+  .field-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .field-label {
+    font-size: 14px;
+    color: var(--text-description);
+  }
+
+  .field-value {
+    font-weight: 500;
+    text-align: right;
+  }
+
+  .field-value.on-order {
+    color: var(--warning-text);
+  }
+
+  .field-value.missing {
+    color: var(--muted);
+    font-weight: 400;
   }
 
   .detail-cart {
@@ -2357,8 +2198,8 @@
   .levels.tiles {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: var(--space-5);
-    padding: var(--space-4) 0 0;
+    gap: var(--space-4);
+    padding: 0;
     background: transparent;
     border: none;
     border-radius: 0;
@@ -2399,20 +2240,20 @@
     justify-content: flex-start;
     gap: 0;
     padding: 0;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-secondary);
     border-radius: var(--radius-md);
     background: var(--surface);
     overflow: hidden;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
   }
 
   .levels.tiles .level:hover {
-    border-color: color-mix(in srgb, var(--primary) 30%, var(--border));
-    box-shadow: var(--shadow-sm);
+    border-color: var(--border-secondary);
+    box-shadow: var(--shadow-md);
   }
 
   .levels.tiles .level:last-child {
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-secondary);
   }
 
   .levels.tiles .cell.col-photo {
@@ -2420,6 +2261,7 @@
   }
 
   .levels.tiles .name-col {
+    gap: var(--space-2);
     padding: var(--space-3) var(--space-3) 0;
   }
 
@@ -2435,11 +2277,19 @@
 
   .levels.tiles .meta {
     flex-wrap: nowrap;
+    gap: var(--space-1);
     font-size: 12px;
   }
 
   .levels.tiles .meta .wh,
   .levels.tiles .meta .group {
+    max-width: 100%;
+    padding: 0 7px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--fill-tertiary);
+    color: var(--text-description);
+    line-height: 20px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2453,14 +2303,39 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-2) var(--space-3);
+    gap: var(--space-1) var(--space-3);
     margin-top: auto;
     padding: var(--space-3);
   }
 
+  .levels.tiles .col-price {
+    order: 1;
+  }
+
+  .levels.tiles .col-stock {
+    order: 2;
+    color: var(--text-description);
+  }
+
+  .levels.tiles .col-price .price {
+    font-size: 16px;
+    font-weight: 600;
+  }
+
+  .levels.tiles .col-stock .quantity {
+    font-size: 13px;
+    font-weight: 400;
+  }
+
   .levels.tiles .cart-stat {
+    order: 3;
+    flex: 1 0 100%;
     min-width: 0;
-    margin-left: auto;
+    margin: 0 calc(-1 * var(--space-3)) calc(-1 * var(--space-3));
+    padding: var(--space-2) var(--space-3);
+    border-top: 1px solid var(--border-secondary);
+    background: var(--surface);
+    justify-content: center;
   }
 
   .name-col {
@@ -2515,7 +2390,7 @@
   }
 
   .level .quantity.on-order {
-    color: #b45309;
+    color: var(--warning-text);
     font-weight: 600;
   }
 
@@ -2553,7 +2428,7 @@
     height: 32px;
     padding: 0;
     border: 1px solid var(--border);
-    border-radius: 50%;
+    border-radius: var(--radius-sm);
     background: var(--surface);
     color: var(--muted);
     cursor: pointer;
@@ -2575,170 +2450,13 @@
     min-width: 0;
   }
 
-  .photo-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-    gap: var(--space-2);
-    margin-bottom: var(--space-3);
+  .view-column + .view-column {
+    padding-left: var(--space-4);
+    border-left: 1px solid var(--border-secondary);
   }
 
-  .photo-item {
-    position: relative;
-    aspect-ratio: 1;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    overflow: hidden;
-    background: var(--bg);
-  }
-
-  .photo-item img {
-    display: block;
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-  }
-
-  .photo-remove {
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: none;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.55);
-    color: #fff;
-    font-size: 14px;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .photo-remove:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-
-  .photo-add {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    aspect-ratio: 1;
-    border: 1px dashed var(--border);
-    border-radius: var(--radius-sm);
-    color: var(--muted);
-    font-size: 12px;
-    cursor: pointer;
-  }
-
-  .photo-add:hover {
-    border-color: var(--primary);
-    color: var(--primary);
-  }
-
-  .photo-add.busy {
-    opacity: 0.6;
-    pointer-events: none;
-  }
-
-  .photo-add input {
-    display: none;
-  }
-
-  .item-form {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-  }
-
-  .item-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: var(--space-3);
-  }
-
-  .item-form .field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .item-form .label {
-    font-size: 13px;
-    color: var(--muted);
-  }
-
-  .item-form textarea {
-    padding: 9px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    font: inherit;
-    color: var(--text);
-    resize: vertical;
-  }
-
-  .item-form select {
-    padding: 9px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    font: inherit;
-    color: var(--text);
-    outline: none;
-  }
-
-  .item-form select:focus {
-    border-color: var(--primary);
-  }
-
-  .price-field {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .price-field span {
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  .price-field input {
-    padding: 9px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    font: inherit;
-    color: var(--text);
-    outline: none;
-  }
-
-  .price-field input:focus {
-    border-color: var(--primary);
-  }
-
-  .item-form .modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: var(--space-2);
-  }
-
-  .levels .level.in-cart {
-    background: color-mix(in srgb, var(--success) 12%, white);
-  }
-
-  .levels .level.in-cart:hover {
-    background: color-mix(in srgb, var(--success) 18%, white);
-  }
-
-  .levels .level.in-cart.cart-over {
-    background: color-mix(in srgb, var(--danger) 12%, white);
-  }
-
-  .levels .level.in-cart.cart-over:hover {
-    background: color-mix(in srgb, var(--danger) 18%, white);
+  .levels .level.cart-over .qty {
+    color: var(--danger);
   }
 
   .add {
@@ -2749,7 +2467,7 @@
   }
 
   .cart-stat {
-    min-width: 120px;
+    min-width: 0;
   }
 
   .cart-stat .add {
@@ -2758,7 +2476,7 @@
   }
 
   .cart-stat .add-empty {
-    justify-content: flex-end;
+    justify-content: center;
   }
 
   .qty {
@@ -2787,31 +2505,14 @@
     color: var(--primary);
   }
 
-  .cart-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--primary);
-    cursor: pointer;
-  }
-
-  .cart-btn:hover {
-    color: var(--primary-hover);
-  }
-
   .pager {
     display: flex;
     align-items: center;
     justify-content: space-between;
     flex-wrap: wrap;
     gap: var(--space-3);
-    font-size: 13px;
-    color: var(--muted);
+    font-size: 14px;
+    color: var(--text);
   }
 
   .per-page {
@@ -2821,7 +2522,85 @@
   }
 
   .per-page select {
-    padding: 6px 8px;
+    padding: 4px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    font-size: 14px;
+  }
+
+  .pager-main {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-left: auto;
+  }
+
+  .pager-total {
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .pager-pages {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .page-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .page-btn:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .page-btn.active {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .page-btn:disabled {
+    color: rgba(0, 0, 0, 0.25);
+    cursor: not-allowed;
+  }
+
+  .page-ellipsis {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+    color: var(--text-description);
+  }
+
+  .pager-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    white-space: nowrap;
+  }
+
+  .pager-jump input {
+    width: 56px;
+    height: 32px;
+    padding: 0 8px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
@@ -2829,10 +2608,26 @@
     font-size: 13px;
   }
 
-  .pager-nav {
-    display: inline-flex;
+  .pager-simple {
+    display: none;
     align-items: center;
-    gap: var(--space-3);
+    gap: var(--space-2);
+  }
+
+  .pager-simple-count {
+    color: var(--text);
+  }
+
+  @media (max-width: 575.98px) {
+    .pager-pages,
+    .pager-jump,
+    .pager-total {
+      display: none;
+    }
+
+    .pager-simple {
+      display: inline-flex;
+    }
   }
 
   .history {
@@ -2843,8 +2638,8 @@
 
   .job {
     padding: var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--radius-md);
   }
 
   .job .row {
@@ -2860,14 +2655,14 @@
 
   .status {
     font-size: 12px;
-    color: #1e6b3a;
+    color: var(--success-text);
   }
 
   .status.failed {
-    color: #8c1d18;
+    color: var(--error-text);
   }
 
-  .meta {
+  .job-meta {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-3);
@@ -2877,38 +2672,58 @@
   }
 
   .warn {
-    color: #b45309;
+    color: var(--warning-text);
   }
 
   .errors {
     margin-top: 4px;
     font-size: 12px;
-    color: #8c1d18;
+    color: var(--error-text);
     white-space: pre-wrap;
   }
 
-  .alert {
+  .alert,
+  .notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
     padding: 8px 12px;
-    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .alert {
+    border-color: var(--error-border);
     background: var(--danger-bg);
-    color: var(--danger);
-    font-size: 13px;
   }
 
   .notice {
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: #e7f5ec;
-    color: #1e6b3a;
-    font-size: 13px;
+    border-color: var(--success-border);
+    background: var(--success-bg);
+  }
+
+  .alert-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--danger);
+  }
+
+  .notice-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--success);
   }
 
   .empty {
     padding: var(--space-6);
     text-align: center;
-    color: var(--muted);
+    color: var(--text-description);
     background: var(--surface);
-    border: 1px dashed var(--border);
+    border: 1px dashed var(--border-secondary);
     border-radius: var(--radius-md);
   }
 

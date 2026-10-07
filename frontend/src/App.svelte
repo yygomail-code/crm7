@@ -19,6 +19,7 @@
   import ClientCard from './views/ClientCard.svelte';
   import Chat from './views/Chat.svelte';
   import Stocks from './views/Stocks.svelte';
+  import ItemEdit from './views/ItemEdit.svelte';
   import Admin from './views/Admin.svelte';
   import Legal from './views/Legal.svelte';
   import ManagerProfile from './views/ManagerProfile.svelte';
@@ -60,6 +61,8 @@
   const clientMatch = $derived(matchRoute('/clients/:id', route));
   const legalMatch = $derived(matchRoute('/legal/:code', route));
   const userMatch = $derived(matchRoute('/users/:id', route));
+  const itemNewMatch = $derived(matchRoute('/stocks/items/new', route));
+  const itemEditMatch = $derived(matchRoute('/stocks/items/:id/edit', route));
 </script>
 
 {#if !auth.ready || (auth.isAuthenticated && filterPrefs.loadedFor !== auth.user?.id)}
@@ -96,6 +99,10 @@
       <Chat />
     {:else if route === '/stocks'}
       <Stocks />
+    {:else if itemNewMatch}
+      <ItemEdit id={0} />
+    {:else if itemEditMatch}
+      <ItemEdit id={Number(itemEditMatch.id)} />
     {:else if route === '/reports'}
       <Reports />
     {:else if route === '/substitutions'}

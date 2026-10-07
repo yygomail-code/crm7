@@ -212,6 +212,59 @@ final class StocksService
         ];
     }
 
+    public function level(array $user, array $capabilities, int $itemId): array
+    {
+        $level = $this->stocks->findLevel($itemId);
+
+        if ($level === null) {
+            throw new HttpException(404, 'not_found', 'Позиция не найдена');
+        }
+
+        $warehouse = $this->stocks->findWarehouseBySid((string) $level['stock_sid']);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        $this->requireWarehouse($user, $capabilities, (int) $warehouse['ID']);
+
+        $stockSid = (string) $level['stock_sid'];
+        $nameSid = (string) $level['name_sid'];
+        $canEdit = in_array('stocks.edit', $capabilities, true);
+
+        $priceTypeId = $this->priceTypeFor($user, 0);
+        $price = null;
+
+        if ($priceTypeId !== null) {
+            $map = $this->prices->pricesForStockItems($stockSid, [$nameSid], $priceTypeId);
+            $price = isset($map[$nameSid]) ? (float) $map[$nameSid] : null;
+        }
+
+        $groupId = $level['group_id'] !== null ? (int) $level['group_id'] : null;
+
+        return [
+            'item' => [
+                'id' => (int) $level['id'],
+                'name' => (string) $level['name'],
+                'unit' => (string) ($level['unit'] ?? ''),
+                'quantity' => (float) $level['quantity'],
+                'description' => (string) ($level['description'] ?? ''),
+                'actual_date' => $level['actual_date'] !== null ? (string) $level['actual_date'] : null,
+                'price' => $price,
+                'prices' => $canEdit ? $this->prices->pricesForStockItem($stockSid, $nameSid) : [],
+                'group_id' => $groupId,
+                'group_title' => $this->groupTitle($groupId),
+                'warehouse_id' => (int) $warehouse['ID'],
+                'warehouse_name' => (string) $warehouse['NAME'],
+                'photos' => $this->photos->forNames([$nameSid])[$nameSid] ?? [],
+            ],
+            'can_edit' => $canEdit,
+            'can_manage_photos' => $canEdit || in_array('stocks.import', $capabilities, true),
+            'prices_enabled' => $this->prices->enabled(),
+            'groups_enabled' => $this->groups->enabled(),
+        ];
+    }
+
     public function uploadPhoto(array $user, array $capabilities, int $levelId, array $file): array
     {
         $this->requirePhotoAccess($capabilities);
@@ -792,7 +845,7 @@ final class StocksService
         return ['warehouse' => ['id' => $warehouseId, 'name' => $name]];
     }
 
-    public function import(array $user, array $capabilities, array $file, string $date): array
+    public function import(array $user, array $capabilities, array $file, string $date, array $mapping = []): array
     {
         if (!in_array('stocks.import', $capabilities, true)) {
             throw new HttpException(403, 'forbidden', 'Недостаточно прав для импорта остатков');
@@ -827,10 +880,64 @@ final class StocksService
 
         $actualDate = preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) === 1 ? $date : date('Y-m-d');
 
-        [$rows, $skipped, $errors] = $this->parseFile((string) $file['tmp_name'], $extension);
+        $parsed = $this->parseFile((string) $file['tmp_name'], $extension);
+        $rows = $parsed['rows'];
+        $skipped = $parsed['skipped'];
+        $errors = $parsed['errors'];
+        $priceColumns = $parsed['price_columns'];
 
         if ($rows === []) {
             throw new HttpException(422, 'empty_file', 'В файле не найдено строк с остатками');
+        }
+
+        $pricesEnabled = $this->prices->enabled();
+        $resolvedPrices = [];
+
+        if ($pricesEnabled && $priceColumns !== []) {
+            if ($mapping !== []) {
+                $this->prices->saveImportMappings($mapping);
+            }
+
+            $titleMap = $this->prices->typeIdsByTitle();
+            $savedMappings = $this->prices->importMappings();
+            $unresolved = [];
+
+            foreach ($priceColumns as $source) {
+                $normalized = $this->prices->normalizeImportName($source);
+
+                if (isset($titleMap[$normalized])) {
+                    $resolvedPrices[$source] = $titleMap[$normalized];
+                    continue;
+                }
+
+                if (array_key_exists($source, $mapping)) {
+                    $resolvedPrices[$source] = max(0, (int) $mapping[$source]);
+                    continue;
+                }
+
+                if (array_key_exists($normalized, $mapping)) {
+                    $resolvedPrices[$source] = max(0, (int) $mapping[$normalized]);
+                    continue;
+                }
+
+                if (isset($savedMappings[$normalized])) {
+                    $resolvedPrices[$source] = $savedMappings[$normalized];
+                    continue;
+                }
+
+                $unresolved[] = $source;
+            }
+
+            if ($unresolved !== []) {
+                return [
+                    'status' => 'needs_mapping',
+                    'columns' => array_values($unresolved),
+                    'types' => array_map(
+                        static fn (array $type): array => ['id' => (int) $type['id'], 'title' => (string) $type['title']],
+                        $this->prices->types()
+                    ),
+                ];
+            }
         }
 
         $jobId = $this->stocks->createJob($originalName, $actualDate, (int) $user['ID']);
@@ -853,7 +960,13 @@ final class StocksService
             $this->stocks->zeroAllLevels();
             $insert = $this->stocks->prepareLevelInsert();
 
-            foreach ($rows as [$stockName, $itemName, $unit, $quantity]) {
+            $pricesImported = 0;
+
+            foreach ($rows as $row) {
+                $stockName = $row['stock'];
+                $itemName = $row['item'];
+                $unit = $row['unit'];
+                $quantity = $row['quantity'];
                 if (!isset($warehouses[$stockName])) {
                     $warehouseIsNew = !$this->stocks->warehouseExists($stockName);
                     $warehouse = $this->stocks->upsertWarehouse($stockName);
@@ -911,6 +1024,22 @@ final class StocksService
                 }
 
                 $imported++;
+
+                if ($resolvedPrices !== [] && $row['prices'] !== []) {
+                    $stockSid = (string) $warehouses[$stockName]['SID'];
+                    $nameSid = (string) $nomenclature[$itemName]['SID'];
+
+                    foreach ($row['prices'] as $source => $price) {
+                        $typeId = $resolvedPrices[$source] ?? 0;
+
+                        if ($typeId <= 0) {
+                            continue;
+                        }
+
+                        $this->prices->importPrice($stockSid, $nameSid, $typeId, $price);
+                        $pricesImported++;
+                    }
+                }
             }
 
             $zeroed = 0;
@@ -941,6 +1070,7 @@ final class StocksService
         ], null);
 
         return [
+            'status' => 'done',
             'job_id' => $jobId,
             'file_name' => $originalName,
             'actual_date' => $actualDate,
@@ -950,6 +1080,7 @@ final class StocksService
             'rows_zeroed' => $zeroed,
             'rows_skipped' => $skipped,
             'warehouses_created' => $warehousesCreated,
+            'prices_imported' => $pricesImported,
             'errors' => array_slice($errors, 0, 20),
         ];
     }
@@ -1020,7 +1151,6 @@ final class StocksService
      */
     private function parseFile(string $path, string $extension): array
     {
-        $rows = [];
         $skipped = 0;
         $errors = [];
 
@@ -1028,6 +1158,174 @@ final class StocksService
             ? $this->readSpreadsheet($path)
             : $this->readCsv($path);
 
+        $columns = $this->detectColumns($cells);
+
+        if ($columns !== null) {
+            return $this->parseWithColumns($cells, $columns, $skipped, $errors);
+        }
+
+        return $this->parseLegacy($cells, $skipped, $errors);
+    }
+
+    /**
+     * @return array{header_index: int, stock: ?int, item: int, unit: ?int, quantity: int, prices: array<int, array{index: int, name: string}>}|null
+     */
+    private function detectColumns(array $cells): ?array
+    {
+        $headerIndex = null;
+        $limit = min(count($cells), 20);
+
+        for ($index = 0; $index < $limit; $index++) {
+            foreach ($cells[$index] as $cell) {
+                if (preg_match('/^\s*остат/ui', trim((string) $cell)) === 1) {
+                    $headerIndex = $index;
+                    break 2;
+                }
+            }
+        }
+
+        if ($headerIndex === null) {
+            return null;
+        }
+
+        $stock = null;
+        $item = null;
+        $unit = null;
+        $quantity = null;
+        $prices = [];
+
+        foreach ($cells[$headerIndex] as $index => $cell) {
+            $text = trim((string) $cell);
+
+            if ($text === '') {
+                continue;
+            }
+
+            if (preg_match('/склад/ui', $text) === 1) {
+                $stock = (int) $index;
+                continue;
+            }
+
+            if (preg_match('/товар|наимен|позиц/ui', $text) === 1) {
+                $item = (int) $index;
+                continue;
+            }
+
+            if (preg_match('/^ед|единиц/ui', $text) === 1) {
+                $unit = (int) $index;
+                continue;
+            }
+
+            if (preg_match('/^остат/ui', $text) === 1) {
+                $quantity = (int) $index;
+                continue;
+            }
+
+            if (preg_match('/^(№|no\.?|код|артикул)/ui', $text) === 1) {
+                continue;
+            }
+
+            $prices[] = ['index' => (int) $index, 'name' => $text];
+        }
+
+        if ($item === null || $quantity === null) {
+            return null;
+        }
+
+        return [
+            'header_index' => $headerIndex,
+            'stock' => $stock,
+            'item' => $item,
+            'unit' => $unit,
+            'quantity' => $quantity,
+            'prices' => $prices,
+        ];
+    }
+
+    private function parseWithColumns(array $cells, array $columns, int &$skipped, array &$errors): array
+    {
+        $rows = [];
+        $priceColumns = array_map(static fn (array $column): string => $column['name'], $columns['prices']);
+        $currentWarehouse = '';
+
+        foreach ($cells as $index => $row) {
+            if ($index <= $columns['header_index']) {
+                continue;
+            }
+
+            if ($this->isWarehouseHeader($row)) {
+                $currentWarehouse = trim((string) ($row[0] ?? ''));
+                continue;
+            }
+
+            $itemName = trim((string) ($row[$columns['item']] ?? ''));
+
+            if ($itemName === '') {
+                if (trim((string) ($row[0] ?? '')) !== '') {
+                    $skipped++;
+                }
+
+                continue;
+            }
+
+            $stockName = $columns['stock'] !== null
+                ? trim((string) ($row[$columns['stock']] ?? ''))
+                : $currentWarehouse;
+
+            if ($stockName === '') {
+                $skipped++;
+
+                if (count($errors) < 20) {
+                    $errors[] = 'Строка ' . ($index + 1) . ': не указан склад';
+                }
+
+                continue;
+            }
+
+            $unit = $columns['unit'] !== null ? trim((string) ($row[$columns['unit']] ?? '')) : '';
+            $rawQuantity = (string) ($row[$columns['quantity']] ?? '');
+            $quantity = $this->parseQuantity($rawQuantity);
+
+            if ($quantity === null) {
+                $skipped++;
+
+                if (count($errors) < 20) {
+                    $errors[] = 'Строка ' . ($index + 1) . ': некорректный остаток "' . trim($rawQuantity) . '"';
+                }
+
+                continue;
+            }
+
+            $prices = [];
+
+            foreach ($columns['prices'] as $column) {
+                $value = $this->parseQuantity((string) ($row[$column['index']] ?? ''));
+
+                if ($value !== null) {
+                    $prices[$column['name']] = $value;
+                }
+            }
+
+            $rows[] = [
+                'stock' => $stockName,
+                'item' => $itemName,
+                'unit' => $unit,
+                'quantity' => $quantity,
+                'prices' => $prices,
+            ];
+        }
+
+        return [
+            'rows' => $rows,
+            'skipped' => $skipped,
+            'errors' => $errors,
+            'price_columns' => $priceColumns,
+        ];
+    }
+
+    private function parseLegacy(array $cells, int &$skipped, array &$errors): array
+    {
+        $rows = [];
         $headerMode = false;
 
         foreach (array_slice($cells, 0, 50) as $row) {
@@ -1090,10 +1388,21 @@ final class StocksService
                 continue;
             }
 
-            $rows[] = [$stockName, $itemName, $unit, $quantity];
+            $rows[] = [
+                'stock' => $stockName,
+                'item' => $itemName,
+                'unit' => $unit,
+                'quantity' => $quantity,
+                'prices' => [],
+            ];
         }
 
-        return [$rows, $skipped, $errors];
+        return [
+            'rows' => $rows,
+            'skipped' => $skipped,
+            'errors' => $errors,
+            'price_columns' => [],
+        ];
     }
 
     private function isWarehouseHeader(array $row): bool

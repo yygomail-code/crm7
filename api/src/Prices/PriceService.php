@@ -366,6 +366,66 @@ final class PriceService
         }
     }
 
+    public function normalizeImportName(string $name): string
+    {
+        $name = mb_strtolower(trim($name));
+        $name = (string) preg_replace('/\b(цена|цены|цен|price|руб|руб\.|₽)\b/ui', ' ', $name);
+        $name = (string) preg_replace('/\s+/u', ' ', $name);
+
+        return trim($name);
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    public function typeIdsByTitle(): array
+    {
+        $map = [];
+
+        foreach ($this->prices->types() as $type) {
+            $key = $this->normalizeImportName((string) $type['title']);
+
+            if ($key !== '') {
+                $map[$key] = (int) $type['id'];
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * @return array<string, int>
+     */
+    public function importMappings(): array
+    {
+        return $this->prices->importMappings();
+    }
+
+    /**
+     * @param array<string, mixed> $mapping
+     */
+    public function saveImportMappings(array $mapping): void
+    {
+        foreach ($mapping as $source => $typeId) {
+            $source = $this->normalizeImportName((string) $source);
+
+            if ($source === '') {
+                continue;
+            }
+
+            $this->prices->saveImportMapping($source, (int) $typeId);
+        }
+    }
+
+    public function importPrice(string $stockSid, string $nameSid, int $typeId, float $price): void
+    {
+        if ($stockSid === '' || $nameSid === '' || $typeId <= 0 || !$this->enabled()) {
+            return;
+        }
+
+        $this->prices->upsertPrice($stockSid, $nameSid, $typeId, round($price, 2));
+    }
+
     private function uniqueCode(string $title): string
     {
         $code = '';

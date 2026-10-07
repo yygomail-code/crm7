@@ -98,9 +98,9 @@
         <span>{appSettings.appTitle}</span>
       </a>
       <nav class="desktop-nav" class:many={navCount > 6}>
-        <a href="#/stocks" class:active={path === '/stocks'} title="Складские остатки">
+        <a href="#/stocks" class:active={path === '/stocks'} title="Номенклатура">
           <Icon name="stocks" size={20} />
-          <span class="nav-label">Складские остатки</span>
+          <span class="nav-label">Номенклатура</span>
         </a>
         {#if appSettings.requestsEnabled}
           <a href="#/requests" class:active={path.startsWith('/requests')} title="Заявки">
@@ -155,21 +155,7 @@
         title="О программе"
         onclick={() => router.navigate('/about')}
       >
-        <svg
-          viewBox="0 0 24 24"
-          width="20"
-          height="20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="12" cy="12" r="9" />
-          <path d="M12 11v5" />
-          <path d="M12 7.6h.01" />
-        </svg>
+        <Icon name="info" size={20} />
       </button>
       <button
         type="button"
@@ -180,19 +166,7 @@
         title="Чат"
         onclick={() => router.navigate('/chat')}
       >
-        <svg
-          viewBox="0 0 24 24"
-          width="20"
-          height="20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.9 9.9 0 0 1-4.2-.9L3 20l1.1-4.2A8.4 8.4 0 0 1 12 3.1a8.4 8.4 0 0 1 9 8.4Z" />
-        </svg>
+        <Icon name="chat" size={20} />
         {#if chatUnreadCount > 0}
           <span class="bell-badge">{chatUnreadCount > 99 ? '99+' : chatUnreadCount}</span>
         {/if}
@@ -206,20 +180,7 @@
         title="Уведомления"
         onclick={() => router.navigate('/notifications')}
       >
-        <svg
-          viewBox="0 0 24 24"
-          width="20"
-          height="20"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-          <path d="M13.7 21a2 2 0 0 1-3.4 0" />
-        </svg>
+        <Icon name="bell" size={20} />
         {#if unread > 0}
           <span class="bell-badge">{unread > 99 ? '99+' : unread}</span>
         {/if}
@@ -234,21 +195,7 @@
           title="Корзина"
           onclick={() => router.navigate('/cart')}
         >
-          <svg
-            viewBox="0 0 24 24"
-            width="20"
-            height="20"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.8"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M3 4h2l2.4 11.2a2 2 0 0 0 2 1.6h7.8a2 2 0 0 0 2-1.6L21 7H6" />
-            <circle cx="10" cy="20" r="1" />
-            <circle cx="18" cy="20" r="1" />
-          </svg>
+          <Icon name="cart" size={20} />
           {#if cart.count > 0}
             <span class="bell-badge">{cart.count > 99 ? '99+' : cart.count}</span>
           {/if}
@@ -285,9 +232,9 @@
 </main>
 
   <nav class="mobile-nav">
-    <a href="#/stocks" class:active={path === '/stocks'} title="Складские остатки">
+    <a href="#/stocks" class:active={path === '/stocks'} title="Номенклатура">
       <Icon name="stocks" size={20} />
-      <span class="nav-label">Остатки</span>
+      <span class="nav-label">Номенклатура</span>
     </a>
     <a href="#/requests" class:active={path.startsWith('/requests')} title="Заявки">
       <Icon name="requests" size={20} />
@@ -341,49 +288,57 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-4);
-    padding: var(--space-3) var(--space-5);
+    height: 64px;
+    padding: 0 var(--space-5);
     background: var(--surface);
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid var(--border-secondary);
   }
 
   .left {
     display: flex;
     align-items: center;
     gap: var(--space-5);
+    height: 100%;
   }
 
   .brand {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    color: inherit;
+    gap: var(--space-2);
+    color: var(--text);
     font-size: 18px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
+    font-weight: 600;
     text-decoration: none;
   }
 
   nav.desktop-nav {
     display: flex;
-    gap: var(--space-4);
+    align-items: stretch;
+    gap: 0;
+    height: 100%;
   }
 
   nav a {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
     color: var(--muted);
     text-decoration: none;
     font-size: 14px;
-    padding: 4px 0;
     border-bottom: 2px solid transparent;
     white-space: nowrap;
+    transition: color 0.15s ease, border-color 0.15s ease;
   }
 
   nav a.active,
   nav a:hover {
-    color: var(--text);
+    color: var(--primary);
     border-bottom-color: var(--primary);
+  }
+
+  .desktop-nav a {
+    height: 100%;
+    padding: 0 var(--space-4);
   }
 
   @media (max-width: 1150px) {
@@ -401,7 +356,7 @@
   .user {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
+    gap: var(--space-2);
   }
 
   .name {
@@ -422,8 +377,8 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 36px;
-    height: 36px;
+    width: 32px;
+    height: 32px;
     padding: 0;
     border: 1px solid var(--border);
     border-radius: 50%;
@@ -459,19 +414,20 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 38px;
-    height: 38px;
+    width: 40px;
+    height: 40px;
     padding: 0;
-    border: 1px solid transparent;
-    border-radius: 50%;
+    border: none;
+    border-radius: var(--radius-sm);
     background: none;
     color: var(--muted);
     cursor: pointer;
+    transition: color 0.15s ease, background-color 0.15s ease;
   }
 
   .bell:hover {
-    color: var(--text);
-    border-color: var(--border);
+    color: var(--primary);
+    background: var(--fill-tertiary);
   }
 
   .bell.has-new {
@@ -479,22 +435,24 @@
   }
 
   .bell.current {
-    border-color: var(--primary);
     color: var(--primary);
+    background: var(--primary-bg);
   }
 
   .bell-badge {
     position: absolute;
-    top: 0;
-    right: 0;
-    min-width: 18px;
-    padding: 0 5px;
-    border-radius: 999px;
-    background: var(--primary);
+    top: 2px;
+    right: 2px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
+    border-radius: 10px;
+    background: var(--danger);
     color: #fff;
-    font-size: 11px;
-    line-height: 18px;
+    font-size: 12px;
+    line-height: 20px;
     text-align: center;
+    box-shadow: 0 0 0 1px var(--surface);
   }
 
   main {
@@ -511,7 +469,7 @@
 
   @media (max-width: 720px) {
     header {
-      padding: var(--space-3) var(--space-4);
+      padding: 0 var(--space-4);
     }
 
     nav.desktop-nav {

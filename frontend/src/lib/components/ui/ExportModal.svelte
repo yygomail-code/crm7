@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Modal from './Modal.svelte';
+  import Button from './Button.svelte';
+
   interface Props {
     open: boolean;
     title?: string;
@@ -10,13 +13,10 @@
 
   let { open, title = 'Экспорт', email = '', emailAllowed = true, onpick, onclose }: Props = $props();
 
+  let selectedFormat = $state('xlsx');
   let sendByEmail = $state(false);
 
-  $effect(() => {
-    if (!emailAllowed) {
-      sendByEmail = false;
-    }
-  });
+  const canEmail = $derived(emailAllowed && email !== '');
 
   const formats = [
     { code: 'xlsx', label: 'Excel (XLSX)', hint: 'современный Excel' },
@@ -26,173 +26,126 @@
     { code: 'pdf', label: 'PDF', hint: 'печать и отправка' }
   ];
 
-  function onKeydown(event: KeyboardEvent): void {
-    if (event.key === 'Escape') {
-      onclose();
+  $effect(() => {
+    if (open) {
+      selectedFormat = 'xlsx';
+      sendByEmail = false;
     }
+  });
+
+  $effect(() => {
+    if (!canEmail) {
+      sendByEmail = false;
+    }
+  });
+
+  function submit(): void {
+    onpick(selectedFormat, sendByEmail);
   }
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
-{#if open}
-  <div class="overlay">
-    <button type="button" class="backdrop" aria-label="Закрыть окно экспорта" onclick={onclose}></button>
-    <div class="dialog" role="dialog" aria-modal="true" aria-label={title}>
-      <div class="dialog-head">
-        <h2>{title}</h2>
-        <button type="button" class="close" aria-label="Закрыть" onclick={onclose}>×</button>
-      </div>
-      <div class="formats">
-        {#each formats as format (format.code)}
-          <button type="button" class="format" onclick={() => onpick(format.code, sendByEmail)}>
-            <span class="code">{format.code.toUpperCase()}</span>
-            <span class="text">
-              <span class="label">{format.label}</span>
-              <span class="hint">{format.hint}</span>
-            </span>
-          </button>
-        {/each}
-      </div>
-
-      {#if emailAllowed}
-        <label class="delivery" class:disabled={email === ''}>
-          <input type="checkbox" bind:checked={sendByEmail} disabled={email === ''} />
-          <span class="delivery-text">
-            <span>Отправить на почту вместо скачивания</span>
-            <span class="delivery-hint">
-              {email !== '' ? email : 'e-mail не указан в профиле'}
-            </span>
+<Modal {open} {title} {onclose}>
+  <div class="field">
+    <p class="field-label">Формат</p>
+    <div class="radio-group">
+      {#each formats as format (format.code)}
+        <label class="radio-option">
+          <input type="radio" name="export-format" value={format.code} bind:group={selectedFormat} />
+          <span class="code">{format.code.toUpperCase()}</span>
+          <span class="text">
+            <span class="label">{format.label}</span>
+            <span class="hint">{format.hint}</span>
           </span>
         </label>
-      {/if}
+      {/each}
     </div>
   </div>
-{/if}
+
+  <div class="field">
+    <p class="field-label">Способ получения</p>
+    <div class="radio-group">
+      <label class="radio-option">
+        <input type="radio" name="export-delivery" value={false} bind:group={sendByEmail} />
+        <span class="text">
+          <span class="label">Скачать файл</span>
+        </span>
+      </label>
+      <label class="radio-option" class:disabled={!canEmail}>
+        <input
+          type="radio"
+          name="export-delivery"
+          value={true}
+          bind:group={sendByEmail}
+          disabled={!canEmail}
+        />
+        <span class="text">
+          <span class="label">Отправить на почту</span>
+          <span class="hint">
+            {canEmail ? 'Адрес можно посмотреть в профиле' : 'E-mail не указан в профиле'}
+          </span>
+        </span>
+      </label>
+    </div>
+  </div>
+
+  <div class="modal-actions">
+    <Button variant="ghost" onclick={onclose}>Отмена</Button>
+    <Button onclick={submit}>Экспортировать</Button>
+  </div>
+</Modal>
 
 <style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: grid;
-    place-items: center;
-    padding: var(--space-4);
+  .field {
+    margin-bottom: var(--space-4);
   }
 
-  .backdrop {
-    position: absolute;
-    inset: 0;
-    border: none;
-    padding: 0;
-    background: rgba(15, 23, 42, 0.45);
-    cursor: default;
+  .field:last-of-type {
+    margin-bottom: 0;
   }
 
-  .dialog {
-    position: relative;
-    width: min(420px, 100%);
-    padding: var(--space-4);
-    background: var(--surface);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-md);
-  }
-
-  .dialog-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    margin-bottom: var(--space-3);
-  }
-
-  h2 {
-    margin: 0;
-    font-size: 16px;
-  }
-
-  .close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    border: none;
-    border-radius: 50%;
-    background: none;
-    color: var(--muted);
-    font-size: 20px;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .close:hover {
+  .field-label {
+    margin: 0 0 var(--space-2);
+    font-size: 14px;
     color: var(--text);
-    background: var(--bg);
   }
 
-  .delivery {
+  .radio-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .radio-option {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    margin-top: var(--space-3);
-    padding: 9px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
+    font-size: 14px;
     cursor: pointer;
   }
 
-  .delivery.disabled {
+  .radio-option.disabled {
     opacity: 0.6;
     cursor: default;
   }
 
-  .delivery input {
+  .radio-option input[type='radio'] {
     width: 16px;
     height: 16px;
+    margin: 0;
     accent-color: var(--primary);
-  }
-
-  .delivery-text {
-    display: flex;
-    flex-direction: column;
-    font-size: 13px;
-  }
-
-  .delivery-hint {
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  .formats {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .format {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    text-align: left;
     cursor: pointer;
   }
 
-  .format:hover {
-    border-color: var(--primary);
-    background: color-mix(in srgb, var(--primary) 5%, white);
+  .radio-option.disabled input {
+    cursor: default;
   }
 
   .code {
     min-width: 54px;
     padding: 3px 8px;
-    border-radius: var(--radius-sm);
-    background: color-mix(in srgb, var(--primary) 10%, white);
+    border: 1px solid var(--primary-border);
+    border-radius: 4px;
+    background: var(--primary-bg);
     color: var(--primary);
     font-size: 11px;
     font-weight: 700;
@@ -210,6 +163,13 @@
 
   .hint {
     font-size: 12px;
-    color: var(--muted);
+    color: var(--text-description);
+  }
+
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    margin-top: var(--space-3);
   }
 </style>

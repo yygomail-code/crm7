@@ -51,6 +51,17 @@ final class StocksController extends ApiController
         ));
     }
 
+    public function level(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->level(
+            $user,
+            $capabilities,
+            (int) ($params['itemId'] ?? 0)
+        ));
+    }
+
     public function export(Request $request): Response|DownloadResponse
     {
         [$user, $capabilities] = $this->context($request);
@@ -78,7 +89,8 @@ final class StocksController extends ApiController
             $user,
             $capabilities,
             $_FILES['file'] ?? [],
-            (string) $request->input('actual_date', '')
+            (string) $request->input('actual_date', ''),
+            $this->importMapping($request)
         ), 201);
     }
 
@@ -149,6 +161,19 @@ final class StocksController extends ApiController
         [$user] = $this->context($request);
 
         return $this->service->photo($user, (int) ($params['id'] ?? 0));
+    }
+
+    private function importMapping(Request $request): array
+    {
+        $raw = trim((string) $request->input('mapping', ''));
+
+        if ($raw === '') {
+            return [];
+        }
+
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? $decoded : [];
     }
 
     /**

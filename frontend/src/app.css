@@ -1,25 +1,42 @@
 :root {
-  --bg: #f4f5f7;
+  --bg: #f5f5f5;
   --surface: #ffffff;
-  --text: #17191c;
-  --muted: #6b7280;
-  --border: #e4e7eb;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --danger: #dc2626;
-  --danger-bg: #fef2f2;
-  --success: #16a34a;
+  --text: rgba(0, 0, 0, 0.88);
+  --muted: rgba(0, 0, 0, 0.65);
+  --border: #d9d9d9;
+  --border-secondary: #f0f0f0;
+  --fill-tertiary: rgba(0, 0, 0, 0.02);
+  --text-description: rgba(0, 0, 0, 0.45);
+  --primary: #1677ff;
+  --primary-hover: #4096ff;
+  --primary-active: #0958d9;
+  --primary-bg: #e6f4ff;
+  --primary-border: #91caff;
+  --danger: #ff4d4f;
+  --danger-bg: #fff2f0;
+  --error-border: #ffccc7;
+  --error-text: #cf1322;
+  --success: #52c41a;
+  --success-bg: #f6ffed;
+  --success-border: #b7eb8f;
+  --success-text: #389e0d;
+  --warning: #faad14;
+  --warning-bg: #fffbe6;
+  --warning-text: #d48806;
   --radius-sm: 6px;
-  --radius-md: 10px;
-  --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
-  --shadow-md: 0 8px 24px rgba(16, 24, 40, 0.08);
+  --radius-md: 8px;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.03), 0 1px 6px -1px rgba(0, 0, 0, 0.02),
+    0 2px 4px 0 rgba(0, 0, 0, 0.02);
+  --shadow-md: 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12),
+    0 9px 28px 8px rgba(0, 0, 0, 0.05);
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
   --space-5: 24px;
   --space-6: 32px;
-  --font: 'Segoe UI', Roboto, system-ui, -apple-system, sans-serif;
+  --control-height: 32px;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
 * {
@@ -34,8 +51,8 @@ body {
 
 body {
   font-family: var(--font);
-  font-size: 15px;
-  line-height: 1.45;
+  font-size: 14px;
+  line-height: 1.5714;
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -84,7 +101,7 @@ main:has(.page-wide) {
 
 .filter-field select,
 .filter-field input {
-  padding: 8px 10px;
+  padding: 4px 11px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface);
@@ -97,7 +114,7 @@ main:has(.page-wide) {
   max-width: 360px;
   padding: 8px 10px;
   border-radius: var(--radius-sm);
-  background: rgba(23, 25, 28, 0.92);
+  background: rgba(0, 0, 0, 0.85);
   color: #fff;
   font-size: 12px;
   line-height: 1.45;

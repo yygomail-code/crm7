@@ -304,4 +304,31 @@ final class PriceRepository
         );
         $stmt->execute([$stockSid, $nameSid, $typeId]);
     }
+
+    /**
+     * Запомненные сопоставления колонок-цен из файла с типами цен.
+     *
+     * @return array<string, int> source_name (нормализованное) => price_type_id (0 = не импортировать)
+     */
+    public function importMappings(): array
+    {
+        $rows = Database::pdo()->query('SELECT source_name, price_type_id FROM price_import_mappings')->fetchAll() ?: [];
+
+        $map = [];
+
+        foreach ($rows as $row) {
+            $map[(string) $row['source_name']] = (int) $row['price_type_id'];
+        }
+
+        return $map;
+    }
+
+    public function saveImportMapping(string $sourceName, int $typeId): void
+    {
+        $stmt = Database::pdo()->prepare(
+            'INSERT INTO price_import_mappings (source_name, price_type_id) VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE price_type_id = VALUES(price_type_id)'
+        );
+        $stmt->execute([$sourceName, max(0, $typeId)]);
+    }
 }

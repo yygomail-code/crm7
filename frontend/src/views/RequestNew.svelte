@@ -600,7 +600,7 @@
       {#if !appSettings.salesEnabled}
         <div class="alert sales-off">
           Продажи отключены: оформление заявок недоступно. Остатки складов можно смотреть в разделе
-          «Складские остатки».
+          «Номенклатура».
         </div>
       {/if}
 
@@ -716,7 +716,7 @@
           </div>
 
           {#if itemRows.length === 0}
-            <p class="muted">Позиций пока нет — добавьте через «Складские остатки»</p>
+            <p class="muted">Позиций пока нет — добавьте через раздел «Номенклатура»</p>
           {:else}
             <div class="item-rows">
               {#each sortItems(itemRows, itemsSort) as row (itemRows.indexOf(row))}

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { getHistory } from '../../search-history';
+  import Icon from './Icon.svelte';
 
   interface Props {
     value?: string;
@@ -62,18 +63,7 @@
         onclear?.();
       }}
     >
-      <svg
-        viewBox="0 0 24 24"
-        width="14"
-        height="14"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2.2"
-        stroke-linecap="round"
-        aria-hidden="true"
-      >
-        <path d="M6 6l12 12M18 6L6 18" />
-      </svg>
+      <Icon name="close-circle" size={14} />
     </button>
   {/if}
 
@@ -107,7 +97,8 @@
   input {
     flex: 1;
     min-width: 0;
-    padding: 9px 34px 9px 12px;
+    height: 32px;
+    padding: 0 34px 0 11px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
@@ -117,7 +108,7 @@
 
   input:focus {
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
   }
 
   input::-webkit-search-cancel-button {
@@ -169,7 +160,7 @@
     background: none;
     color: var(--text);
     font: inherit;
-    font-size: 13px;
+    font-size: 14px;
     text-align: left;
     white-space: nowrap;
     overflow: hidden;

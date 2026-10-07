@@ -13,7 +13,7 @@
     display: inline-block;
     width: var(--size);
     height: var(--size);
-    border: 2px solid rgba(37, 99, 235, 0.25);
+    border: 2px solid rgba(22, 119, 255, 0.25);
     border-top-color: var(--primary);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;

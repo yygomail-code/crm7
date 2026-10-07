@@ -23,5 +23,8 @@
     "typescript": "^5.0.0",
     "vite": "^7.0.0",
     "vitest": "^5.0.1"
+  },
+  "dependencies": {
+    "@ant-design/icons-svg": "^4.6.0"
   }
 }

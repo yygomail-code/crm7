@@ -78,6 +78,16 @@ export function listLevels(
   return apiRequest(`/stocks/levels?${params.toString()}`, { auth: true });
 }
 
+export function getStockLevel(itemId: number): Promise<{
+  item: StockLevel;
+  can_edit: boolean;
+  can_manage_photos: boolean;
+  prices_enabled: boolean;
+  groups_enabled: boolean;
+}> {
+  return apiRequest(`/stocks/levels/${itemId}`, { auth: true });
+}
+
 export function renameWarehouse(
   warehouseId: number,
   name: string
@@ -144,7 +154,13 @@ export function emailLevels(
   });
 }
 
-export function importLevels(file: File, actualDate: string): Promise<{
+export interface ImportPriceType {
+  id: number;
+  title: string;
+}
+
+export interface StockImportResult {
+  status: 'done';
   job_id: number;
   file_name: string;
   actual_date: string;
@@ -154,13 +170,32 @@ export function importLevels(file: File, actualDate: string): Promise<{
   rows_zeroed: number;
   rows_skipped: number;
   warehouses_created: number;
+  prices_imported: number;
   errors: string[];
-}> {
+}
+
+export interface StockImportMapping {
+  status: 'needs_mapping';
+  columns: string[];
+  types: ImportPriceType[];
+}
+
+export type StockImportResponse = StockImportResult | StockImportMapping;
+
+export function importLevels(
+  file: File,
+  actualDate: string,
+  mapping?: Record<string, number>
+): Promise<StockImportResponse> {
   const form = new FormData();
   form.append('file', file);
   form.append('actual_date', actualDate);
 
-  return apiUpload('/stocks/import', form);
+  if (mapping !== undefined) {
+    form.append('mapping', JSON.stringify(mapping));
+  }
+
+  return apiUpload<StockImportResponse>('/stocks/import', form);
 }
 
 export function importHistory(): Promise<{ jobs: StockImportJob[]; updates: StockUpdate[] }> {

@@ -187,7 +187,7 @@ const scenarios = [
       const search = page.locator('form.search input[type="search"]').first();
       await expectVisible(search, 'нет поля поиска на складе');
       await search.fill('iPhone');
-      await page.locator('form.search').getByRole('button', { name: 'Найти' }).click();
+      await search.press('Enter');
 
       await expectVisible(page.getByText(/Смартфон Apple iPhone/).first(), 'поиск не вернул позиции');
 
@@ -196,9 +196,9 @@ const scenarios = [
         'фильтры на складе должны быть убраны'
       );
 
-      const sort = page.locator('.sort-field select');
-      await expectVisible(sort, 'нет сортировки на складе');
-      await sort.selectOption('qty_desc');
+      await page.getByRole('button', { name: 'Сортировка' }).click();
+      await page.getByRole('button', { name: 'Остаток на складе: по убыванию' }).click();
+      await page.getByRole('button', { name: 'Применить' }).click();
       await expectVisible(page.locator('.levels .level').first(), 'после смены сортировки пропали строки');
     }
   },

@@ -114,7 +114,7 @@
     <img src={currentUrl} alt="" loading="lazy" />
   {:else}
     <div class="placeholder" aria-hidden="true">
-      <Icon name="camera" size={variant === 'tile' ? 28 : 18} />
+      <Icon name="picture" size={variant === 'tile' ? 28 : 18} />
     </div>
   {/if}
 
@@ -181,8 +181,8 @@
     justify-content: center;
     width: 100%;
     height: 100%;
-    background: var(--bg);
-    color: var(--muted);
+    background: var(--fill-tertiary);
+    color: var(--text-description);
   }
 
   .nav {

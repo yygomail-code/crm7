@@ -40,12 +40,13 @@
   }
 
   .label {
-    font-size: 13px;
-    color: var(--muted);
+    font-size: 14px;
+    color: var(--text-description);
   }
 
   input {
-    padding: 9px 12px;
+    height: 32px;
+    padding: 0 11px;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
@@ -55,7 +56,7 @@
 
   input:focus {
     border-color: var(--primary);
-    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+    box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
   }
 
   input.invalid {
