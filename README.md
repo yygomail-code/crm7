@@ -52,7 +52,7 @@ frontend/       Svelte 5 SPA
   src/views/    страницы (заявки, склад, клиенты, отчёты, админ…)
   src/lib/      api-клиент, компоненты, сторы
   tools/        e2e и снятие скриншотов
-docs/           план, развёртывание, e2e, дизайн-ревью
+docs/           архитектура, тесты, ui, развёртывание, e2e, миграции
 ```
 
 ## Требования
@@ -107,7 +107,15 @@ npm run e2e        # e2e-сценарии (нужен запущенный фр�
 
 ## Документация
 
-- [`docs/plan.md`](docs/plan.md) — план развития и выполненные волны правок
+- [`AGENTS.md`](AGENTS.md) — краткая карта проекта для агентов и новых сессий
+- [`docs/architecture.md`](docs/architecture.md) — устройство системы, слои, данные, окружения
+- [`docs/testing.md`](docs/testing.md) — тесты, e2e, дизайн-ревью
+- [`docs/ui.md`](docs/ui.md) — дизайн-система (Ant), токены, компоненты
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — процесс, ветки, PR, правила
 - [`docs/deploy.md`](docs/deploy.md) — развёртывание (в т.ч. несколько проектов на одном хостинге)
+- [`docs/images.md`](docs/images.md) — образы, версии, GHCR
+- [`docs/migrations.md`](docs/migrations.md) — миграции БД
+- [`docs/data-import.md`](docs/data-import.md) — импорт реальных данных в K
 - [`docs/e2e.md`](docs/e2e.md) — e2e-сценарии и переменные окружения
 - [`docs/design-review-findings.md`](docs/design-review-findings.md) — результаты дизайн-ревью
+- [`docs/plan.md`](docs/plan.md) — исторический план развития и выполненные волны

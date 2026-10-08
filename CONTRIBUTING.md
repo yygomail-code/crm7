@@ -1,5 +1,9 @@
 # Как работать над CRM7 (для разработчиков)
 
+Быстрый вход и команды — в [`AGENTS.md`](AGENTS.md); устройство системы — в
+[`docs/architecture.md`](docs/architecture.md); тесты — в [`docs/testing.md`](docs/testing.md);
+дизайн-система — в [`docs/ui.md`](docs/ui.md).
+
 ## Роли и источник истины
 - **Исходный код** — GitHub: `https://github.com/yygomail-code/crm7` (ветка `master`).
   Это единственный источник истины. Локальные «копии-в-стороне» не ведутся.
