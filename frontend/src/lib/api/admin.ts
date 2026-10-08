@@ -6,6 +6,7 @@ import type {
   EmailQueueItem,
   EmailSettings,
   EmailTemplate,
+  ItemType,
   ReportSchedule,
   RolesResponse,
   SearchLogResponse,
@@ -85,6 +86,9 @@ export function saveSystemSettings(payload: {
   cart_enabled: boolean;
   substitutions_enabled: boolean;
   manager_assign_enabled: boolean;
+  warehouses_enabled: boolean;
+  reports_enabled: boolean;
+  single_name: string;
   app_title: string;
   client_label: string;
   photo_ratio: string;
@@ -214,6 +218,53 @@ export function saveRole(level: number, capabilities: string[]): Promise<RolesRe
     method: 'POST',
     auth: true,
     body: { capabilities }
+  });
+}
+
+export interface ModuleItem {
+  code: string;
+  title: string;
+  description: string;
+  enabled: boolean;
+  levels: number[];
+  capabilities: string[];
+}
+
+export interface ModuleRole {
+  level: number;
+  title: string;
+}
+
+export interface ModulesResponse {
+  modules: ModuleItem[];
+  roles: ModuleRole[];
+}
+
+export function listModules(): Promise<ModulesResponse> {
+  return apiRequest<ModulesResponse>('/admin/modules', { auth: true });
+}
+
+export function saveModules(modules: ModuleItem[]): Promise<ModulesResponse> {
+  return apiRequest<ModulesResponse>('/admin/modules', {
+    method: 'POST',
+    auth: true,
+    body: {
+      modules: Object.fromEntries(
+        modules.map((module) => [module.code, { enabled: module.enabled, levels: module.levels }])
+      )
+    }
+  });
+}
+
+export function listItemTypes(): Promise<{ types: ItemType[] }> {
+  return apiRequest<{ types: ItemType[] }>('/admin/item-types', { auth: true });
+}
+
+export function saveItemTypes(types: ItemType[]): Promise<{ types: ItemType[] }> {
+  return apiRequest<{ types: ItemType[] }>('/admin/item-types', {
+    method: 'POST',
+    auth: true,
+    body: { types: Object.fromEntries(types.map((type) => [type.code, type.enabled ?? false])) }
   });
 }
 

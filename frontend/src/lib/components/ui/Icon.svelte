@@ -24,6 +24,7 @@
   import QuestionCircleOutlined from '@ant-design/icons-svg/es/asn/QuestionCircleOutlined';
   import SafetyCertificateOutlined from '@ant-design/icons-svg/es/asn/SafetyCertificateOutlined';
   import SettingOutlined from '@ant-design/icons-svg/es/asn/SettingOutlined';
+  import ShopOutlined from '@ant-design/icons-svg/es/asn/ShopOutlined';
   import ShoppingCartOutlined from '@ant-design/icons-svg/es/asn/ShoppingCartOutlined';
   import SortAscendingOutlined from '@ant-design/icons-svg/es/asn/SortAscendingOutlined';
   import SwapOutlined from '@ant-design/icons-svg/es/asn/SwapOutlined';
@@ -69,7 +70,8 @@
     stocks: DatabaseOutlined,
     substitutions: SwapOutlined,
     trash: DeleteOutlined,
-    view: TableOutlined
+    view: TableOutlined,
+    warehouse: ShopOutlined
   };
 
   const svg = $derived(

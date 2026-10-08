@@ -311,7 +311,7 @@ final class ReportRepository
                     COALESCE(SUM(l.QUANTITY), 0) AS stock_quantity
              FROM stocks s
              LEFT JOIN stock_levels l ON l.STOCK_SID = s.SID
-             WHERE s.ACTIVE = \'Y\' AND s.STATUS = \'Y\'
+             WHERE s.ACTIVE = \'Y\' AND s.STATUS = \'Y\' AND s.IN_REPORTS = 1
              GROUP BY s.ID, s.NAME, s.SORT
              ORDER BY s.SORT ASC, s.NAME ASC'
         );

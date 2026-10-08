@@ -19,6 +19,8 @@
   import ClientCard from './views/ClientCard.svelte';
   import Chat from './views/Chat.svelte';
   import Stocks from './views/Stocks.svelte';
+  import Warehouses from './views/Warehouses.svelte';
+  import WarehouseCard from './views/WarehouseCard.svelte';
   import ItemEdit from './views/ItemEdit.svelte';
   import Admin from './views/Admin.svelte';
   import Legal from './views/Legal.svelte';
@@ -63,6 +65,7 @@
   const userMatch = $derived(matchRoute('/users/:id', route));
   const itemNewMatch = $derived(matchRoute('/stocks/items/new', route));
   const itemEditMatch = $derived(matchRoute('/stocks/items/:id/edit', route));
+  const warehouseMatch = $derived(matchRoute('/warehouses/:id', route));
 </script>
 
 {#if !auth.ready || (auth.isAuthenticated && filterPrefs.loadedFor !== auth.user?.id)}
@@ -99,6 +102,12 @@
       <Chat />
     {:else if route === '/stocks'}
       <Stocks />
+    {:else if route === '/warehouses'}
+      <Warehouses />
+    {:else if route === '/warehouses/new'}
+      <WarehouseCard id={0} />
+    {:else if warehouseMatch}
+      <WarehouseCard id={Number(warehouseMatch.id)} />
     {:else if itemNewMatch}
       <ItemEdit id={0} />
     {:else if itemEditMatch}

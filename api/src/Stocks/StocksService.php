@@ -20,6 +20,7 @@ use App\Repositories\StocksRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\ViewLogRepository;
 use App\Support\ImageProcessor;
+use App\Support\ItemTypes;
 use App\Support\Storage;
 use Throwable;
 
@@ -37,6 +38,16 @@ final class StocksService
 
     private const MAX_PHOTO_PIXELS = 40000000;
 
+    public const SINGLE_WAREHOUSE_SID = 'single-warehouse';
+
+    private const SINGLE_WAREHOUSE_LEVEL = '{50},{10},{5},';
+
+    /** Типы складов, доступные в карточке. */
+    public const WAREHOUSE_TYPES = ['main', 'transit', 'returns', 'reserve', 'defect'];
+
+    /** Роли, которым склад доступен по умолчанию (LEVEL). */
+    public const WAREHOUSE_LEVELS = [90, 50, 10, 5, 1];
+
     public function __construct(
         private readonly StocksRepository $stocks = new StocksRepository(),
         private readonly AuditService $audit = new AuditService(),
@@ -46,7 +57,8 @@ final class StocksService
         private readonly ItemGroupService $groups = new ItemGroupService(),
         private readonly SearchLogRepository $searches = new SearchLogRepository(),
         private readonly StockPhotoRepository $photos = new StockPhotoRepository(),
-        private readonly SettingsRepository $settings = new SettingsRepository()
+        private readonly SettingsRepository $settings = new SettingsRepository(),
+        private readonly ItemTypeService $itemTypes = new ItemTypeService()
     ) {
     }
 
@@ -74,7 +86,7 @@ final class StocksService
         $all = in_array('stocks.manage', $capabilities, true);
         $rows = $this->stocks->warehousesForUser((int) $user['LEVEL'], (string) $user['SID'], $all);
         $sids = array_map(static fn (array $row): string => (string) $row['SID'], $rows);
-        $bySid = $this->stocks->searchCounts($sids, self::normalizeFilters($filters));
+        $bySid = $this->stocks->searchCounts($sids, $this->applyActiveFilter($capabilities, self::normalizeFilters($filters)));
 
         $counts = [];
 
@@ -116,7 +128,7 @@ final class StocksService
 
         $page = max(1, $page);
         $perPage = $perPage <= 0 ? 0 : max(10, min(100, $perPage));
-        $filters = self::normalizeFilters($filters);
+        $filters = $this->applyActiveFilter($capabilities, self::normalizeFilters($filters));
 
         $priceTypeId = $this->priceTypeFor($user, $clientId);
 
@@ -187,6 +199,7 @@ final class StocksService
                     'group_title' => (string) ($row['group_title'] ?? ''),
                     'warehouse_id' => $warehouse !== null ? (int) $warehouse['ID'] : 0,
                     'warehouse_name' => $warehouse !== null ? (string) $warehouse['NAME'] : (string) ($row['stock_name'] ?? ''),
+                    'active' => ($row['active'] ?? 'Y') === 'Y',
                     'photos' => $photosBySid[$sid] ?? [],
                 ];
 
@@ -200,6 +213,7 @@ final class StocksService
             'page' => $page,
             'per_page' => $perPage,
             'can_edit' => in_array('stocks.edit', $capabilities, true),
+            'can_deactivate' => $this->canDeactivate($capabilities),
             'prices' => [
                 'enabled' => $this->prices->enabled(),
                 'type' => $type !== null ? ['id' => (int) $type['id'], 'title' => (string) $type['title']] : null,
@@ -248,6 +262,54 @@ final class StocksService
 
         $groupId = $level['group_id'] !== null ? (int) $level['group_id'] : null;
 
+        $existing = [];
+
+        foreach ($this->stocks->levelsForName($nameSid) as $row) {
+            $existing[(string) $row['stock_sid']] = $row;
+        }
+
+        $levels = [];
+
+        foreach ($this->stocks->warehousesForUser(
+            (int) $user['LEVEL'],
+            (string) $user['SID'],
+            in_array('stocks.manage', $capabilities, true)
+        ) as $wh) {
+            $whSid = (string) $wh['SID'];
+            $row = $existing[$whSid] ?? null;
+
+            $levels[] = [
+                'id' => $row !== null ? (int) $row['id'] : 0,
+                'warehouse_sid' => $whSid,
+                'warehouse_name' => (string) $wh['NAME'],
+                'quantity' => $row !== null ? (float) $row['quantity'] : 0.0,
+                'unit' => $row !== null ? (string) ($row['unit'] ?? '') : (string) ($level['unit'] ?? ''),
+                'actual_date' => $row !== null && $row['actual_date'] !== null ? (string) $row['actual_date'] : null,
+                'current' => $row !== null && (int) $row['id'] === $itemId,
+            ];
+        }
+
+        $type = $this->storedType((string) ($level['type'] ?? ''));
+        $active = ($level['active'] ?? 'Y') === 'Y';
+        $usage = $this->stocks->positionUsage($nameSid, (string) $level['name']);
+
+        $deleteBlocked = $usage['in_sets'] > 0
+            ? 'in_sets'
+            : ($usage['in_requests'] > 0 ? 'in_requests' : null);
+
+        $deactivateBlocked = $active && $usage['in_sets'] > 0 ? 'in_sets' : null;
+
+        $composition = $type === ItemTypes::SET
+            ? array_map(static fn (array $row): array => [
+                'item_sid' => (string) $row['item_sid'],
+                'name' => (string) $row['name'],
+                'unit' => (string) ($row['unit'] ?? ''),
+                'type' => (string) $row['type'],
+                'article' => (string) ($row['article'] ?? ''),
+                'quantity' => (float) $row['quantity'],
+            ], $this->stocks->compositionFor($nameSid))
+            : [];
+
         return [
             'item' => [
                 'id' => (int) $level['id'],
@@ -262,13 +324,169 @@ final class StocksService
                 'group_title' => $this->groupTitle($groupId),
                 'warehouse_id' => (int) $warehouse['ID'],
                 'warehouse_name' => (string) $warehouse['NAME'],
+                'levels' => $levels,
+                'article' => (string) ($level['article'] ?? ''),
+                'type' => $type,
+                'active' => $active,
+                'composition' => $composition,
                 'photos' => $this->photos->forNames([$nameSid])[$nameSid] ?? [],
             ],
             'can_edit' => $canEdit,
             'can_manage_photos' => $canEdit || in_array('stocks.import', $capabilities, true),
+            'can_deactivate' => $this->canDeactivate($capabilities),
+            'can_delete' => in_array('stocks.manage', $capabilities, true),
+            'deactivate_blocked' => $deactivateBlocked,
+            'delete_blocked' => $deleteBlocked,
             'prices_enabled' => $this->prices->enabled(),
             'groups_enabled' => $this->groups->enabled(),
+            'item_types' => $this->itemTypes->enabledList(),
         ];
+    }
+
+    public function setActive(array $user, array $capabilities, int $itemId, bool $active): array
+    {
+        if (!$this->canDeactivate($capabilities)) {
+            throw new HttpException(403, 'forbidden', 'Недостаточно прав для изменения активности позиции');
+        }
+
+        $level = $this->stocks->findLevel($itemId);
+
+        if ($level === null) {
+            throw new HttpException(404, 'not_found', 'Позиция не найдена');
+        }
+
+        $warehouse = $this->stocks->findWarehouseBySid((string) $level['stock_sid']);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        $this->requireWarehouse($user, $capabilities, (int) $warehouse['ID']);
+
+        $nameSid = (string) $level['name_sid'];
+
+        if (!$active) {
+            $usage = $this->stocks->positionUsage($nameSid, (string) $level['name']);
+
+            if ($usage['in_sets'] > 0) {
+                throw new HttpException(422, 'in_use_sets', 'Позиция входит в наборы — сначала уберите её из состава');
+            }
+        }
+
+        $this->stocks->setNomenclatureActive($nameSid, $active);
+        $this->audit->log(
+            $user,
+            $active ? 'stocks.item.activate' : 'stocks.item.deactivate',
+            'nomenclature',
+            $nameSid,
+            ['name' => (string) $level['name']],
+            null
+        );
+
+        return ['active' => $active];
+    }
+
+    public function deleteItem(array $user, array $capabilities, int $itemId): array
+    {
+        if (!in_array('stocks.manage', $capabilities, true)) {
+            throw new HttpException(403, 'forbidden', 'Недостаточно прав для удаления позиции');
+        }
+
+        $level = $this->stocks->findLevel($itemId);
+
+        if ($level === null) {
+            throw new HttpException(404, 'not_found', 'Позиция не найдена');
+        }
+
+        $warehouse = $this->stocks->findWarehouseBySid((string) $level['stock_sid']);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        $this->requireWarehouse($user, $capabilities, (int) $warehouse['ID']);
+
+        $nameSid = (string) $level['name_sid'];
+        $usage = $this->stocks->positionUsage($nameSid, (string) $level['name']);
+
+        if ($usage['in_sets'] > 0) {
+            throw new HttpException(422, 'in_use_sets', 'Позиция входит в наборы — сначала уберите её из состава');
+        }
+
+        if ($usage['in_requests'] > 0) {
+            throw new HttpException(
+                422,
+                'in_use_requests',
+                'Позиция использовалась в заявках — удалить нельзя, можно деактивировать'
+            );
+        }
+
+        foreach ($this->photos->listForName($nameSid) as $photo) {
+            $this->photos->delete((int) $photo['id']);
+
+            try {
+                Storage::delete((string) $photo['storage_path']);
+            } catch (Throwable) {
+                // файл мог быть уже удалён
+            }
+        }
+
+        $this->stocks->deletePosition($nameSid);
+        $this->audit->log($user, 'stocks.item.delete', 'nomenclature', $nameSid, ['name' => (string) $level['name']], null);
+
+        return ['deleted' => true];
+    }
+
+    /**
+     * Разрешённые типы номенклатуры для карточки позиции.
+     *
+     * @param  array<int, string>  $capabilities
+     * @return array<string, mixed>
+     */
+    public function itemTypes(array $capabilities): array
+    {
+        $this->requireView($capabilities);
+
+        return ['items' => $this->itemTypes->enabledList()];
+    }
+
+    /**
+     * Поиск позиций номенклатуры (для состава набора).
+     *
+     * @param  array<int, string>  $capabilities
+     * @return array<string, mixed>
+     */
+    public function nomenclature(array $capabilities, string $query, int $limit): array
+    {
+        $this->requireView($capabilities);
+
+        $query = trim($query);
+
+        if ($query === '') {
+            return ['items' => []];
+        }
+
+        return [
+            'items' => array_map(static fn (array $row): array => [
+                'sid' => (string) $row['sid'],
+                'name' => (string) $row['name'],
+                'unit' => (string) ($row['unit'] ?? ''),
+                'type' => (string) $row['type'],
+                'article' => (string) ($row['article'] ?? ''),
+            ], $this->stocks->searchNomenclature($query, $limit)),
+        ];
+    }
+
+    private function requireView(array $capabilities): void
+    {
+        if (
+            !in_array('stocks.view', $capabilities, true)
+            && !in_array('stocks.edit', $capabilities, true)
+            && !in_array('stocks.import', $capabilities, true)
+            && !in_array('stocks.manage', $capabilities, true)
+        ) {
+            throw new HttpException(403, 'forbidden', 'Недостаточно прав для просмотра номенклатуры');
+        }
     }
 
     public function uploadPhoto(array $user, array $capabilities, int $levelId, array $file): array
@@ -498,6 +716,12 @@ final class StocksService
         $groupIds = array_values(array_unique($groupIds));
         $noGroup = in_array((string) ($input['no_group'] ?? ''), ['1', 'true', 'yes'], true);
 
+        $active = (string) ($input['active'] ?? '');
+
+        if (!in_array($active, ['active', 'inactive'], true)) {
+            $active = 'all';
+        }
+
         return [
             'q' => trim((string) ($input['q'] ?? '')),
             'qty_op' => $qtyOp,
@@ -506,12 +730,30 @@ final class StocksService
             'show_zero' => $showZero,
             'group_ids' => $groupIds,
             'no_group' => $noGroup,
+            'active' => $active,
         ];
+    }
+
+    private function canDeactivate(array $capabilities): bool
+    {
+        return in_array('stocks.deactivate', $capabilities, true);
+    }
+
+    /**
+     * Неактивные позиции видны только роли с правом; без него — принудительно только активные.
+     */
+    private function applyActiveFilter(array $capabilities, array $filters): array
+    {
+        if (!$this->canDeactivate($capabilities)) {
+            $filters['active'] = 'active';
+        }
+
+        return $filters;
     }
 
     public function export(array $user, array $capabilities, array $warehouseIds, array $filters, string $format): array
     {
-        $filters = self::normalizeFilters($filters);
+        $filters = $this->applyActiveFilter($capabilities, self::normalizeFilters($filters));
         $format = TableExport::normalizeFormat($format);
 
         $warehouseIds = array_values(array_unique(array_filter(
@@ -676,6 +918,18 @@ final class StocksService
         }
 
         $this->stocks->setNomenclatureGroup((string) $item['SID'], $groupId);
+        $this->stocks->setNomenclatureArticle((string) $item['SID'], $this->normalizeArticle($input['article'] ?? null));
+        $this->stocks->setNomenclatureType(
+            (string) $item['SID'],
+            array_key_exists('type', $input) ? $this->normalizeType($input['type']) : ItemTypes::PRODUCT
+        );
+
+        // Новая позиция создаётся деактивированной — пользователь активирует её отдельно.
+        $isNewPosition = $this->stocks->levelsForName((string) $item['SID']) === [];
+
+        if ($isNewPosition) {
+            $this->stocks->setNomenclatureActive((string) $item['SID'], false);
+        }
 
         $actualDate = date('Y-m-d');
 
@@ -708,6 +962,7 @@ final class StocksService
                 'prices' => $this->prices->pricesForStockItem((string) $warehouse['SID'], (string) $item['SID']),
                 'group_id' => $groupId,
                 'group_title' => $this->groupTitle($groupId),
+                'active' => !$isNewPosition,
             ],
         ];
     }
@@ -740,20 +995,47 @@ final class StocksService
             ? $this->normalizeGroupId($input['group_id'])
             : ($level['group_id'] !== null ? (int) $level['group_id'] : null);
 
-        $item = $this->stocks->upsertNomenclature($name, $unit, $description);
+        $nameSid = (string) $level['name_sid'];
 
-        if ($item === null) {
-            throw new HttpException(500, 'server_error', 'Не удалось сохранить позицию');
+        // Позиция единая: переименование правит общую nomenclature и переносится на все склады.
+        if ($name !== (string) $level['name']) {
+            $existing = $this->stocks->nomenclatureByName($name);
+
+            if ($existing !== null && (string) $existing['SID'] !== $nameSid) {
+                throw new HttpException(422, 'duplicate_item', 'Позиция с таким названием уже есть');
+            }
         }
 
-        if ((string) $item['SID'] !== (string) $level['name_sid']
-            && $this->stocks->levelExists((string) $level['stock_sid'], (string) $item['SID'], $itemId)
-        ) {
-            throw new HttpException(422, 'duplicate_item', 'Позиция с таким названием уже есть на складе');
+        $this->stocks->renameNomenclature($nameSid, $name, $unit, $description);
+        $this->stocks->setNomenclatureGroup($nameSid, $groupId);
+
+        if (array_key_exists('article', $input)) {
+            $this->stocks->setNomenclatureArticle($nameSid, $this->normalizeArticle($input['article']));
         }
 
-        $this->stocks->setNomenclatureGroup((string) $item['SID'], $groupId);
-        $this->stocks->updateLevel($itemId, $name, (string) $item['SID'], $unit, $quantity);
+        $storedType = $this->storedType((string) ($level['type'] ?? ''));
+        $type = $storedType;
+
+        if (array_key_exists('type', $input)) {
+            $type = $this->normalizeType($input['type'], $storedType);
+            $this->stocks->setNomenclatureType($nameSid, $type);
+        }
+
+        if ($type === ItemTypes::SET) {
+            if (array_key_exists('composition', $input)) {
+                $this->stocks->replaceComposition($nameSid, $this->normalizeComposition($nameSid, $input['composition']));
+            }
+        } elseif (array_key_exists('type', $input)) {
+            $this->stocks->replaceComposition($nameSid, []);
+        }
+
+        $this->stocks->updateLevelQuantity($itemId, $quantity);
+
+        if (isset($input['levels']) && is_array($input['levels'])) {
+            $this->saveLevelQuantities($user, $capabilities, $nameSid, $itemId, $name, $unit, $input['levels']);
+        }
+
+        $item = ['SID' => $nameSid, 'NAME' => $name];
         $this->savePrices($warehouse, $item, $input);
 
         $this->audit->log($user, 'stocks.item.update', 'stocks', (int) $warehouse['ID'], [
@@ -788,6 +1070,149 @@ final class StocksService
             (string) ($item['SID'] ?? ''),
             $input['prices']
         );
+    }
+
+    /**
+     * Обновляет количества по другим складам (вкладка «Количество»), проверяя права на каждый склад.
+     */
+    private function saveLevelQuantities(
+        array $user,
+        array $capabilities,
+        string $nameSid,
+        int $currentId,
+        string $name,
+        string $unit,
+        array $levels
+    ): void {
+        $existing = [];
+
+        foreach ($this->stocks->levelsForName($nameSid) as $row) {
+            $existing[(string) $row['stock_sid']] = $row;
+        }
+
+        $accessible = [];
+
+        foreach ($this->stocks->warehousesForUser(
+            (int) $user['LEVEL'],
+            (string) $user['SID'],
+            in_array('stocks.manage', $capabilities, true)
+        ) as $wh) {
+            $accessible[(string) $wh['SID']] = $wh;
+        }
+
+        foreach ($levels as $entry) {
+            if (!is_array($entry) || !array_key_exists('quantity', $entry)) {
+                continue;
+            }
+
+            $stockSid = (string) ($entry['warehouse_sid'] ?? '');
+
+            if ($stockSid === '' || !isset($accessible[$stockSid])) {
+                continue;
+            }
+
+            $warehouse = $accessible[$stockSid];
+            $this->requireWarehouse($user, $capabilities, (int) $warehouse['ID']);
+
+            $quantity = (float) $entry['quantity'];
+
+            if (isset($existing[$stockSid])) {
+                $row = $existing[$stockSid];
+
+                if ((int) $row['id'] === $currentId) {
+                    continue;
+                }
+
+                $this->stocks->updateLevelQuantity((int) $row['id'], $quantity);
+                continue;
+            }
+
+            $this->stocks->createLevel([
+                'update_sid' => null,
+                'actual_date' => date('Y-m-d'),
+                'stock' => (string) $warehouse['NAME'],
+                'stock_sid' => $stockSid,
+                'name' => $name,
+                'name_sid' => $nameSid,
+                'unit' => $unit,
+                'quantity' => $quantity,
+            ]);
+        }
+    }
+
+    private function normalizeArticle(mixed $value): ?string
+    {
+        $article = trim((string) ($value ?? ''));
+
+        return $article !== '' ? $article : null;
+    }
+
+    private function storedType(string $value): string
+    {
+        return ItemTypes::isKnown($value) ? $value : ItemTypes::PRODUCT;
+    }
+
+    private function normalizeType(mixed $value, ?string $current = null): string
+    {
+        $type = trim((string) ($value ?? ''));
+
+        if (!ItemTypes::isKnown($type)) {
+            throw new HttpException(422, 'validation_error', 'Неизвестный тип позиции');
+        }
+
+        if ($type !== $current && !in_array($type, $this->itemTypes->enabledCodes(), true)) {
+            throw new HttpException(422, 'type_disabled', 'Тип позиции отключён администратором');
+        }
+
+        return $type;
+    }
+
+    /**
+     * @return array<int, array{item_sid: string, quantity: float}>
+     */
+    private function normalizeComposition(string $setSid, mixed $value): array
+    {
+        if (!is_array($value)) {
+            throw new HttpException(422, 'validation_error', 'Некорректный состав набора');
+        }
+
+        $items = [];
+
+        foreach ($value as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $itemSid = trim((string) ($entry['item_sid'] ?? ''));
+
+            if ($itemSid === '') {
+                continue;
+            }
+
+            if ($itemSid === $setSid) {
+                throw new HttpException(422, 'validation_error', 'Набор не может содержать сам себя');
+            }
+
+            $component = $this->stocks->findNomenclature($itemSid);
+
+            if ($component === null) {
+                throw new HttpException(422, 'validation_error', 'Компонент состава не найден');
+            }
+
+            if (($component['ACTIVE'] ?? 'Y') !== 'Y') {
+                throw new HttpException(422, 'item_inactive', 'Деактивированную позицию нельзя добавить в набор');
+            }
+
+            $quantity = (float) ($entry['quantity'] ?? 0);
+
+            if (!is_finite($quantity) || $quantity <= 0) {
+                throw new HttpException(422, 'validation_error', 'Количество в составе должно быть больше нуля');
+            }
+
+            $items[$itemSid] = ['item_sid' => $itemSid, 'quantity' => $quantity];
+        }
+
+        return array_values($items);
     }
 
     private function normalizeGroupId(mixed $value): ?int
@@ -901,6 +1326,530 @@ final class StocksService
         return ['warehouse' => ['id' => $warehouseId, 'name' => $name]];
     }
 
+    private function requireWarehouseAdmin(array $capabilities): void
+    {
+        if (
+            !in_array('stocks.edit', $capabilities, true)
+            && !in_array('stocks.import', $capabilities, true)
+            && !in_array('stocks.manage', $capabilities, true)
+        ) {
+            throw new HttpException(403, 'forbidden', 'Недостаточно прав для управления складами');
+        }
+    }
+
+    public function warehouseDirectory(array $user, array $capabilities): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        return [
+            'items' => array_map(static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'sid' => (string) $row['sid'],
+                'name' => (string) $row['name'],
+                'address' => $row['address'] !== null ? (string) $row['address'] : null,
+                'active' => ($row['active'] ?? 'N') === 'Y',
+                'type' => (string) ($row['type'] ?? 'main'),
+                'is_default' => (int) ($row['is_default'] ?? 0) === 1,
+                'stock_num' => (int) ($row['stock_num'] ?? 0),
+                'sort' => (int) $row['sort'],
+                'responsible_name' => $row['responsible_name'] !== null ? (string) $row['responsible_name'] : null,
+                'positions' => (int) $row['positions'],
+                'positions_total' => (int) $row['positions_total'],
+                'users' => (int) $row['users'],
+                'actual_date' => $row['actual_date'] !== null ? (string) $row['actual_date'] : null,
+            ], $this->stocks->warehousesAdmin()),
+        ];
+    }
+
+    public function warehouseCard(array $user, array $capabilities, int $id): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        $warehouse = $this->stocks->findWarehouseById($id);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        return ['warehouse' => $this->presentWarehouse($warehouse)];
+    }
+
+    public function updateWarehouse(array $user, array $capabilities, int $id, array $input): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        $warehouse = $this->stocks->findWarehouseById($id);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        $fields = $this->warehouseFields($input, $warehouse);
+
+        if (
+            $fields['name'] !== (string) $warehouse['NAME']
+            && $this->stocks->warehouseNameTaken($fields['name'], (string) $warehouse['SID'])
+        ) {
+            throw new HttpException(422, 'duplicate_warehouse', 'Склад с таким названием уже есть');
+        }
+
+        $this->stocks->updateWarehouse((string) $warehouse['SID'], $fields);
+
+        if ($fields['is_default']) {
+            $this->stocks->clearDefaultWarehouse((string) $warehouse['SID']);
+        }
+
+        $this->audit->log($user, 'stocks.warehouse.update', 'stocks', $id, [
+            'name' => $fields['name'],
+            'active' => $fields['active'],
+            'type' => $fields['type'],
+            'is_default' => $fields['is_default'],
+        ], null);
+
+        return ['warehouse' => $this->presentWarehouse($this->stocks->findWarehouseById($id) ?? $warehouse)];
+    }
+
+    public function createWarehouse(array $user, array $capabilities, array $input): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        $fields = $this->warehouseFields($input, null);
+
+        if ($this->stocks->warehouseExists($fields['name'])) {
+            throw new HttpException(422, 'duplicate_warehouse', 'Склад с таким названием уже есть');
+        }
+
+        $warehouse = $this->stocks->createWarehouse($fields);
+
+        if ($warehouse === null) {
+            throw new HttpException(500, 'create_failed', 'Не удалось создать склад');
+        }
+
+        if ($fields['is_default']) {
+            $this->stocks->clearDefaultWarehouse((string) $warehouse['SID']);
+        }
+
+        $this->audit->log($user, 'stocks.warehouse.create', 'stocks', (int) $warehouse['ID'], ['name' => $fields['name']], null);
+
+        return ['warehouse' => $this->presentWarehouse($warehouse)];
+    }
+
+    /**
+     * Разбирает и валидирует поля склада из входных данных.
+     *
+     * @return array<string, mixed>
+     */
+    private function warehouseFields(array $input, ?array $existing): array
+    {
+        $name = trim((string) ($input['name'] ?? ''));
+
+        if ($name === '') {
+            throw new HttpException(422, 'validation_error', 'Укажите название склада');
+        }
+
+        if (mb_strlen($name) > 255) {
+            throw new HttpException(422, 'validation_error', 'Название слишком длинное (до 255 символов)');
+        }
+
+        $name1c = trim((string) ($input['name_1c'] ?? ''));
+
+        if ($name1c === '') {
+            $name1c = $name;
+        }
+
+        if (mb_strlen($name1c) > 255) {
+            throw new HttpException(422, 'validation_error', 'Название в 1С слишком длинное (до 255 символов)');
+        }
+
+        $sid = $existing !== null ? (string) $existing['SID'] : null;
+
+        if ($this->stocks->warehouseName1cTaken($name1c, $sid)) {
+            throw new HttpException(422, 'duplicate_warehouse', 'Склад с таким названием в 1С уже есть');
+        }
+
+        $email = $this->optionalText($input['email'] ?? null, 255);
+
+        if ($email !== null && filter_var($email, FILTER_VALIDATE_EMAIL) === false) {
+            throw new HttpException(422, 'validation_error', 'Некорректный e-mail');
+        }
+
+        $type = (string) ($input['type'] ?? 'main');
+
+        if (!in_array($type, self::WAREHOUSE_TYPES, true)) {
+            $type = 'main';
+        }
+
+        $levels = [];
+
+        foreach ((array) ($input['levels'] ?? []) as $level) {
+            $level = (int) $level;
+
+            if (in_array($level, self::WAREHOUSE_LEVELS, true)) {
+                $levels[$level] = true;
+            }
+        }
+
+        if ($levels === []) {
+            throw new HttpException(422, 'validation_error', 'Выберите хотя бы одну роль доступа');
+        }
+
+        $levelValue = '';
+
+        foreach (array_keys($levels) as $level) {
+            $levelValue .= '{' . $level . '},';
+        }
+
+        $responsibleSid = trim((string) ($input['responsible_sid'] ?? ''));
+
+        if ($responsibleSid !== '' && $this->users->findBySid($responsibleSid) === null) {
+            throw new HttpException(422, 'validation_error', 'Ответственный не найден');
+        }
+
+        return [
+            'name' => $name,
+            'name_1c' => $name1c,
+            'address' => $this->optionalText($input['address'] ?? null, 255),
+            'contact_name' => $this->optionalText($input['contact_name'] ?? null, 255),
+            'phone' => $this->optionalText($input['phone'] ?? null, 64),
+            'email' => $email,
+            'note' => $this->optionalText($input['note'] ?? null, 4000),
+            'type' => $type,
+            'stock_num' => max(0, min(99, (int) ($input['stock_num'] ?? 0))),
+            'sort' => max(0, min(999, (int) ($input['sort'] ?? ($existing['SORT'] ?? 500)))),
+            'level' => $levelValue,
+            'active' => (bool) ($input['active'] ?? true),
+            'is_default' => (bool) ($input['is_default'] ?? false),
+            'allow_orders' => (bool) ($input['allow_orders'] ?? true),
+            'in_reports' => (bool) ($input['in_reports'] ?? true),
+            'responsible_sid' => $responsibleSid === '' ? null : $responsibleSid,
+        ];
+    }
+
+    private function optionalText(mixed $value, int $max): ?string
+    {
+        $text = trim((string) ($value ?? ''));
+
+        return $text === '' ? null : mb_substr($text, 0, $max);
+    }
+
+    public function exportWarehouses(array $user, array $capabilities, string $format): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        $format = TableExport::normalizeFormat($format);
+        $rows = $this->stocks->warehousesAdmin();
+
+        $section = [
+            'headers' => ['Название', 'Адрес', 'Позиций', 'Доступ (пользователей)', 'Остатки на', 'Статус'],
+            'rows' => array_map(static fn (array $row): array => [
+                (string) $row['name'],
+                $row['address'] !== null ? (string) $row['address'] : '',
+                (string) (int) $row['positions'],
+                (string) (int) $row['users'],
+                $row['actual_date'] !== null ? (string) $row['actual_date'] : '',
+                ($row['active'] ?? 'N') === 'Y' ? 'активен' : 'скрыт',
+            ], $rows),
+        ];
+
+        $meta = [
+            'Складов: ' . count($rows),
+            'Сформировано: ' . date('d.m.Y H:i'),
+        ];
+
+        $result = TableExport::build('Склады ' . date('Y-m-d'), $format, [$section], $meta);
+
+        $this->audit->log($user, 'stocks.warehouses.export', 'stocks', null, [
+            'rows' => count($rows),
+            'format' => $format,
+        ], null);
+
+        return $result;
+    }
+
+    public function warehouseCandidates(array $user, array $capabilities, int $id, array $query): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        $warehouse = $this->stocks->findWarehouseById($id);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        $roles = array_values(array_filter(array_map('intval', $query['roles'] ?? []), static fn (int $level): bool => $level > 0));
+        $search = trim((string) ($query['q'] ?? ''));
+        $sort = (string) ($query['sort'] ?? 'name_asc');
+        $page = max(1, (int) ($query['page'] ?? 1));
+        $perPage = max(1, min(100, (int) ($query['per_page'] ?? 20)));
+
+        $stockSid = (string) $warehouse['SID'];
+
+        return [
+            'items' => array_map(static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'sid' => (string) $row['sid'],
+                'login' => (string) $row['login'],
+                'name' => (string) $row['name'],
+                'level' => (int) $row['level'],
+                'email' => (string) ($row['email'] ?? ''),
+                'has_access' => (int) ($row['has_access'] ?? 0) === 1,
+            ], $this->users->warehouseCandidates($stockSid, $roles, $search, $sort, $perPage, ($page - 1) * $perPage)),
+            'total' => $this->users->countWarehouseCandidates($roles, $search),
+        ];
+    }
+
+    public function warehouseAccess(array $user, array $capabilities, int $id): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        $warehouse = $this->stocks->findWarehouseById($id);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        return [
+            'users' => array_map(static fn (array $row): array => [
+                'id' => (int) $row['id'],
+                'user_sid' => (string) $row['user_sid'],
+                'full_name' => (string) ($row['full_name'] ?? ''),
+                'login' => (string) ($row['login'] ?? ''),
+                'level' => (int) ($row['level'] ?? 0),
+                'active' => ($row['active'] ?? 'N') === 'Y' && ($row['status'] ?? 'N') === 'Y',
+            ], $this->stocks->warehouseUsers((string) $warehouse['SID'])),
+        ];
+    }
+
+    public function addWarehouseUser(array $user, array $capabilities, int $id, array $input): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        $warehouse = $this->stocks->findWarehouseById($id);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        $userSid = trim((string) ($input['user_sid'] ?? ''));
+
+        if ($userSid === '') {
+            throw new HttpException(422, 'validation_error', 'Выберите пользователя');
+        }
+
+        $target = $this->users->findBySid($userSid);
+
+        if ($target === null) {
+            throw new HttpException(404, 'not_found', 'Пользователь не найден');
+        }
+
+        $stockSid = (string) $warehouse['SID'];
+
+        if (!$this->stocks->warehouseUserExists($stockSid, $userSid)) {
+            $this->stocks->addWarehouseUser($stockSid, $userSid, (string) ($target['FULL_NAME'] ?? $target['LOGIN'] ?? ''));
+            $this->audit->log($user, 'stocks.warehouse.user.add', 'stocks', $id, [
+                'user' => (string) ($target['LOGIN'] ?? ''),
+            ], null);
+        }
+
+        return $this->warehouseAccess($user, $capabilities, $id);
+    }
+
+    public function removeWarehouseUser(array $user, array $capabilities, int $id, string $userSid): array
+    {
+        $this->requireWarehouseAdmin($capabilities);
+
+        $warehouse = $this->stocks->findWarehouseById($id);
+
+        if ($warehouse === null) {
+            throw new HttpException(404, 'not_found', 'Склад не найден');
+        }
+
+        $this->stocks->removeWarehouseUser((string) $warehouse['SID'], $userSid);
+
+        $this->audit->log($user, 'stocks.warehouse.user.remove', 'stocks', $id, [
+            'user_sid' => $userSid,
+        ], null);
+
+        return $this->warehouseAccess($user, $capabilities, $id);
+    }
+
+    private function presentWarehouse(array $warehouse): array
+    {
+        preg_match_all('/\{(\d+)\}/', (string) ($warehouse['LEVEL'] ?? ''), $matches);
+
+        $responsible = null;
+        $responsibleSid = $warehouse['RESPONSIBLE_SID'] !== null ? (string) $warehouse['RESPONSIBLE_SID'] : '';
+
+        if ($responsibleSid !== '') {
+            $owner = $this->users->findBySid($responsibleSid);
+
+            if ($owner !== null) {
+                $responsible = [
+                    'sid' => $responsibleSid,
+                    'name' => (string) ($owner['FULL_NAME'] ?? $owner['LOGIN'] ?? ''),
+                    'login' => (string) ($owner['LOGIN'] ?? ''),
+                ];
+            }
+        }
+
+        return [
+            'id' => (int) $warehouse['ID'],
+            'sid' => (string) $warehouse['SID'],
+            'name' => (string) $warehouse['NAME'],
+            'name_1c' => (string) ($warehouse['NAME_1C'] ?? ''),
+            'address' => $warehouse['ADDRESS'] !== null ? (string) $warehouse['ADDRESS'] : null,
+            'contact_name' => $warehouse['CONTACT_NAME'] !== null ? (string) $warehouse['CONTACT_NAME'] : null,
+            'phone' => $warehouse['PHONE'] !== null ? (string) $warehouse['PHONE'] : null,
+            'email' => $warehouse['EMAIL'] !== null ? (string) $warehouse['EMAIL'] : null,
+            'note' => $warehouse['NOTE'] !== null ? (string) $warehouse['NOTE'] : null,
+            'type' => (string) ($warehouse['TYPE'] ?? 'main'),
+            'stock_num' => (int) ($warehouse['STOCK_NUM'] ?? 0),
+            'sort' => (int) ($warehouse['SORT'] ?? 0),
+            'is_default' => (int) ($warehouse['IS_DEFAULT'] ?? 0) === 1,
+            'allow_orders' => (int) ($warehouse['ALLOW_ORDERS'] ?? 1) === 1,
+            'in_reports' => (int) ($warehouse['IN_REPORTS'] ?? 1) === 1,
+            'responsible' => $responsible,
+            'active' => ($warehouse['ACTIVE'] ?? 'N') === 'Y',
+            'levels' => array_values(array_unique(array_map('intval', $matches[1] ?? []))),
+        ];
+    }
+
+    /**
+     * Единственный («виртуальный») склад в режиме без складов: создаётся при необходимости.
+     */
+    private function ensureSingleWarehouse(): array
+    {
+        $pdo = Database::pdo();
+        $name = $this->settings->singleWarehouseName();
+        $sid = self::SINGLE_WAREHOUSE_SID;
+        $existing = $this->stocks->findWarehouseBySid($sid);
+
+        if ($existing === null) {
+            $pdo->prepare(
+                "INSERT INTO stocks (NAME, NAME_1C, SID, SORT, LEVEL, ACTIVE, STATUS)
+                 VALUES (?, ?, ?, 0, ?, 'Y', 'Y')"
+            )->execute([$name, $sid, $sid, self::SINGLE_WAREHOUSE_LEVEL]);
+        } else {
+            $pdo->prepare('UPDATE stocks SET NAME = ?, ACTIVE = ?, STATUS = ?, LEVEL = ? WHERE SID = ?')
+                ->execute([$name, 'Y', 'Y', self::SINGLE_WAREHOUSE_LEVEL, $sid]);
+        }
+
+        return $this->stocks->findWarehouseBySid($sid) ?? [];
+    }
+
+    /**
+     * Схлопывает все склады в один: количество — сумма, цена по типу — максимум.
+     * Остальные склады удаляются. Перед этим — снимок остатков.
+     */
+    public function collapseWarehouses(array $user): void
+    {
+        $pdo = Database::pdo();
+        $name = $this->settings->singleWarehouseName();
+        $sid = self::SINGLE_WAREHOUSE_SID;
+
+        $levels = $this->stocks->mergedLevels();
+        $prices = $this->stocks->mergedPrices();
+
+        $this->stocks->snapshotLevels();
+
+        $pdo->beginTransaction();
+
+        try {
+            $pdo->exec('DELETE FROM stock_levels');
+            $pdo->exec('DELETE FROM nomenclature_prices');
+            $pdo->exec('DELETE FROM user_level_stock');
+            $pdo->exec('DELETE FROM stocks');
+
+            $pdo->prepare(
+                "INSERT INTO stocks (NAME, NAME_1C, SID, SORT, LEVEL, ACTIVE, STATUS)
+                 VALUES (?, ?, ?, 0, ?, 'Y', 'Y')"
+            )->execute([$name, $sid, $sid, self::SINGLE_WAREHOUSE_LEVEL]);
+
+            $insertLevel = $pdo->prepare(
+                'INSERT INTO stock_levels (LAST_STOCK_UPDATE_SID, ACTUAL_DATE, STOCK, STOCK_SID, NAME, NAME_SID, UNIT, QUANTITY)
+                 VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)'
+            );
+
+            foreach ($levels as $row) {
+                $insertLevel->execute([
+                    $row['actual_date'],
+                    $name,
+                    $sid,
+                    (string) $row['name'],
+                    (string) $row['name_sid'],
+                    $row['unit'] !== null ? (string) $row['unit'] : null,
+                    (float) $row['quantity'],
+                ]);
+            }
+
+            $insertPrice = $pdo->prepare(
+                'INSERT INTO nomenclature_prices (stock_sid, name_sid, price_type_id, price) VALUES (?, ?, ?, ?)'
+            );
+
+            foreach ($prices as $row) {
+                $insertPrice->execute([
+                    $sid,
+                    (string) $row['name_sid'],
+                    (int) $row['price_type_id'],
+                    (float) $row['price'],
+                ]);
+            }
+
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+            throw $exception;
+        }
+
+        $this->audit->log($user, 'stocks.warehouses.collapse', 'stocks', null, [
+            'name' => $name,
+            'levels' => count($levels),
+            'prices' => count($prices),
+        ], null);
+    }
+
+    /**
+     * В режиме без складов строки файла схлопываются по названию: количество — сумма,
+     * цена по каждому столбцу — максимум.
+     *
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array<string, mixed>>
+     */
+    private function aggregateRows(array $rows): array
+    {
+        $byItem = [];
+
+        foreach ($rows as $row) {
+            $key = (string) $row['item'];
+
+            if (!isset($byItem[$key])) {
+                $byItem[$key] = [
+                    'stock' => '',
+                    'item' => (string) $row['item'],
+                    'unit' => (string) $row['unit'],
+                    'quantity' => 0.0,
+                    'prices' => [],
+                ];
+            }
+
+            $byItem[$key]['quantity'] += (float) $row['quantity'];
+
+            if ($byItem[$key]['unit'] === '' && (string) $row['unit'] !== '') {
+                $byItem[$key]['unit'] = (string) $row['unit'];
+            }
+
+            foreach (($row['prices'] ?? []) as $source => $price) {
+                $current = $byItem[$key]['prices'][$source] ?? null;
+
+                if ($current === null || (float) $price > (float) $current) {
+                    $byItem[$key]['prices'][$source] = $price;
+                }
+            }
+        }
+
+        return array_values($byItem);
+    }
+
     public function import(array $user, array $capabilities, array $file, string $date, array $mapping = []): array
     {
         if (!in_array('stocks.import', $capabilities, true)) {
@@ -944,6 +1893,16 @@ final class StocksService
 
         if ($rows === []) {
             throw new HttpException(422, 'empty_file', 'В файле не найдено строк с остатками');
+        }
+
+        $warehousesEnabled = $this->settings->warehousesEnabled();
+
+        if (!$warehousesEnabled) {
+            $rows = $this->aggregateRows($rows);
+
+            foreach ($rows as $index => $row) {
+                $rows[$index]['stock'] = '__single__';
+            }
         }
 
         $pricesEnabled = $this->prices->enabled();
@@ -1025,10 +1984,15 @@ final class StocksService
                 $unit = $row['unit'];
                 $quantity = $row['quantity'];
                 if (!isset($warehouses[$stockName])) {
-                    $warehouseIsNew = !$this->stocks->warehouseExists($stockName);
-                    $warehouse = $this->stocks->upsertWarehouse($stockName);
+                    if (!$warehousesEnabled) {
+                        $warehouse = $this->ensureSingleWarehouse();
+                        $warehouseIsNew = false;
+                    } else {
+                        $warehouseIsNew = !$this->stocks->warehouseExists($stockName);
+                        $warehouse = $this->stocks->upsertWarehouse($stockName);
+                    }
 
-                    if ($warehouse === null) {
+                    if ($warehouse === null || $warehouse === []) {
                         $skipped++;
                         $errors[] = 'Не удалось создать склад: ' . $stockName;
                         continue;

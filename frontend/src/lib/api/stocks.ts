@@ -2,6 +2,8 @@ import { config } from '../config';
 import { auth } from '../stores/auth.svelte';
 import { apiRequest, apiUpload, downloadFromApi } from './client';
 import type {
+  ItemType,
+  NomenclatureItem,
   StockImportJob,
   StockItemPayload,
   StockLevel,
@@ -19,6 +21,7 @@ export interface StockFilters {
   group_id?: number;
   group_ids?: number[];
   no_group?: boolean;
+  active?: string;
 }
 
 function filterParams(filters: StockFilters): URLSearchParams {
@@ -34,6 +37,7 @@ function filterParams(filters: StockFilters): URLSearchParams {
   if (filters.group_id && filters.group_id > 0) params.set('group_id', String(filters.group_id));
   if (filters.group_ids && filters.group_ids.length > 0) params.set('group_ids', filters.group_ids.join(','));
   if (filters.no_group) params.set('no_group', '1');
+  if (filters.active && filters.active !== 'all') params.set('active', filters.active);
 
   return params;
 }
@@ -61,6 +65,7 @@ export function listLevels(
   page: number;
   per_page: number;
   can_edit: boolean;
+  can_deactivate: boolean;
   prices?: { enabled: boolean; type: { id: number; title: string } | null };
   groups?: { enabled: boolean };
   warehouse: { id: number; name: string };
@@ -82,10 +87,47 @@ export function getStockLevel(itemId: number): Promise<{
   item: StockLevel;
   can_edit: boolean;
   can_manage_photos: boolean;
+  can_deactivate: boolean;
+  can_delete: boolean;
+  deactivate_blocked: string | null;
+  delete_blocked: string | null;
   prices_enabled: boolean;
   groups_enabled: boolean;
+  item_types: ItemType[];
 }> {
   return apiRequest(`/stocks/levels/${itemId}`, { auth: true });
+}
+
+export function activateStockItem(itemId: number): Promise<{ active: boolean }> {
+  return apiRequest<{ active: boolean }>(`/stocks/levels/${itemId}/activate`, {
+    method: 'POST',
+    auth: true
+  });
+}
+
+export function deactivateStockItem(itemId: number): Promise<{ active: boolean }> {
+  return apiRequest<{ active: boolean }>(`/stocks/levels/${itemId}/deactivate`, {
+    method: 'POST',
+    auth: true
+  });
+}
+
+export function deleteStockItem(itemId: number): Promise<{ deleted: boolean }> {
+  return apiRequest<{ deleted: boolean }>(`/stocks/levels/${itemId}`, {
+    method: 'DELETE',
+    auth: true
+  });
+}
+
+export function listItemTypes(): Promise<{ items: ItemType[] }> {
+  return apiRequest<{ items: ItemType[] }>('/stocks/item-types', { auth: true });
+}
+
+export function searchNomenclature(query: string): Promise<{ items: NomenclatureItem[] }> {
+  return apiRequest<{ items: NomenclatureItem[] }>(
+    `/stocks/nomenclature?query=${encodeURIComponent(query)}`,
+    { auth: true }
+  );
 }
 
 export function renameWarehouse(
@@ -97,6 +139,166 @@ export function renameWarehouse(
     auth: true,
     body: { name }
   });
+}
+
+export type WarehouseType = 'main' | 'transit' | 'returns' | 'reserve' | 'defect';
+
+export interface WarehouseDirectoryItem {
+  id: number;
+  sid: string;
+  name: string;
+  address: string | null;
+  active: boolean;
+  type: WarehouseType;
+  is_default: boolean;
+  stock_num: number;
+  sort: number;
+  responsible_name: string | null;
+  positions: number;
+  positions_total: number;
+  users: number;
+  actual_date: string | null;
+}
+
+export interface WarehouseResponsible {
+  sid: string;
+  name: string;
+  login: string;
+}
+
+export interface WarehouseCardData {
+  id: number;
+  sid: string;
+  name: string;
+  name_1c: string;
+  address: string | null;
+  contact_name: string | null;
+  phone: string | null;
+  email: string | null;
+  note: string | null;
+  type: WarehouseType;
+  stock_num: number;
+  sort: number;
+  is_default: boolean;
+  allow_orders: boolean;
+  in_reports: boolean;
+  responsible: WarehouseResponsible | null;
+  active: boolean;
+  levels: number[];
+}
+
+export interface WarehousePayload {
+  name: string;
+  name_1c: string;
+  address: string;
+  contact_name: string;
+  phone: string;
+  email: string;
+  note: string;
+  type: WarehouseType;
+  stock_num: number;
+  sort: number;
+  levels: number[];
+  active: boolean;
+  is_default: boolean;
+  allow_orders: boolean;
+  in_reports: boolean;
+  responsible_sid: string;
+}
+
+export interface WarehouseUser {
+  id: number;
+  user_sid: string;
+  full_name: string;
+  login: string;
+  level: number;
+  active: boolean;
+}
+
+export function listWarehouseDirectory(): Promise<{ items: WarehouseDirectoryItem[] }> {
+  return apiRequest<{ items: WarehouseDirectoryItem[] }>('/stocks/warehouses?manage=1', { auth: true });
+}
+
+export function getWarehouse(id: number): Promise<{ warehouse: WarehouseCardData }> {
+  return apiRequest<{ warehouse: WarehouseCardData }>(`/stocks/warehouses/${id}`, { auth: true });
+}
+
+export function updateWarehouse(
+  id: number,
+  data: WarehousePayload
+): Promise<{ warehouse: WarehouseCardData }> {
+  return apiRequest<{ warehouse: WarehouseCardData }>(`/stocks/warehouses/${id}`, {
+    method: 'PATCH',
+    auth: true,
+    body: data
+  });
+}
+
+export function listWarehouseUsers(id: number): Promise<{ users: WarehouseUser[] }> {
+  return apiRequest<{ users: WarehouseUser[] }>(`/stocks/warehouses/${id}/access`, { auth: true });
+}
+
+export interface WarehouseCandidate {
+  id: number;
+  sid: string;
+  login: string;
+  name: string;
+  level: number;
+  email: string;
+  has_access: boolean;
+}
+
+export function listWarehouseCandidates(
+  id: number,
+  params: { q: string; roles: number[]; sort: string }
+): Promise<{ items: WarehouseCandidate[]; total: number }> {
+  const search = new URLSearchParams();
+  search.set('q', params.q);
+  search.set('roles', params.roles.join(','));
+  search.set('sort', params.sort);
+  search.set('per_page', '100');
+
+  return apiRequest<{ items: WarehouseCandidate[]; total: number }>(
+    `/stocks/warehouses/${id}/candidates?${search.toString()}`,
+    { auth: true }
+  );
+}
+
+export function addWarehouseUser(id: number, userSid: string): Promise<{ users: WarehouseUser[] }> {
+  return apiRequest<{ users: WarehouseUser[] }>(`/stocks/warehouses/${id}/access`, {
+    method: 'POST',
+    auth: true,
+    body: { user_sid: userSid }
+  });
+}
+
+export function removeWarehouseUser(id: number, userSid: string): Promise<{ users: WarehouseUser[] }> {
+  return apiRequest<{ users: WarehouseUser[] }>(
+    `/stocks/warehouses/${id}/access/${encodeURIComponent(userSid)}`,
+    { method: 'DELETE', auth: true }
+  );
+}
+
+export function createWarehouse(data: WarehousePayload): Promise<{ warehouse: WarehouseCardData }> {
+  return apiRequest<{ warehouse: WarehouseCardData }>('/stocks/warehouses', {
+    method: 'POST',
+    auth: true,
+    body: data
+  });
+}
+
+export function exportWarehouses(format: string): Promise<void> {
+  return downloadFromApi(
+    `/stocks/warehouses?export=${encodeURIComponent(format)}`,
+    `Склады ${new Date().toISOString().slice(0, 10)}.${format}`
+  );
+}
+
+export function emailWarehouses(format: string): Promise<{ sent: boolean; email: string }> {
+  return apiRequest<{ sent: boolean; email: string }>(
+    `/stocks/warehouses?export=${encodeURIComponent(format)}&email=1`,
+    { auth: true }
+  );
 }
 
 export function createStockItem(

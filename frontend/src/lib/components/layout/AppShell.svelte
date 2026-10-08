@@ -41,6 +41,10 @@
       router.navigate('/stocks');
     } else if (!appSettings.cartEnabled && path === '/cart') {
       router.navigate('/stocks');
+    } else if (!appSettings.warehousesEnabled && path.startsWith('/warehouses')) {
+      router.navigate('/stocks');
+    } else if (!appSettings.reportsEnabled && (path === '/reports' || path === '/my-reports')) {
+      router.navigate('/stocks');
     }
   });
 
@@ -50,15 +54,24 @@
 
   const showAdmin = $derived(auth.can('users.manage') || auth.can('audit.view'));
 
-  const showReports = $derived(auth.can('reports.view.all') || auth.can('reports.view.own'));
+  const canViewReports = $derived(auth.can('reports.view.all') || auth.can('reports.view.own'));
+
+  const showReports = $derived(appSettings.reportsEnabled && canViewReports);
+
+  const showMyReports = $derived(appSettings.reportsEnabled && !canViewReports);
 
   const showSubstitutions = $derived(auth.can('clients.assign'));
+
+  const showWarehouses = $derived(
+    appSettings.warehousesEnabled && (auth.can('stocks.import') || auth.can('stocks.edit'))
+  );
 
   const navCount = $derived(
     3 +
       (showReports ? 1 : 0) +
       (showClients ? 1 : 0) +
       (showSubstitutions ? 1 : 0) +
+      (showWarehouses ? 1 : 0) +
       (showAdmin ? 1 : 0) +
       (showSettings ? 1 : 0)
   );
@@ -102,6 +115,12 @@
           <Icon name="stocks" size={20} />
           <span class="nav-label">Номенклатура</span>
         </a>
+        {#if showWarehouses}
+          <a href="#/warehouses" class:active={path.startsWith('/warehouses')} title="Склады">
+            <Icon name="warehouse" size={20} />
+            <span class="nav-label">Склады</span>
+          </a>
+        {/if}
         {#if appSettings.requestsEnabled}
           <a href="#/requests" class:active={path.startsWith('/requests')} title="Заявки">
             <Icon name="requests" size={20} />
@@ -114,7 +133,7 @@
             <span class="nav-label">Отчёты</span>
           </a>
         {/if}
-        {#if !showReports}
+        {#if showMyReports}
           <a href="#/my-reports" class:active={path === '/my-reports'} title="Мои отчёты">
             <Icon name="my-reports" size={20} />
             <span class="nav-label">Мои отчёты</span>
@@ -246,7 +265,7 @@
         <span class="nav-label">Отчёты</span>
       </a>
     {/if}
-    {#if !showReports}
+    {#if showMyReports}
       <a href="#/my-reports" class:active={path === '/my-reports'} title="Мои отчёты">
         <Icon name="my-reports" size={20} />
         <span class="nav-label">Отчёты</span>

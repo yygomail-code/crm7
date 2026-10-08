@@ -18,11 +18,34 @@ final class StocksController extends ApiController
         parent::__construct();
     }
 
-    public function warehouses(Request $request): Response
+    public function warehouses(Request $request): Response|DownloadResponse
     {
         [$user, $capabilities] = $this->context($request);
 
+        $format = (string) $request->queryParam('export', '');
+
+        if ($format !== '') {
+            $result = $this->service->exportWarehouses($user, $capabilities, $format);
+
+            if ($request->queryParam('email', '') === '1') {
+                return Response::ok(ExportMailer::send($user, $result));
+            }
+
+            return new DownloadResponse($result['content'], $result['file_name'], $result['mime']);
+        }
+
+        if ($request->queryParam('manage', '') === '1') {
+            return Response::ok($this->service->warehouseDirectory($user, $capabilities));
+        }
+
         return Response::ok($this->service->warehouses($user, $capabilities));
+    }
+
+    public function createWarehouse(Request $request): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->createWarehouse($user, $capabilities, $request->bodyAll()));
     }
 
     public function searchCounts(Request $request): Response
@@ -59,6 +82,45 @@ final class StocksController extends ApiController
             $user,
             $capabilities,
             (int) ($params['itemId'] ?? 0)
+        ));
+    }
+
+    public function itemTypes(Request $request): Response
+    {
+        [, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->itemTypes($capabilities));
+    }
+
+    public function activate(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->setActive($user, $capabilities, (int) ($params['itemId'] ?? 0), true));
+    }
+
+    public function deactivate(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->setActive($user, $capabilities, (int) ($params['itemId'] ?? 0), false));
+    }
+
+    public function deleteItem(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->deleteItem($user, $capabilities, (int) ($params['itemId'] ?? 0)));
+    }
+
+    public function nomenclature(Request $request): Response
+    {
+        [, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->nomenclature(
+            $capabilities,
+            (string) $request->queryParam('query', ''),
+            (int) $request->queryParam('limit', '30')
         ));
     }
 
@@ -134,6 +196,81 @@ final class StocksController extends ApiController
             $capabilities,
             (int) ($params['id'] ?? 0),
             $request->bodyAll()
+        ));
+    }
+
+    public function warehouseDirectory(Request $request): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->warehouseDirectory($user, $capabilities));
+    }
+
+    public function warehouseCard(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->warehouseCard($user, $capabilities, (int) ($params['id'] ?? 0)));
+    }
+
+    public function updateWarehouse(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->updateWarehouse(
+            $user,
+            $capabilities,
+            (int) ($params['id'] ?? 0),
+            $request->bodyAll()
+        ));
+    }
+
+    public function warehouseAccess(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->warehouseAccess($user, $capabilities, (int) ($params['id'] ?? 0)));
+    }
+
+    public function warehouseCandidates(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        $roles = array_values(array_filter(
+            array_map('intval', explode(',', (string) $request->queryParam('roles', ''))),
+            static fn (int $level): bool => $level > 0
+        ));
+
+        return Response::ok($this->service->warehouseCandidates($user, $capabilities, (int) ($params['id'] ?? 0), [
+            'q' => $request->queryParam('q', ''),
+            'roles' => $roles,
+            'sort' => $request->queryParam('sort', 'name_asc'),
+            'page' => $request->queryParam('page', '1'),
+            'per_page' => $request->queryParam('per_page', '20'),
+        ]));
+    }
+
+    public function addWarehouseUser(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->addWarehouseUser(
+            $user,
+            $capabilities,
+            (int) ($params['id'] ?? 0),
+            $request->bodyAll()
+        ));
+    }
+
+    public function removeWarehouseUser(Request $request, array $params): Response
+    {
+        [$user, $capabilities] = $this->context($request);
+
+        return Response::ok($this->service->removeWarehouseUser(
+            $user,
+            $capabilities,
+            (int) ($params['id'] ?? 0),
+            (string) ($params['userSid'] ?? '')
         ));
     }
 
@@ -217,6 +354,7 @@ final class StocksController extends ApiController
             'show_zero' => (string) $request->queryParam('show_zero', ''),
             'group_ids' => $this->groupIds($request),
             'no_group' => (string) $request->queryParam('no_group', ''),
+            'active' => (string) $request->queryParam('active', ''),
         ];
     }
 

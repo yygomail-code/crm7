@@ -121,6 +121,14 @@ final class UserRepository
         return $stmt->fetch() ?: null;
     }
 
+    public function findBySid(string $sid): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM users WHERE SID = ? LIMIT 1');
+        $stmt->execute([$sid]);
+
+        return $stmt->fetch() ?: null;
+    }
+
     public function countActiveAdmins(): int
     {
         $stmt = Database::pdo()->query(
@@ -199,6 +207,92 @@ final class UserRepository
         );
 
         return $stmt->fetchAll() ?: [];
+    }
+
+    /**
+     * Пользователи выбранных ролей для выдачи доступа к складу.
+     * Поле has_access = уже есть доступ к складу.
+     *
+     * @param array<int, int> $levels
+     * @return array<int, array<string, mixed>>
+     */
+    public function warehouseCandidates(string $stockSid, array $levels, string $query, string $sort, int $limit, int $offset): array
+    {
+        [$where, $params] = $this->warehouseCandidatesWhere($levels, $query);
+
+        if ($where === null) {
+            return [];
+        }
+
+        $order = match ($sort) {
+            'name_desc' => 'u.FULL_NAME DESC',
+            'login_asc' => 'u.LOGIN ASC',
+            'login_desc' => 'u.LOGIN DESC',
+            'level_desc' => 'u.LEVEL DESC, u.FULL_NAME ASC',
+            'level_asc' => 'u.LEVEL ASC, u.FULL_NAME ASC',
+            'access_desc' => 'has_access DESC, u.FULL_NAME ASC',
+            'access_asc' => 'has_access ASC, u.FULL_NAME ASC',
+            default => 'u.FULL_NAME ASC',
+        };
+
+        $sql = "SELECT u.ID AS id, u.SID AS sid, u.LOGIN AS login, u.FULL_NAME AS name, u.LEVEL AS level, u.EMAIL AS email,
+                       EXISTS (SELECT 1 FROM user_level_stock uls WHERE uls.USER_SID = u.SID AND uls.STOCK_SID = ?) AS has_access
+                FROM users u
+                WHERE {$where}
+                ORDER BY {$order}
+                LIMIT " . max(1, $limit) . ' OFFSET ' . max(0, $offset);
+
+        $stmt = Database::pdo()->prepare($sql);
+        $stmt->execute(array_merge([$stockSid], $params));
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    /**
+     * @param array<int, int> $levels
+     */
+    public function countWarehouseCandidates(array $levels, string $query): int
+    {
+        [$where, $params] = $this->warehouseCandidatesWhere($levels, $query);
+
+        if ($where === null) {
+            return 0;
+        }
+
+        $stmt = Database::pdo()->prepare("SELECT COUNT(*) FROM users u WHERE {$where}");
+        $stmt->execute($params);
+
+        return (int) $stmt->fetchColumn();
+    }
+
+    /**
+     * @param array<int, int> $levels
+     * @return array{0: ?string, 1: array<int, mixed>}
+     */
+    private function warehouseCandidatesWhere(array $levels, string $query): array
+    {
+        $levels = array_values(array_unique(array_filter(
+            array_map('intval', $levels),
+            static fn (int $level): bool => $level > 0
+        )));
+
+        if ($levels === []) {
+            return [null, []];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($levels), '?'));
+        $params = $levels;
+        $where = "u.ACTIVE = 'Y' AND u.STATUS = 'Y' AND u.LEVEL IN ({$placeholders})";
+
+        if ($query !== '') {
+            $where .= ' AND (u.FULL_NAME LIKE ? OR u.LOGIN LIKE ? OR u.EMAIL LIKE ?)';
+            $like = '%' . $query . '%';
+            $params[] = $like;
+            $params[] = $like;
+            $params[] = $like;
+        }
+
+        return [$where, $params];
     }
 
     public function listClients(string $query, int $limit = 50, int $offset = 0, array $filters = []): array

@@ -33,6 +33,7 @@ final class UserController extends ApiController
 
         $items = array_map(static fn (array $row): array => [
             'id' => (int) $row['id'],
+            'sid' => (string) $row['sid'],
             'login' => (string) $row['login'],
             'name' => (string) $row['name'],
             'level' => (int) $row['level'],

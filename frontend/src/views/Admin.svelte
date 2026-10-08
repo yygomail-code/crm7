@@ -5,14 +5,21 @@
     blockUser,
     createUser,
     listAudit,
+    listItemTypes,
+    listModules,
     listRoles,
     listUsers,
     resetUserPassword,
+    saveItemTypes,
+    saveModules,
     saveRole,
     searchLog,
+    type ModuleItem,
+    type ModuleRole,
     unblockUser,
     updateUser
   } from '../lib/api/admin';
+  import type { ItemType } from '../lib/api/types';
   import { listLegalDocuments, saveLegalDocument, type LegalDocument } from '../lib/api/legal';
   import { listPriceTypes } from '../lib/api/prices';
   import {
@@ -57,7 +64,9 @@
   const userFilterDefaults = { level: 0, state: '' };
   const auditFilterDefaults = { from: '', to: '' };
 
-  let tab = $state<'users' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs' | 'groups'>('users');
+  let tab = $state<
+    'users' | 'modules' | 'types' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs' | 'groups'
+  >('users');
 
   let users = $state<AdminUser[]>([]);
   let usersTotal = $state(0);
@@ -120,6 +129,19 @@
   let message = $state('');
   let busy = $state(false);
 
+  let modules = $state<ModuleItem[]>([]);
+  let moduleRoles = $state<ModuleRole[]>([]);
+  let modulesLoading = $state(false);
+  let modulesBusy = $state(false);
+  let modulesNotice = $state('');
+  let modulesError = $state('');
+
+  let itemTypes = $state<ItemType[]>([]);
+  let typesLoading = $state(false);
+  let typesBusy = $state(false);
+  let typesNotice = $state('');
+  let typesError = $state('');
+
   const canManageUsers = $derived(auth.can('users.manage'));
   const canViewAudit = $derived(auth.can('audit.view'));
   const canManageRoles = $derived(auth.can('roles.manage'));
@@ -131,6 +153,9 @@
     } else if (canViewAudit) {
       tab = 'audit';
       void loadAudit();
+    } else if (auth.can('settings.manage')) {
+      tab = 'modules';
+      void loadModules();
     }
   });
 
@@ -435,9 +460,17 @@
   }
 
   async function openTab(
-    next: 'users' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs' | 'groups'
+    next: 'users' | 'modules' | 'types' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs' | 'groups'
   ): Promise<void> {
     tab = next;
+
+    if (next === 'modules' && modules.length === 0) {
+      await loadModules();
+    }
+
+    if (next === 'types' && itemTypes.length === 0) {
+      await loadItemTypes();
+    }
 
     if (next === 'docs' && docs.length === 0) {
       try {
@@ -475,6 +508,97 @@
       } catch {
         // некритично
       }
+    }
+  }
+
+  async function loadModules(): Promise<void> {
+    modulesLoading = true;
+    modulesError = '';
+    modulesNotice = '';
+
+    try {
+      const data = await listModules();
+      modules = data.modules;
+      moduleRoles = data.roles;
+    } catch (cause) {
+      modulesError = cause instanceof ApiError ? cause.message : 'Не удалось загрузить модули';
+    } finally {
+      modulesLoading = false;
+    }
+  }
+
+  function toggleModuleEnabled(code: string): void {
+    modules = modules.map((module) =>
+      module.code === code ? { ...module, enabled: !module.enabled } : module
+    );
+    modulesNotice = '';
+  }
+
+  function toggleModuleLevel(code: string, level: number): void {
+    modules = modules.map((module) =>
+      module.code === code
+        ? {
+            ...module,
+            levels: module.levels.includes(level)
+              ? module.levels.filter((item) => item !== level)
+              : [...module.levels, level]
+          }
+        : module
+    );
+    modulesNotice = '';
+  }
+
+  async function saveModulesDraft(): Promise<void> {
+    modulesBusy = true;
+    modulesError = '';
+    modulesNotice = '';
+
+    try {
+      const data = await saveModules(modules);
+      modules = data.modules;
+      moduleRoles = data.roles;
+      modulesNotice = 'Сохранено';
+      await appSettings.load();
+    } catch (cause) {
+      modulesError = cause instanceof ApiError ? cause.message : 'Не удалось сохранить модули';
+    } finally {
+      modulesBusy = false;
+    }
+  }
+
+  async function loadItemTypes(): Promise<void> {
+    typesLoading = true;
+    typesError = '';
+    typesNotice = '';
+
+    try {
+      itemTypes = (await listItemTypes()).types;
+    } catch (cause) {
+      typesError = cause instanceof ApiError ? cause.message : 'Не удалось загрузить типы позиций';
+    } finally {
+      typesLoading = false;
+    }
+  }
+
+  function toggleItemType(code: string): void {
+    itemTypes = itemTypes.map((type) =>
+      type.code === code ? { ...type, enabled: !type.enabled } : type
+    );
+    typesNotice = '';
+  }
+
+  async function saveTypesDraft(): Promise<void> {
+    typesBusy = true;
+    typesError = '';
+    typesNotice = '';
+
+    try {
+      itemTypes = (await saveItemTypes(itemTypes)).types;
+      typesNotice = 'Сохранено';
+    } catch (cause) {
+      typesError = cause instanceof ApiError ? cause.message : 'Не удалось сохранить типы позиций';
+    } finally {
+      typesBusy = false;
     }
   }
 
@@ -635,6 +759,10 @@
   </div>
 
   <div class="tabs tab-scroll">
+    {#if auth.can('settings.manage')}
+      <button type="button" class:active={tab === 'modules'} onclick={() => void openTab('modules')}>Модули</button>
+      <button type="button" class:active={tab === 'types'} onclick={() => void openTab('types')}>Типы позиций</button>
+    {/if}
     {#if canManageUsers}
       <button type="button" class:active={tab === 'users'} onclick={() => void openTab('users')}>Пользователи</button>
     {/if}
@@ -656,6 +784,101 @@
 
   {#if error}<div class="alert">{error}</div>{/if}
   {#if message}<div class="notice">{message}</div>{/if}
+
+  {#if tab === 'modules'}
+    {#if modulesError}<div class="alert">{modulesError}</div>{/if}
+    {#if modulesNotice}<div class="notice">{modulesNotice}</div>{/if}
+
+    {#if modulesLoading}
+      <div class="center"><Spinner /></div>
+    {:else}
+      <p class="hint">
+        Выключенный модуль скрывается в интерфейсе и блокируется на сервере. «Доступно ролям» выдаёт
+        роли права модуля; тонкая настройка прав — на вкладке «Роли».
+      </p>
+
+      <div class="modules">
+        {#each modules as module (module.code)}
+          <div class="module-card">
+            <div class="module-head">
+              <label class="checkbox module-toggle">
+                <input
+                  type="checkbox"
+                  checked={module.enabled}
+                  onchange={() => toggleModuleEnabled(module.code)}
+                />
+                <span class="module-title">{module.title}</span>
+              </label>
+              <code>{module.code}</code>
+            </div>
+
+            <p class="module-desc">{module.description}</p>
+
+            <div class="module-roles">
+              <span class="module-roles-label">Доступно ролям:</span>
+              {#each moduleRoles as role (role.level)}
+                <label class="checkbox" class:disabled={!canManageRoles}>
+                  <input
+                    type="checkbox"
+                    checked={module.levels.includes(role.level)}
+                    disabled={!canManageRoles}
+                    onchange={() => toggleModuleLevel(module.code, role.level)}
+                  />
+                  {role.title}
+                </label>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+
+      {#if !canManageRoles}
+        <p class="hint">Менять доступ ролей может только сисадмин.</p>
+      {/if}
+
+      <div class="actions">
+        <Button loading={modulesBusy} onclick={() => void saveModulesDraft()}>Сохранить</Button>
+      </div>
+    {/if}
+  {/if}
+
+  {#if tab === 'types'}
+    {#if typesError}<div class="alert">{typesError}</div>{/if}
+    {#if typesNotice}<div class="notice">{typesNotice}</div>{/if}
+
+    {#if typesLoading}
+      <div class="center"><Spinner /></div>
+    {:else}
+      <p class="hint">
+        Разрешённые типы появляются в карточке номенклатуры. Хотя бы один тип должен остаться
+        включённым.
+      </p>
+
+      <div class="modules">
+        {#each itemTypes as type (type.code)}
+          <div class="module-card">
+            <div class="module-head">
+              <label class="checkbox module-toggle">
+                <input
+                  type="checkbox"
+                  checked={type.enabled}
+                  onchange={() => toggleItemType(type.code)}
+                />
+                <span class="module-title">{type.title}</span>
+              </label>
+              <code>{type.code}</code>
+            </div>
+
+            <p class="module-desc">{type.description}</p>
+          </div>
+        {/each}
+      </div>
+
+      <div class="actions">
+        <Button loading={typesBusy} onclick={() => void saveTypesDraft()}>Сохранить</Button>
+      </div>
+    {/if}
+  {/if}
 
   {#if tab === 'users' && canManageUsers}
     <div class="filters">
@@ -1163,6 +1386,75 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+  }
+
+  .checkbox {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .checkbox.disabled {
+    color: var(--text-description);
+    cursor: not-allowed;
+  }
+
+  .modules {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .module-card {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    padding: var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+  }
+
+  .module-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .module-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .module-head code {
+    font-size: 12px;
+    color: var(--text-description);
+    background: var(--fill-tertiary);
+    border-radius: 4px;
+    padding: 1px 6px;
+  }
+
+  .module-desc {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-description);
+  }
+
+  .module-roles {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3);
+  }
+
+  .module-roles-label {
+    font-size: 13px;
+    color: var(--text-description);
   }
 
   h1 {

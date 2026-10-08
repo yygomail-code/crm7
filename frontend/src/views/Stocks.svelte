@@ -33,6 +33,7 @@
   import { addHistory } from '../lib/search-history';
   import { loadFilters, saveFilters } from '../lib/filters';
   import { router } from '../lib/router.svelte';
+  import { config } from '../lib/config';
   import { formatDate, formatDateTime, formatPrice, stockQuantityText } from '../lib/format';
 
   let warehouses = $state<StockWarehouse[]>([]);
@@ -42,9 +43,22 @@
   let detailOpen = $state(false);
   let detailTarget = $state<StockLevel | null>(null);
   let selectedIds = $state<number[]>([]);
-  let query = $state('');
-  let searchInput = $state('');
-  let page = $state(1);
+  const stockFilterDefaults = {
+    sort: 'name_asc',
+    group_ids: null as number[] | null,
+    group_no_group: true,
+    per_page: 20,
+    view: 'list',
+    photos: true,
+    query: '',
+    page: 1,
+    active: 'all'
+  };
+  const initialStockFilters = loadFilters('stocks', stockFilterDefaults);
+
+  let query = $state(String(initialStockFilters.query));
+  let searchInput = $state(String(initialStockFilters.query));
+  let page = $state<number>(typeof initialStockFilters.page === 'number' ? initialStockFilters.page : 1);
   let total = $state(0);
   let jumpPage = $state<number | null>(null);
   let loading = $state(true);
@@ -67,26 +81,32 @@
 
   let groups = $state<ItemGroup[]>([]);
 
-  const stockFilterDefaults = {
-    sort: 'name_asc',
-    group_ids: null as number[] | null,
-    group_no_group: true,
-    per_page: 20,
-    view: 'list',
-    photos: true
-  };
-  const sortFields = [
-    { field: 'name', label: 'Наименование' },
-    { field: 'qty', label: 'Остаток на складе' },
-    { field: 'warehouse', label: 'Склад' },
-    { field: 'price', label: 'Цена' }
-  ];
-  const initialStockFilters = loadFilters('stocks', stockFilterDefaults);
+  const warehousesEnabled = $derived(appSettings.warehousesEnabled);
+  const sortFields = $derived(
+    warehousesEnabled
+      ? [
+          { field: 'name', label: 'Наименование' },
+          { field: 'qty', label: 'Остаток на складе' },
+          { field: 'warehouse', label: 'Склад' },
+          { field: 'price', label: 'Цена' }
+        ]
+      : [
+          { field: 'name', label: 'Наименование' },
+          { field: 'qty', label: 'Остаток' },
+          { field: 'price', label: 'Цена' }
+        ]
+  );
   const groupsPreselected =
     Array.isArray(initialStockFilters.group_ids) && initialStockFilters.group_ids.length > 0;
   let stockSort = $state(initialStockFilters.sort);
   let stockGroups = $state<number[]>(parseGroups(initialStockFilters.group_ids));
   let stockNoGroup = $state<boolean>(initialStockFilters.group_no_group !== false);
+  let stockActive = $state<string>(
+    ['active', 'inactive'].includes(String(initialStockFilters.active))
+      ? String(initialStockFilters.active)
+      : 'all'
+  );
+  const canDeactivate = $derived(auth.can('stocks.deactivate'));
   let perPage = $state<number>(typeof initialStockFilters.per_page === 'number' ? initialStockFilters.per_page : 20);
   let viewMode = $state<'list' | 'tiles'>(initialStockFilters.view === 'tiles' ? 'tiles' : 'list');
   let showPhotos = $state<boolean>(initialStockFilters.photos !== false);
@@ -166,6 +186,10 @@
       show_zero: appSettings.allowZeroStock
     };
 
+    if (canDeactivate && stockActive !== 'all') {
+      result.active = stockActive;
+    }
+
     if (groupsEnabled && groupFilterActive) {
       result.group_ids = stockGroups;
       result.no_group = stockNoGroup;
@@ -205,6 +229,10 @@
 
   onMount(() => {
     void init();
+
+    const timer = setInterval(() => void loadLevels(true), config.listPollMs);
+
+    return () => clearInterval(timer);
   });
 
   async function init(): Promise<void> {
@@ -370,7 +398,10 @@
       group_no_group: stockNoGroup,
       per_page: perPage,
       view: viewMode,
-      photos: showPhotos
+      photos: showPhotos,
+      query,
+      page,
+      active: stockActive
     });
   }
 
@@ -393,6 +424,16 @@
   }
 
   function changeSort(): void {
+    saveStockFilters();
+    void applyFilters();
+  }
+
+  function setStatus(value: string): void {
+    if (stockActive === value) {
+      return;
+    }
+
+    stockActive = value;
     saveStockFilters();
     void applyFilters();
   }
@@ -453,24 +494,30 @@
     void setWarehouses(next);
   }
 
-  async function loadLevels(): Promise<void> {
+  async function loadLevels(silent = false): Promise<void> {
     if (selectedIds.length === 0) {
       levels = [];
       total = 0;
       return;
     }
 
-    loadingLevels = true;
-    error = '';
+    if (!silent) {
+      loadingLevels = true;
+      error = '';
+    }
 
     try {
       const data = await listLevels(selectedIds, filters, page, perPage);
       levels = data.items;
       total = data.total;
     } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить остатки';
+      if (!silent) {
+        error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить остатки';
+      }
     } finally {
-      loadingLevels = false;
+      if (!silent) {
+        loadingLevels = false;
+      }
     }
   }
 
@@ -482,6 +529,7 @@
     }
 
     await applyFilters();
+    saveStockFilters();
   }
 
   async function search(): Promise<void> {
@@ -543,6 +591,7 @@
     }
 
     page = next;
+    saveStockFilters();
     await loadLevels();
   }
 
@@ -726,15 +775,17 @@
             <Icon name="sort" size={16} />
         </button>
 
-        <button
-          type="button"
-          class="sort-button"
-          title="Склад"
-          aria-label="Выбрать склад"
-          onclick={openWarehouse}
-        >
-          <Icon name="stocks" size={16} />
-        </button>
+        {#if warehousesEnabled}
+          <button
+            type="button"
+            class="sort-button"
+            title="Склад"
+            aria-label="Выбрать склад"
+            onclick={openWarehouse}
+          >
+            <Icon name="stocks" size={16} />
+          </button>
+        {/if}
 
         {#if groupsEnabled}
           <button
@@ -924,6 +975,25 @@
         Можно задать несколько условий — они применяются сверху вниз. Нажмите стрелку,
         чтобы добавить условие, и повторно — чтобы убрать.
       </p>
+
+      {#if canDeactivate}
+        <div class="sort-status">
+          <span class="sort-status-label">Показывать:</span>
+          <div class="status-opts">
+            {#each [['all', 'Все'], ['active', 'Активные'], ['inactive', 'Неактивные']] as [value, label] (value)}
+              <button
+                type="button"
+                class="status-opt"
+                class:on={stockActive === value}
+                onclick={() => setStatus(value)}
+              >
+                {label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <div class="sort-list">
         {#each sortFields as item (item.field)}
           {#if item.field !== 'price' || pricesEnabled}
@@ -1099,7 +1169,7 @@
 
             {#if target.warehouse_name || (groupsEnabled && target.group_title)}
               <div class="meta">
-                {#if target.warehouse_name}<span class="wh">{target.warehouse_name}</span>{/if}
+                {#if warehousesEnabled && target.warehouse_name}<span class="wh">{target.warehouse_name}</span>{/if}
                 {#if groupsEnabled && target.group_title}<span class="group">{target.group_title}</span>{/if}
               </div>
             {/if}
@@ -1325,12 +1395,18 @@
       <div class="levels" class:tiles={viewMode === 'tiles'} style={listVars}>
         {#each levels as level (level.id)}
           {@const cartQty = inCart(level)}
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
             class="level"
             class:cart-over={cartQty > 0 && cartQty > level.quantity}
+            class:inactive={level.active === false}
+            onclick={() => openDetail(level)}
           >
             {#if showPhotos}
-              <div class="cell col-photo">
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div class="cell col-photo" onclick={(event) => event.stopPropagation()}>
                 <PhotoGallery
                   photos={level.photos ?? []}
                   variant={viewMode === 'tiles' ? 'tile' : 'list'}
@@ -1345,21 +1421,20 @@
                 class="name"
                 class:has-desc={level.description !== ''}
                 title="Подробнее о позиции"
-                onclick={() => openDetail(level)}
+                onclick={(event) => {
+                  event.stopPropagation();
+                  openDetail(level);
+                }}
               >
                 {level.name}
               </button>
 
-              {#if level.warehouse_name || (groupsEnabled && level.group_title)}
-                <button
-                  type="button"
-                  class="meta meta-btn"
-                  title="Подробнее о позиции"
-                  onclick={() => openDetail(level)}
-                >
-                  {#if level.warehouse_name}<span class="wh">{level.warehouse_name}</span>{/if}
+              {#if level.warehouse_name || (groupsEnabled && level.group_title) || level.active === false}
+                <div class="meta">
+                  {#if warehousesEnabled && level.warehouse_name}<span class="wh">{level.warehouse_name}</span>{/if}
                   {#if groupsEnabled && level.group_title}<span class="group">{level.group_title}</span>{/if}
-                </button>
+                  {#if level.active === false}<span class="inactive-tag">деактивирована</span>{/if}
+                </div>
               {/if}
             </div>
             <div class="level-bottom">
@@ -1386,8 +1461,10 @@
                 </div>
               {/if}
 
-              {#if canCreate}
-                <div class="stat cart-stat col-cart">
+              {#if canCreate && level.active !== false}
+                <!-- svelte-ignore a11y_click_events_have_key_events -->
+                <!-- svelte-ignore a11y_no_static_element_interactions -->
+                <div class="stat cart-stat col-cart" onclick={(event) => event.stopPropagation()}>
                   <span class="stat-label">В корзине</span>
                   {#if cartQty > 0}
                     <span class="add">
@@ -1534,7 +1611,7 @@
   .page {
     display: flex;
     flex-direction: column;
-    gap: var(--space-5);
+    gap: var(--space-4);
   }
 
   .head {
@@ -1732,6 +1809,48 @@
     margin: 0 0 var(--space-2);
     font-size: 13px;
     color: var(--text-description);
+  }
+
+  .sort-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-3);
+    padding-bottom: var(--space-3);
+    border-bottom: 1px solid var(--border-secondary);
+  }
+
+  .sort-status-label {
+    font-size: 14px;
+    color: var(--text-description);
+  }
+
+  .status-opts {
+    display: flex;
+    gap: var(--space-2);
+  }
+
+  .status-opt {
+    padding: 0 12px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  .status-opt:hover {
+    border-color: var(--primary-hover);
+    color: var(--primary-hover);
+  }
+
+  .status-opt.on {
+    border-color: var(--primary);
+    color: var(--primary);
+    font-weight: 500;
   }
 
   .sort-list {
@@ -2062,9 +2181,10 @@
     align-items: center;
     justify-content: space-between;
     gap: var(--space-3);
-    padding: 10px var(--space-4);
+    padding: 12px var(--space-4);
     border-bottom: 1px solid var(--border-secondary);
     font-size: 14px;
+    cursor: pointer;
     transition: background 0.12s ease;
   }
 
@@ -2083,6 +2203,10 @@
     justify-content: flex-end;
     gap: 6px var(--space-3);
     min-width: 0;
+  }
+
+  .cart-stat {
+    cursor: default;
   }
 
   .stat {
@@ -2303,7 +2427,7 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: var(--space-1) var(--space-3);
+    gap: 6px var(--space-3);
     margin-top: auto;
     padding: var(--space-3);
   }
@@ -2353,20 +2477,18 @@
     gap: var(--space-2);
   }
 
-  .meta-btn {
-    padding: 0;
-    border: none;
-    background: none;
-    font: inherit;
-    color: inherit;
-    text-align: left;
-    cursor: pointer;
+  .level.inactive {
+    background: var(--danger-bg);
   }
 
-  .meta-btn:hover .wh,
-  .meta-btn:hover .group {
-    color: var(--primary);
-    text-decoration: underline;
+  .inactive-tag {
+    padding: 0 7px;
+    border: 1px solid var(--danger);
+    border-radius: 4px;
+    background: var(--surface);
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--danger);
   }
 
   .name {
@@ -2380,7 +2502,7 @@
     overflow-wrap: anywhere;
   }
 
-  .name:hover {
+  .level:hover .name {
     color: var(--primary);
   }
 

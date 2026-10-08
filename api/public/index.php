@@ -11,6 +11,8 @@ use App\Controllers\AuthController;
 use App\Controllers\ClientController;
 use App\Controllers\HealthController;
 use App\Controllers\LegalController;
+use App\Controllers\ModuleController;
+use App\Controllers\ItemTypeController;
 use App\Controllers\ProfileController;
 use App\Controllers\NotificationController;
 use App\Controllers\ReportController;
@@ -29,6 +31,7 @@ use App\Http\Request;
 use App\Http\Response;
 use App\Http\Router;
 use App\Repositories\SettingsRepository;
+use App\Support\Modules;
 
 require __DIR__ . '/../src/autoload.php';
 
@@ -62,24 +65,11 @@ if ($basePath !== '' && str_starts_with($request->path, $basePath)) {
     $request = $request->withPath(substr($request->path, strlen($basePath)) ?: '/');
 }
 
-// Отключённые модули: заявки, замещения, назначение менеджера.
+// Отключённые модули: пути блокируются по реестру модулей (App\Support\Modules).
 $moduleSettings = new SettingsRepository();
-$moduleGuards = [];
-
-if (!$moduleSettings->requestsEnabled()) {
-    $moduleGuards[] = '#^/requests(/|$)#';
-    $moduleGuards[] = '#^/request-drafts(/|$)#';
-}
-
-if (!$moduleSettings->substitutionsEnabled()) {
-    $moduleGuards[] = '#^/substitutions(/|$)#';
-}
-
-if (!$moduleSettings->managerAssignEnabled()) {
-    $moduleGuards[] = '#^/clients/\d+/(claim|assign|transfer)$#';
-    $moduleGuards[] = '#^/client-transfers/#';
-    $moduleGuards[] = '#^/requests/\d+/(claim|assign)$#';
-}
+$moduleGuards = Modules::guards(
+    static fn (string $setting): bool => $moduleSettings->get($setting) !== '0'
+);
 
 foreach ($moduleGuards as $guard) {
     if (preg_match($guard, $request->path) === 1) {
@@ -100,6 +90,8 @@ $userFilters = new UserFiltersController();
 $attachments = new AttachmentController();
 $notifications = new NotificationController();
 $admin = new AdminController();
+$modules = new ModuleController();
+$itemTypes = new ItemTypeController();
 $reports = new ReportController();
 $myReports = new MyReportController();
 $reportSchedules = new ReportScheduleController();
@@ -179,6 +171,10 @@ $router->post('/admin/templates/{code}', [$admin, 'saveTemplate']);
 $router->get('/admin/queue', [$admin, 'queue']);
 $router->get('/admin/settings/system', [$admin, 'systemSettings']);
 $router->post('/admin/settings/system', [$admin, 'saveSystemSettings']);
+$router->get('/admin/modules', [$modules, 'index']);
+$router->post('/admin/modules', [$modules, 'save']);
+$router->get('/admin/item-types', [$itemTypes, 'index']);
+$router->post('/admin/item-types', [$itemTypes, 'save']);
 $router->get('/admin/price-types', [$admin, 'priceTypes']);
 $router->post('/admin/price-types', [$admin, 'createPriceType']);
 $router->patch('/admin/price-types/{id}', [$admin, 'updatePriceType']);
@@ -215,6 +211,8 @@ $router->post('/chat/threads/{id}/attachments', [$chat, 'uploadAttachment']);
 $router->get('/chat/attachments/{id}', [$chat, 'downloadAttachment']);
 
 $router->get('/stocks/warehouses', [$stocks, 'warehouses']);
+$router->get('/stocks/item-types', [$stocks, 'itemTypes']);
+$router->get('/stocks/nomenclature', [$stocks, 'nomenclature']);
 $router->get('/stocks/levels', [$stocks, 'levels']);
 $router->get('/stocks/levels/{itemId}', [$stocks, 'level']);
 $router->get('/stocks/search-counts', [$stocks, 'searchCounts']);
@@ -225,8 +223,18 @@ $router->post('/stocks/{id}/items', [$stocks, 'createItem']);
 $router->patch('/stocks/levels/{itemId}', [$stocks, 'updateItem']);
 $router->patch('/stocks/{id}', [$stocks, 'rename']);
 $router->post('/stocks/levels/{itemId}/photos', [$stocks, 'uploadPhoto']);
+$router->post('/stocks/levels/{itemId}/activate', [$stocks, 'activate']);
+$router->post('/stocks/levels/{itemId}/deactivate', [$stocks, 'deactivate']);
+$router->delete('/stocks/levels/{itemId}', [$stocks, 'deleteItem']);
 $router->delete('/stocks/photos/{id}', [$stocks, 'deletePhoto']);
 $router->get('/stocks/photos/{id}', [$stocks, 'photo']);
+$router->get('/stocks/warehouses/{id}', [$stocks, 'warehouseCard']);
+$router->post('/stocks/warehouses', [$stocks, 'createWarehouse']);
+$router->patch('/stocks/warehouses/{id}', [$stocks, 'updateWarehouse']);
+$router->get('/stocks/warehouses/{id}/access', [$stocks, 'warehouseAccess']);
+$router->get('/stocks/warehouses/{id}/candidates', [$stocks, 'warehouseCandidates']);
+$router->post('/stocks/warehouses/{id}/access', [$stocks, 'addWarehouseUser']);
+$router->delete('/stocks/warehouses/{id}/access/{userSid}', [$stocks, 'removeWarehouseUser']);
 
 $router->get('/admin/legal', [$legal, 'index']);
 $router->post('/admin/legal/{code}', [$legal, 'save']);

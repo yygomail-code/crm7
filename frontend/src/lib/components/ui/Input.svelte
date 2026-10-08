@@ -9,6 +9,7 @@
     error?: string;
     autocomplete?: FullAutoFill;
     name?: string;
+    disabled?: boolean;
   }
 
   let {
@@ -18,7 +19,8 @@
     placeholder = '',
     error = '',
     autocomplete,
-    name = ''
+    name = '',
+    disabled = false
   }: Props = $props();
 </script>
 
@@ -26,7 +28,7 @@
   {#if label}
     <span class="label">{label}</span>
   {/if}
-  <input {type} bind:value {placeholder} {autocomplete} {name} class:invalid={Boolean(error)} />
+  <input {type} bind:value {placeholder} {autocomplete} {name} {disabled} class:invalid={Boolean(error)} />
   {#if error}
     <span class="error">{error}</span>
   {/if}
@@ -56,11 +58,17 @@
 
   input:focus {
     border-color: var(--primary);
-    box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
+    box-shadow: 0 0 0 2px var(--focus-ring);
   }
 
   input.invalid {
     border-color: var(--danger);
+  }
+
+  input:disabled {
+    background: var(--fill-tertiary);
+    color: var(--text-description);
+    cursor: not-allowed;
   }
 
   .error {

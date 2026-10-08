@@ -17,5 +17,6 @@ export const config = {
   apiV2Base: runtime.apiV2Base ?? import.meta.env.VITE_API_V2_BASE ?? './api/v2',
   appName: runtime.appName ?? 'CRM',
   chatPollMs: 7000,
-  notificationsPollMs: 15000
+  notificationsPollMs: 15000,
+  listPollMs: 30000
 } as const;

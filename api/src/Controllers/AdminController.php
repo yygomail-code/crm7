@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Controllers;
 
 use App\Core\DatabaseSettings;
+use App\Core\Logger;
 use App\Groups\ItemGroupService;
 use App\Http\HttpException;
 use App\Http\Request;
@@ -13,6 +14,8 @@ use App\Mail\MailService;
 use App\Prices\PriceService;
 use App\Repositories\SearchLogRepository;
 use App\Repositories\SettingsRepository;
+use App\Stocks\StocksService;
+use Throwable;
 
 final class AdminController extends ApiController
 {
@@ -21,7 +24,8 @@ final class AdminController extends ApiController
         private readonly SettingsRepository $settings = new SettingsRepository(),
         private readonly PriceService $prices = new PriceService(),
         private readonly ItemGroupService $groups = new ItemGroupService(),
-        private readonly SearchLogRepository $searches = new SearchLogRepository()
+        private readonly SearchLogRepository $searches = new SearchLogRepository(),
+        private readonly StocksService $stocks = new StocksService()
     ) {
         parent::__construct();
     }
@@ -35,7 +39,8 @@ final class AdminController extends ApiController
 
     public function saveSystemSettings(Request $request): Response
     {
-        $this->requireSettings($request);
+        $user = $this->requireSettings($request);
+        $wasWarehousesEnabled = $this->settings->warehousesEnabled();
 
         $reaction = max(1, min(168, (int) $request->input('sla_reaction_hours', 2)));
         $resolution = max(1, min(720, (int) $request->input('sla_resolution_hours', 24)));
@@ -50,6 +55,9 @@ final class AdminController extends ApiController
         $cartEnabled = (bool) $request->input('cart_enabled', true);
         $substitutionsEnabled = (bool) $request->input('substitutions_enabled', true);
         $managerAssignEnabled = (bool) $request->input('manager_assign_enabled', true);
+        $warehousesEnabled = (bool) $request->input('warehouses_enabled', true);
+        $reportsEnabled = (bool) $request->input('reports_enabled', true);
+        $singleName = mb_substr(trim((string) $request->input('single_name', '')), 0, 255);
         $appTitle = mb_substr(trim((string) $request->input('app_title', '')), 0, 60);
         $clientLabel = mb_substr(trim((string) $request->input('client_label', '')), 0, 40);
         $photoRatio = (string) $request->input('photo_ratio', 'square');
@@ -73,6 +81,9 @@ final class AdminController extends ApiController
             'module.cart' => $cartEnabled ? '1' : '0',
             'module.substitutions' => $substitutionsEnabled ? '1' : '0',
             'module.manager_assign' => $managerAssignEnabled ? '1' : '0',
+            'module.warehouses' => $warehousesEnabled ? '1' : '0',
+            'module.reports' => $reportsEnabled ? '1' : '0',
+            'stocks.single_name' => $singleName !== '' ? $singleName : 'Основной склад',
             'branding.title' => $appTitle,
             'branding.client_label' => $clientLabel,
             'stocks.photo_ratio' => $photoRatio,
@@ -81,6 +92,17 @@ final class AdminController extends ApiController
             'stocks.photo_size_card' => (string) $photoSizeCard,
             'stocks.photo_size_max' => (string) $photoSizeMax,
         ]);
+
+        if ($wasWarehousesEnabled && !$warehousesEnabled) {
+            try {
+                $this->stocks->collapseWarehouses($user);
+            } catch (Throwable $exception) {
+                $this->settings->many(['module.warehouses' => '1']);
+                Logger::error('stocks.collapse failed', ['error' => $exception->getMessage()]);
+
+                throw new HttpException(500, 'collapse_failed', 'Не удалось объединить склады. Подробности — в журнале.');
+            }
+        }
 
         return Response::ok($this->systemSettingsPayload());
     }
@@ -104,6 +126,9 @@ final class AdminController extends ApiController
             'cart_enabled' => $this->settings->cartEnabled(),
             'substitutions_enabled' => $this->settings->substitutionsEnabled(),
             'manager_assign_enabled' => $this->settings->managerAssignEnabled(),
+            'warehouses_enabled' => $this->settings->warehousesEnabled(),
+            'reports_enabled' => $this->settings->reportsEnabled(),
+            'single_name' => $this->settings->singleWarehouseName(),
             'app_title' => $this->settings->appTitle(),
             'client_label' => $this->settings->clientLabel(),
             'photo_ratio' => $this->settings->photoRatio(),

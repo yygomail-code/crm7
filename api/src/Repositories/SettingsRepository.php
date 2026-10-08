@@ -88,6 +88,23 @@ final class SettingsRepository
         return $this->get('module.manager_assign') !== '0';
     }
 
+    public function warehousesEnabled(): bool
+    {
+        return $this->get('module.warehouses') !== '0';
+    }
+
+    public function reportsEnabled(): bool
+    {
+        return $this->get('module.reports') !== '0';
+    }
+
+    public function singleWarehouseName(): string
+    {
+        $name = trim((string) $this->get('stocks.single_name'));
+
+        return $name !== '' ? $name : 'Основной склад';
+    }
+
     public function appTitle(): string
     {
         $title = trim((string) $this->get('branding.title'));

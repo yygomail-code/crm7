@@ -74,6 +74,9 @@
   let cartEnabled = $state(true);
   let substitutionsEnabled = $state(true);
   let managerAssignEnabled = $state(true);
+  let warehousesEnabled = $state(true);
+  let reportsEnabled = $state(true);
+  let singleName = $state('Основной склад');
   let appTitle = $state('CRM7');
   let clientLabel = $state('Клиент');
   let photoRatio = $state('square');
@@ -130,6 +133,9 @@
       cartEnabled = system.cart_enabled;
       substitutionsEnabled = system.substitutions_enabled;
       managerAssignEnabled = system.manager_assign_enabled;
+      warehousesEnabled = system.warehouses_enabled;
+      reportsEnabled = system.reports_enabled;
+      singleName = system.single_name || 'Основной склад';
       appTitle = system.app_title;
       clientLabel = system.client_label;
       photoRatio = system.photo_ratio || 'square';
@@ -202,6 +208,9 @@ async function saveSystem(): Promise<void> {
       cart_enabled: cartEnabled,
       substitutions_enabled: substitutionsEnabled,
       manager_assign_enabled: managerAssignEnabled,
+      warehouses_enabled: warehousesEnabled,
+      reports_enabled: reportsEnabled,
+      single_name: singleName,
       app_title: appTitle,
       client_label: clientLabel,
       photo_ratio: photoRatio,
@@ -223,6 +232,8 @@ async function saveSystem(): Promise<void> {
     cartEnabled = system.cart_enabled;
     substitutionsEnabled = system.substitutions_enabled;
     managerAssignEnabled = system.manager_assign_enabled;
+    warehousesEnabled = system.warehouses_enabled;
+    singleName = system.single_name || 'Основной склад';
     appTitle = system.app_title;
     clientLabel = system.client_label;
     photoRatio = system.photo_ratio || 'square';
@@ -242,6 +253,8 @@ async function saveSystem(): Promise<void> {
       system.cart_enabled,
       system.substitutions_enabled,
       system.manager_assign_enabled,
+      system.warehouses_enabled,
+      system.single_name,
       system.app_title,
       system.client_label,
       system.photo_ratio,
@@ -682,6 +695,28 @@ async function saveSettings(): Promise<void> {
       <label class="checkbox">
         <input type="checkbox" bind:checked={managerAssignEnabled} />
         Назначение менеджера клиенту
+      </label>
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={warehousesEnabled} />
+        Модуль «Склады» (несколько складов, страница складов)
+      </label>
+
+      {#if !warehousesEnabled}
+        <Input
+          label="Название единственного склада (режим без складов)"
+          bind:value={singleName}
+          placeholder="Основной склад"
+        />
+        <p class="hint">
+          Отключение модуля «Склады» объединяет остатки в один склад: количество — сумма по складам,
+          цена по типу — максимум; остальные склады удаляются. Действие необратимо.
+        </p>
+      {/if}
+
+      <label class="checkbox">
+        <input type="checkbox" bind:checked={reportsEnabled} />
+        Модуль «Отчёты» (страница отчётов и выгрузки)
       </label>
 
       <p class="hint">

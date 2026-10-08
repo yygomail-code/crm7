@@ -18,6 +18,7 @@ use App\Repositories\RequestHistoryRepository;
 use App\Repositories\RequestRepository;
 use App\Repositories\RequestStatusRepository;
 use App\Repositories\SettingsRepository;
+use App\Repositories\StocksRepository;
 use App\Repositories\SubstitutionRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\ViewLogRepository;
@@ -48,7 +49,8 @@ final class RequestService
         private readonly ViewLogRepository $views = new ViewLogRepository(),
         private readonly ChatService $chat = new ChatService(),
         private readonly StockReservationService $reservations = new StockReservationService(),
-        private readonly PriceService $prices = new PriceService()
+        private readonly PriceService $prices = new PriceService(),
+        private readonly StocksRepository $stocks = new StocksRepository()
     ) {
     }
 
@@ -88,7 +90,22 @@ final class RequestService
 
     private function normalizeItems(mixed $raw): array
     {
-        return RequestItems::normalize($raw);
+        $items = RequestItems::normalize($raw);
+
+        if ($items === []) {
+            return $items;
+        }
+
+        $levelIds = array_map(
+            static fn (array $item): int => (int) ($item['stock_level_id'] ?? 0),
+            $items
+        );
+
+        if ($this->stocks->inactiveLevelIds($levelIds) !== []) {
+            throw new HttpException(422, 'item_inactive', 'Позиция деактивирована и недоступна для заявок');
+        }
+
+        return $items;
     }
 
     private function itemsText(array $items): string

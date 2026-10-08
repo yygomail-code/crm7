@@ -6,6 +6,8 @@
   --border: #d9d9d9;
   --border-secondary: #f0f0f0;
   --fill-tertiary: rgba(0, 0, 0, 0.02);
+  --fill-hover: rgba(0, 0, 0, 0.06);
+  --focus-ring: rgba(5, 145, 255, 0.1);
   --text-description: rgba(0, 0, 0, 0.45);
   --primary: #1677ff;
   --primary-hover: #4096ff;

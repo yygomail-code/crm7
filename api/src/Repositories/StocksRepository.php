@@ -76,7 +76,7 @@ final class StocksRepository
         $stmt = Database::pdo()->prepare(
             'SELECT l.ID AS id, l.NAME AS name, l.NAME_SID AS name_sid, l.UNIT AS unit, l.QUANTITY AS quantity,
                     l.ACTUAL_DATE AS actual_date, l.STOCK_SID AS stock_sid, s.NAME AS stock_name,
-                    n.DESCRIPTION AS description,
+                    n.DESCRIPTION AS description, n.ACTIVE AS active,
                     n.group_id AS group_id, g.TITLE AS group_title
              FROM stock_levels l
              LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
@@ -221,6 +221,14 @@ final class StocksRepository
             $sql .= ' AND l.QUANTITY > 0';
         }
 
+        $active = (string) ($filters['active'] ?? '');
+
+        if ($active === 'active') {
+            $sql .= " AND l.NAME_SID IN (SELECT SID FROM nomenclature WHERE ACTIVE = 'Y')";
+        } elseif ($active === 'inactive') {
+            $sql .= " AND l.NAME_SID IN (SELECT SID FROM nomenclature WHERE ACTIVE = 'N')";
+        }
+
         return $sql;
     }
 
@@ -318,6 +326,149 @@ final class StocksRepository
         ], $rows);
     }
 
+    /**
+     * Все склады для страницы управления (включая неактивные).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function warehousesAdmin(): array
+    {
+        return Database::pdo()->query(
+            "SELECT s.ID AS id, s.SID AS sid, s.NAME AS name, s.NAME_1C AS name_1c, s.ADDRESS AS address,
+                    s.CONTACT_NAME AS contact_name, s.PHONE AS phone, s.EMAIL AS email, s.NOTE AS note,
+                    s.TYPE AS type, s.IS_DEFAULT AS is_default, s.ALLOW_ORDERS AS allow_orders,
+                    s.IN_REPORTS AS in_reports, s.STOCK_NUM AS stock_num, s.SORT AS sort, s.LEVEL AS level,
+                    s.RESPONSIBLE_SID AS responsible_sid, u.FULL_NAME AS responsible_name,
+                    s.ACTIVE AS active,
+                    (SELECT COUNT(*) FROM stock_levels l WHERE l.STOCK_SID = s.SID AND l.QUANTITY > 0) AS positions,
+                    (SELECT COUNT(*) FROM stock_levels l WHERE l.STOCK_SID = s.SID) AS positions_total,
+                    (SELECT COUNT(*) FROM user_level_stock uls WHERE uls.STOCK_SID = s.SID AND uls.ACTIVE = 'Y' AND uls.STATUS = 'Y') AS users,
+                    (SELECT MAX(l.ACTUAL_DATE) FROM stock_levels l WHERE l.STOCK_SID = s.SID) AS actual_date
+             FROM stocks s
+             LEFT JOIN users u ON u.SID = s.RESPONSIBLE_SID
+             ORDER BY s.ACTIVE DESC, s.IS_DEFAULT DESC, s.SORT ASC, s.NAME ASC"
+        )->fetchAll() ?: [];
+    }
+
+    public function updateWarehouse(string $sid, array $fields): void
+    {
+        $pdo = Database::pdo();
+
+        $pdo->prepare(
+            'UPDATE stocks SET NAME = ?, NAME_1C = ?, ADDRESS = ?, CONTACT_NAME = ?, PHONE = ?, EMAIL = ?,
+                    `NOTE` = ?, `TYPE` = ?, STOCK_NUM = ?, SORT = ?, LEVEL = ?, ACTIVE = ?,
+                    IS_DEFAULT = ?, ALLOW_ORDERS = ?, IN_REPORTS = ?, RESPONSIBLE_SID = ?, LAST_ACTIVITY_DATE = NOW()
+             WHERE SID = ?'
+        )->execute([
+            $fields['name'],
+            $fields['name_1c'],
+            $fields['address'],
+            $fields['contact_name'],
+            $fields['phone'],
+            $fields['email'],
+            $fields['note'],
+            $fields['type'],
+            $fields['stock_num'],
+            $fields['sort'],
+            $fields['level'],
+            $fields['active'] ? 'Y' : 'N',
+            $fields['is_default'] ? 1 : 0,
+            $fields['allow_orders'] ? 1 : 0,
+            $fields['in_reports'] ? 1 : 0,
+            $fields['responsible_sid'],
+            $sid,
+        ]);
+
+        $pdo->prepare('UPDATE stock_levels SET STOCK = ? WHERE STOCK_SID = ?')->execute([$fields['name'], $sid]);
+    }
+
+    public function createWarehouse(array $fields): ?array
+    {
+        $pdo = Database::pdo();
+
+        $pdo->prepare(
+            "INSERT INTO stocks (NAME, NAME_1C, ADDRESS, CONTACT_NAME, PHONE, EMAIL, `NOTE`, `TYPE`,
+                                 STOCK_NUM, SORT, LEVEL, ACTIVE, STATUS, IS_DEFAULT, ALLOW_ORDERS, IN_REPORTS, RESPONSIBLE_SID)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Y', ?, ?, ?, ?)"
+        )->execute([
+            $fields['name'],
+            $fields['name_1c'],
+            $fields['address'],
+            $fields['contact_name'],
+            $fields['phone'],
+            $fields['email'],
+            $fields['note'],
+            $fields['type'],
+            $fields['stock_num'],
+            $fields['sort'],
+            $fields['level'],
+            $fields['active'] ? 'Y' : 'N',
+            $fields['is_default'] ? 1 : 0,
+            $fields['allow_orders'] ? 1 : 0,
+            $fields['in_reports'] ? 1 : 0,
+            $fields['responsible_sid'],
+        ]);
+
+        return $this->findWarehouseById((int) $pdo->lastInsertId());
+    }
+
+    public function warehouseName1cTaken(string $name1c, ?string $sid): bool
+    {
+        $sql = 'SELECT ID FROM stocks WHERE NAME_1C = ?' . ($sid !== null ? ' AND SID <> ?' : '') . ' LIMIT 1';
+        $stmt = Database::pdo()->prepare($sql);
+        $stmt->execute($sid !== null ? [$name1c, $sid] : [$name1c]);
+
+        return $stmt->fetch() !== false;
+    }
+
+    public function clearDefaultWarehouse(string $exceptSid): void
+    {
+        Database::pdo()->prepare('UPDATE stocks SET IS_DEFAULT = 0 WHERE IS_DEFAULT = 1 AND SID <> ?')
+            ->execute([$exceptSid]);
+    }
+
+    /**
+     * Пользователи, которым выдан доступ к складу.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function warehouseUsers(string $stockSid): array
+    {
+        $stmt = Database::pdo()->prepare(
+            "SELECT uls.ID AS id, uls.USER_SID AS user_sid, uls.FULL_NAME AS full_name,
+                    uls.STATUS AS status, uls.ACTIVE AS active,
+                    u.LOGIN AS login, u.LEVEL AS level, u.ACTIVE AS user_active
+             FROM user_level_stock uls
+             LEFT JOIN users u ON u.SID = uls.USER_SID
+             WHERE uls.STOCK_SID = ?
+             ORDER BY uls.FULL_NAME ASC, uls.ID ASC"
+        );
+        $stmt->execute([$stockSid]);
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    public function warehouseUserExists(string $stockSid, string $userSid): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT 1 FROM user_level_stock WHERE STOCK_SID = ? AND USER_SID = ? LIMIT 1');
+        $stmt->execute([$stockSid, $userSid]);
+
+        return $stmt->fetch() !== false;
+    }
+
+    public function addWarehouseUser(string $stockSid, string $userSid, string $fullName): void
+    {
+        Database::pdo()->prepare(
+            "INSERT INTO user_level_stock (FULL_NAME, USER_SID, STOCK_SID, STATUS, ACTIVE) VALUES (?, ?, ?, 'Y', 'Y')"
+        )->execute([$fullName, $userSid, $stockSid]);
+    }
+
+    public function removeWarehouseUser(string $stockSid, string $userSid): void
+    {
+        Database::pdo()->prepare('DELETE FROM user_level_stock WHERE STOCK_SID = ? AND USER_SID = ?')
+            ->execute([$stockSid, $userSid]);
+    }
+
     public function findWarehouseById(int $id): ?array
     {
         $stmt = Database::pdo()->prepare('SELECT * FROM stocks WHERE ID = ? LIMIT 1');
@@ -387,7 +538,7 @@ final class StocksRepository
         $stmt = Database::pdo()->prepare(
             'SELECT l.ID AS id, l.STOCK_SID AS stock_sid, l.NAME AS name, l.NAME_SID AS name_sid, l.UNIT AS unit,
                     l.QUANTITY AS quantity, l.ACTUAL_DATE AS actual_date, n.DESCRIPTION AS description,
-                    n.group_id AS group_id
+                    n.ARTICLE AS article, n.TYPE AS type, n.ACTIVE AS active, n.group_id AS group_id
              FROM stock_levels l
              LEFT JOIN nomenclature n ON n.SID = l.NAME_SID
              WHERE l.ID = ? LIMIT 1'
@@ -395,6 +546,157 @@ final class StocksRepository
         $stmt->execute([$id]);
 
         return $stmt->fetch() ?: null;
+    }
+
+    public function setNomenclatureType(string $sid, string $type): void
+    {
+        Database::pdo()->prepare('UPDATE nomenclature SET TYPE = ? WHERE SID = ?')
+            ->execute([$type, $sid]);
+    }
+
+    public function setNomenclatureActive(string $sid, bool $active): void
+    {
+        Database::pdo()->prepare('UPDATE nomenclature SET ACTIVE = ? WHERE SID = ?')
+            ->execute([$active ? 'Y' : 'N', $sid]);
+    }
+
+    /**
+     * Использование позиции: в составе наборов и в заявках (продажах).
+     *
+     * @return array{in_sets: int, in_requests: int}
+     */
+    public function positionUsage(string $nameSid, string $name): array
+    {
+        $pdo = Database::pdo();
+
+        $sets = $pdo->prepare('SELECT COUNT(*) FROM nomenclature_composition WHERE ITEM_SID = ?');
+        $sets->execute([$nameSid]);
+
+        $requests = $pdo->prepare(
+            'SELECT COUNT(*) FROM request_items
+             WHERE name = ?
+                OR stock_level_id IN (SELECT ID FROM stock_levels WHERE NAME_SID = ?)'
+        );
+        $requests->execute([$name, $nameSid]);
+
+        return [
+            'in_sets' => (int) $sets->fetchColumn(),
+            'in_requests' => (int) $requests->fetchColumn(),
+        ];
+    }
+
+    public function deletePosition(string $nameSid): void
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $pdo->prepare('DELETE FROM nomenclature_composition WHERE SET_SID = ? OR ITEM_SID = ?')
+                ->execute([$nameSid, $nameSid]);
+            $pdo->prepare('DELETE FROM nomenclature_prices WHERE name_sid = ?')->execute([$nameSid]);
+            $pdo->prepare('DELETE FROM stock_levels WHERE NAME_SID = ?')->execute([$nameSid]);
+            $pdo->prepare('DELETE FROM nomenclature WHERE SID = ?')->execute([$nameSid]);
+            $pdo->commit();
+        } catch (\Throwable $error) {
+            $pdo->rollBack();
+
+            throw $error;
+        }
+    }
+
+    /**
+     * Из переданных id уровней возвращает те, что принадлежат деактивированным позициям.
+     *
+     * @param  array<int, int>  $ids
+     * @return array<int, int>
+     */
+    public function inactiveLevelIds(array $ids): array
+    {
+        $ids = array_values(array_unique(array_filter(
+            array_map('intval', $ids),
+            static fn (int $id): bool => $id > 0
+        )));
+
+        if ($ids === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($ids), '?'));
+        $stmt = Database::pdo()->prepare(
+            "SELECT l.ID AS id FROM stock_levels l
+             JOIN nomenclature n ON n.SID = l.NAME_SID
+             WHERE l.ID IN ($placeholders) AND n.ACTIVE = 'N'"
+        );
+        $stmt->execute($ids);
+
+        return array_map('intval', array_column($stmt->fetchAll(), 'id'));
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function compositionFor(string $setSid): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT c.ITEM_SID AS item_sid, c.QUANTITY AS quantity, n.NAME AS name, n.UNIT AS unit,
+                    n.TYPE AS type, n.ARTICLE AS article
+             FROM nomenclature_composition c
+             JOIN nomenclature n ON n.SID = c.ITEM_SID
+             WHERE c.SET_SID = ?
+             ORDER BY c.SORT ASC, c.ID ASC'
+        );
+        $stmt->execute([$setSid]);
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    /**
+     * @param  array<int, array{item_sid: string, quantity: float}>  $items
+     */
+    public function replaceComposition(string $setSid, array $items): void
+    {
+        $pdo = Database::pdo();
+        $pdo->prepare('DELETE FROM nomenclature_composition WHERE SET_SID = ?')->execute([$setSid]);
+
+        if ($items === []) {
+            return;
+        }
+
+        $stmt = $pdo->prepare(
+            'INSERT INTO nomenclature_composition (SET_SID, ITEM_SID, QUANTITY, SORT) VALUES (?, ?, ?, ?)'
+        );
+
+        $sort = 0;
+
+        foreach ($items as $item) {
+            $stmt->execute([$setSid, $item['item_sid'], $item['quantity'], $sort++]);
+        }
+    }
+
+    /**
+     * Поиск позиций номенклатуры (для состава набора).
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function searchNomenclature(string $query, int $limit = 30): array
+    {
+        $like = '%' . $query . '%';
+        $stmt = Database::pdo()->prepare(
+            'SELECT SID AS sid, NAME AS name, UNIT AS unit, TYPE AS type, ARTICLE AS article
+             FROM nomenclature
+             WHERE NAME LIKE ? OR ARTICLE LIKE ?
+             ORDER BY NAME ASC
+             LIMIT ' . max(1, min(100, $limit))
+        );
+        $stmt->execute([$like, $like]);
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    public function setNomenclatureArticle(string $sid, ?string $article): void
+    {
+        Database::pdo()->prepare('UPDATE nomenclature SET ARTICLE = ? WHERE SID = ?')
+            ->execute([$article !== null && $article !== '' ? $article : null, $sid]);
     }
 
     public function setNomenclatureGroup(string $sid, ?int $groupId): void
@@ -457,6 +759,65 @@ final class StocksRepository
         $stmt->execute([$name, $nameSid, $unit !== '' ? $unit : null, $quantity, $id]);
     }
 
+    /**
+     * Переименование общей позиции: правит nomenclature и переносит имя/ед. изм. во все stock_levels.
+     */
+    public function renameNomenclature(string $sid, string $name, string $unit, ?string $description): void
+    {
+        $pdo = Database::pdo();
+
+        $pdo->prepare('UPDATE nomenclature SET NAME = ?, NAME_1C = ?, UNIT = ?, DESCRIPTION = ? WHERE SID = ?')
+            ->execute([$name, $name, $unit !== '' ? $unit : null, $description, $sid]);
+
+        $pdo->prepare('UPDATE stock_levels SET NAME = ?, UNIT = ? WHERE NAME_SID = ?')
+            ->execute([$name, $unit !== '' ? $unit : null, $sid]);
+    }
+
+    public function nomenclatureByName(string $name): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM nomenclature WHERE NAME = ? OR NAME_1C = ? LIMIT 1');
+        $stmt->execute([$name, $name]);
+
+        return $stmt->fetch() ?: null;
+    }
+
+    public function nomenclatureBySid(string $sid): ?array
+    {
+        $stmt = Database::pdo()->prepare('SELECT * FROM nomenclature WHERE SID = ? LIMIT 1');
+        $stmt->execute([$sid]);
+
+        return $stmt->fetch() ?: null;
+    }
+
+    public function findNomenclature(string $sid): ?array
+    {
+        return $this->nomenclatureBySid($sid);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    public function levelsForName(string $nameSid): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT l.ID AS id, l.STOCK_SID AS stock_sid, s.NAME AS stock_name, l.QUANTITY AS quantity,
+                    l.UNIT AS unit, l.ACTUAL_DATE AS actual_date
+             FROM stock_levels l
+             LEFT JOIN stocks s ON s.SID = l.STOCK_SID
+             WHERE l.NAME_SID = ?
+             ORDER BY s.NAME ASC'
+        );
+        $stmt->execute([$nameSid]);
+
+        return $stmt->fetchAll() ?: [];
+    }
+
+    public function updateLevelQuantity(int $id, float $quantity): void
+    {
+        Database::pdo()->prepare('UPDATE stock_levels SET QUANTITY = ?, ACTUAL_DATE = CURDATE() WHERE ID = ?')
+            ->execute([$quantity, $id]);
+    }
+
     public function levelsIndex(): array
     {
         $rows = Database::pdo()->query('SELECT ID, STOCK_SID, NAME_SID, QUANTITY FROM stock_levels')->fetchAll() ?: [];
@@ -475,6 +836,35 @@ final class StocksRepository
     public function zeroAllLevels(): void
     {
         Database::pdo()->exec('UPDATE stock_levels SET QUANTITY = 0');
+    }
+
+    /**
+     * Остатки, схлопнутые по номенклатуре: количество — сумма, имя/ед./дата — представитель.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function mergedLevels(): array
+    {
+        return Database::pdo()->query(
+            'SELECT NAME_SID AS name_sid, MAX(NAME) AS name, MAX(UNIT) AS unit,
+                    SUM(QUANTITY) AS quantity, MAX(ACTUAL_DATE) AS actual_date
+             FROM stock_levels
+             GROUP BY NAME_SID'
+        )->fetchAll() ?: [];
+    }
+
+    /**
+     * Цены, схлопнутые по (номенклатура, тип): максимум.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    public function mergedPrices(): array
+    {
+        return Database::pdo()->query(
+            'SELECT name_sid, price_type_id, MAX(price) AS price
+             FROM nomenclature_prices
+             GROUP BY name_sid, price_type_id'
+        )->fetchAll() ?: [];
     }
 
     public function updateLevelFromImport(int $id, string $updateSid, string $actualDate, float $quantity): void

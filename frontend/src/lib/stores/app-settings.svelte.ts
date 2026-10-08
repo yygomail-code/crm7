@@ -13,6 +13,9 @@ interface AppSettingsResponse {
   cart_enabled: boolean;
   substitutions_enabled: boolean;
   manager_assign_enabled: boolean;
+  warehouses_enabled: boolean;
+  reports_enabled: boolean;
+  single_name: string;
   app_title: string;
   client_label: string;
   photo_ratio: string;
@@ -42,6 +45,12 @@ class AppSettingsStore {
   substitutionsEnabled = $state(true);
 
   managerAssignEnabled = $state(true);
+
+  warehousesEnabled = $state(true);
+
+  reportsEnabled = $state(true);
+
+  singleName = $state('Основной склад');
 
   appTitle = $state('CRM7');
 
@@ -97,6 +106,9 @@ class AppSettingsStore {
       this.cartEnabled = data.cart_enabled !== false;
       this.substitutionsEnabled = data.substitutions_enabled !== false;
       this.managerAssignEnabled = data.manager_assign_enabled !== false;
+      this.warehousesEnabled = data.warehouses_enabled !== false;
+      this.reportsEnabled = data.reports_enabled !== false;
+      this.singleName = (data.single_name || 'Основной склад').trim() || 'Основной склад';
       this.appTitle = (data.app_title || 'CRM7').trim() || 'CRM7';
       this.clientLabel = (data.client_label || 'Клиент').trim() || 'Клиент';
       this.photoRatio = ['dynamic', 'square', 'landscape', 'portrait'].includes(data.photo_ratio)
@@ -124,6 +136,8 @@ class AppSettingsStore {
     cartEnabled = this.cartEnabled,
     substitutionsEnabled = this.substitutionsEnabled,
     managerAssignEnabled = this.managerAssignEnabled,
+    warehousesEnabled = this.warehousesEnabled,
+    singleName = this.singleName,
     appTitle = this.appTitle,
     clientLabel = this.clientLabel,
     photoRatio = this.photoRatio,
@@ -140,6 +154,8 @@ class AppSettingsStore {
     this.cartEnabled = cartEnabled;
     this.substitutionsEnabled = substitutionsEnabled;
     this.managerAssignEnabled = managerAssignEnabled;
+    this.warehousesEnabled = warehousesEnabled;
+    this.singleName = singleName;
     this.appTitle = appTitle;
     this.clientLabel = clientLabel;
     this.photoRatio = photoRatio;
@@ -158,6 +174,8 @@ class AppSettingsStore {
     this.cartEnabled = true;
     this.substitutionsEnabled = true;
     this.managerAssignEnabled = true;
+    this.warehousesEnabled = true;
+    this.singleName = 'Основной склад';
     this.appTitle = 'CRM7';
     this.clientLabel = 'Клиент';
     this.photoRatio = 'square';

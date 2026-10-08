@@ -360,6 +360,7 @@ export interface ClientItem {
 
 export interface ManagerItem {
   id: number;
+  sid: string;
   login: string;
   name: string;
   level: number;
@@ -381,6 +382,9 @@ export interface SystemSettings {
   cart_enabled: boolean;
   substitutions_enabled: boolean;
   manager_assign_enabled: boolean;
+  warehouses_enabled: boolean;
+  reports_enabled: boolean;
+  single_name: string;
   app_title: string;
   client_label: string;
   photo_ratio: string;
@@ -528,6 +532,40 @@ export interface StockPhoto {
   id: number;
 }
 
+export interface StockLevelEntry {
+  id: number;
+  warehouse_sid: string;
+  warehouse_name: string;
+  quantity: number;
+  unit: string;
+  actual_date: string | null;
+  current: boolean;
+}
+
+export interface ItemType {
+  code: string;
+  title: string;
+  description?: string;
+  enabled?: boolean;
+}
+
+export interface StockCompositionItem {
+  item_sid: string;
+  name: string;
+  unit: string;
+  type: string;
+  article: string;
+  quantity: number;
+}
+
+export interface NomenclatureItem {
+  sid: string;
+  name: string;
+  unit: string;
+  type: string;
+  article: string;
+}
+
 export interface StockLevel {
   id: number;
   name: string;
@@ -541,6 +579,11 @@ export interface StockLevel {
   group_title: string;
   warehouse_id: number;
   warehouse_name: string;
+  levels?: StockLevelEntry[];
+  article?: string;
+  type?: string;
+  active?: boolean;
+  composition?: StockCompositionItem[];
   photos?: StockPhoto[];
 }
 
@@ -551,6 +594,10 @@ export interface StockItemPayload {
   description: string;
   prices?: Record<string, number | null>;
   group_id?: number | null;
+  levels?: { warehouse_sid: string; quantity: number }[];
+  article?: string;
+  type?: string;
+  composition?: { item_sid: string; quantity: number }[];
 }
 
 export interface StockImportJob {
