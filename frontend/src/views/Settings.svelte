@@ -76,6 +76,11 @@
   let managerAssignEnabled = $state(true);
   let appTitle = $state('CRM7');
   let clientLabel = $state('Клиент');
+  let photoRatio = $state('square');
+  let photoFit = $state('contain');
+  let photoSizePreview = $state('160');
+  let photoSizeCard = $state('600');
+  let photoSizeMax = $state('1600');
 
   let priceTypes = $state<PriceType[]>([]);
   let priceTypeDrafts = $state<Record<number, string>>({});
@@ -127,6 +132,11 @@
       managerAssignEnabled = system.manager_assign_enabled;
       appTitle = system.app_title;
       clientLabel = system.client_label;
+      photoRatio = system.photo_ratio || 'square';
+      photoFit = system.photo_fit || 'contain';
+      photoSizePreview = String(system.photo_size_preview);
+      photoSizeCard = String(system.photo_size_card);
+      photoSizeMax = String(system.photo_size_max);
 
       db = await getDatabaseSettings();
 
@@ -193,7 +203,12 @@ async function saveSystem(): Promise<void> {
       substitutions_enabled: substitutionsEnabled,
       manager_assign_enabled: managerAssignEnabled,
       app_title: appTitle,
-      client_label: clientLabel
+      client_label: clientLabel,
+      photo_ratio: photoRatio,
+      photo_fit: photoFit,
+      photo_size_preview: Number(photoSizePreview) || 160,
+      photo_size_card: Number(photoSizeCard) || 600,
+      photo_size_max: Number(photoSizeMax) || 1600
     });
 
     slaReaction = String(system.sla_reaction_hours);
@@ -210,6 +225,11 @@ async function saveSystem(): Promise<void> {
     managerAssignEnabled = system.manager_assign_enabled;
     appTitle = system.app_title;
     clientLabel = system.client_label;
+    photoRatio = system.photo_ratio || 'square';
+    photoFit = system.photo_fit || 'contain';
+    photoSizePreview = String(system.photo_size_preview);
+    photoSizeCard = String(system.photo_size_card);
+    photoSizeMax = String(system.photo_size_max);
     appSettings.set(
       system.sales_enabled,
       system.email_export_enabled,
@@ -223,7 +243,9 @@ async function saveSystem(): Promise<void> {
       system.substitutions_enabled,
       system.manager_assign_enabled,
       system.app_title,
-      system.client_label
+      system.client_label,
+      system.photo_ratio,
+      system.photo_fit
     );
     notice = 'Настройки системы сохранены';
   } catch (cause) {
@@ -674,6 +696,37 @@ async function saveSettings(): Promise<void> {
         <Input label="SLA: срок реакции, часов" type="number" bind:value={slaReaction} />
         <Input label="SLA: срок решения, часов" type="number" bind:value={slaResolution} />
       </div>
+
+      <div class="grid">
+        <label class="field">
+          <span class="label">Формат фото позиций</span>
+          <select bind:value={photoRatio}>
+            <option value="dynamic">По фото (динамический)</option>
+            <option value="square">Квадрат (1:1)</option>
+            <option value="landscape">Горизонтальный (4:3)</option>
+            <option value="portrait">Вертикальный (3:4)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span class="label">Несовпадение пропорций</span>
+          <select bind:value={photoFit}>
+            <option value="contain">Вписывать (без обрезки)</option>
+            <option value="cover">Заполнять (с обрезкой)</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="grid">
+        <Input label="Фото: превью, px" type="number" bind:value={photoSizePreview} />
+        <Input label="Фото: карточка, px" type="number" bind:value={photoSizeCard} />
+        <Input label="Фото: максимум, px" type="number" bind:value={photoSizeMax} />
+      </div>
+
+      <p class="hint">
+        Размер по длинной стороне. При загрузке фото уменьшается до «максимума» (без увеличения) и
+        создаются варианты «карточка» и «превью». Допустимо 80–4000 px; значения выравниваются:
+        максимум ≥ карточка ≥ превью.
+      </p>
 
       <label class="checkbox">
         <input type="checkbox" bind:checked={spfDone} />

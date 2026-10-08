@@ -220,13 +220,17 @@ final class ProfileController extends ApiController
 
     public function avatar(Request $request, array $params): FileResponse
     {
-        $this->context($request);
+        [$viewer] = $this->context($request);
 
         $targetId = (int) ($params['id'] ?? 0);
         $target = $this->users->findById($targetId);
 
         if ($target === null || ($target['AVATAR_PATH'] ?? null) === null) {
             throw new HttpException(404, 'not_found', 'Фото не найдено');
+        }
+
+        if ((int) $target['LEVEL'] === 5 && (int) $viewer['LEVEL'] < 10 && (int) $viewer['ID'] !== $targetId) {
+            throw new HttpException(403, 'forbidden', 'Нет доступа к фото профиля');
         }
 
         return new FileResponse(

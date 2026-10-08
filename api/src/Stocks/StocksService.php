@@ -7,16 +7,19 @@ namespace App\Stocks;
 use App\Audit\AuditService;
 use App\Core\Config;
 use App\Core\Database;
+use App\Core\Logger;
 use App\Export\TableExport;
 use App\Groups\ItemGroupService;
 use App\Http\FileResponse;
 use App\Http\HttpException;
 use App\Prices\PriceService;
 use App\Repositories\SearchLogRepository;
+use App\Repositories\SettingsRepository;
 use App\Repositories\StockPhotoRepository;
 use App\Repositories\StocksRepository;
 use App\Repositories\UserRepository;
 use App\Repositories\ViewLogRepository;
+use App\Support\ImageProcessor;
 use App\Support\Storage;
 use Throwable;
 
@@ -30,7 +33,9 @@ final class StocksService
 
     public const MAX_PHOTO_SIZE = 5242880;
 
-    private const PHOTO_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'];
+    private const PHOTO_MIMES = ['image/jpeg', 'image/png', 'image/webp'];
+
+    private const MAX_PHOTO_PIXELS = 40000000;
 
     public function __construct(
         private readonly StocksRepository $stocks = new StocksRepository(),
@@ -40,7 +45,8 @@ final class StocksService
         private readonly UserRepository $users = new UserRepository(),
         private readonly ItemGroupService $groups = new ItemGroupService(),
         private readonly SearchLogRepository $searches = new SearchLogRepository(),
-        private readonly StockPhotoRepository $photos = new StockPhotoRepository()
+        private readonly StockPhotoRepository $photos = new StockPhotoRepository(),
+        private readonly SettingsRepository $settings = new SettingsRepository()
     ) {
     }
 
@@ -299,21 +305,61 @@ final class StocksService
             throw new HttpException(422, 'too_large', 'Фото больше 5 МБ');
         }
 
-        $extension = strtolower((string) pathinfo((string) ($file['name'] ?? ''), PATHINFO_EXTENSION));
+        $tmp = (string) ($file['tmp_name'] ?? '');
+        $finfo = new \finfo(FILEINFO_MIME_TYPE);
+        $mime = (string) ($finfo->file($tmp) ?: '');
 
-        if (!in_array($extension, self::PHOTO_EXTENSIONS, true)) {
+        if (!in_array($mime, self::PHOTO_MIMES, true)) {
             throw new HttpException(422, 'bad_type', 'Допустимые форматы фото: jpg, png, webp');
         }
 
-        $finfo = new \finfo(FILEINFO_MIME_TYPE);
-        $mime = (string) ($finfo->file((string) ($file['tmp_name'] ?? '')) ?: '');
+        $info = @getimagesize($tmp);
 
-        if (!str_starts_with($mime, 'image/')) {
-            throw new HttpException(422, 'bad_type', 'Файл не является изображением');
+        if ($info === false) {
+            throw new HttpException(422, 'bad_image', 'Не удалось прочитать изображение');
         }
 
-        $stored = Storage::save($file, 'item-photos');
-        $this->photos->add($nameSid, (string) $stored['relative'], $mime, $size, (int) $user['ID']);
+        if ($info[0] * $info[1] > self::MAX_PHOTO_PIXELS) {
+            throw new HttpException(422, 'too_large', 'Слишком большое изображение (свыше 40 Мпикс)');
+        }
+
+        $sizes = $this->settings->photoSizes();
+        $extension = ImageProcessor::extension($mime);
+
+        [$source] = ImageProcessor::load($tmp, $mime);
+
+        $maxImage = ImageProcessor::fit($source, $sizes['max']);
+        $maxWidth = imagesx($maxImage);
+        $maxHeight = imagesy($maxImage);
+        $maxPath = Storage::allocate('item-photos', $extension);
+        ImageProcessor::save($maxImage, Storage::absolute($maxPath), $mime);
+
+        $cardImage = ImageProcessor::fit($source, $sizes['card']);
+        $cardPath = Storage::allocate('item-photos', $extension);
+        ImageProcessor::save($cardImage, Storage::absolute($cardPath), $mime);
+
+        $previewImage = ImageProcessor::fit($source, $sizes['preview']);
+        $previewPath = Storage::allocate('item-photos', $extension);
+        ImageProcessor::save($previewImage, Storage::absolute($previewPath), $mime);
+
+        imagedestroy($source);
+        imagedestroy($maxImage);
+        imagedestroy($cardImage);
+        imagedestroy($previewImage);
+
+        $storedSize = (int) (@filesize(Storage::absolute($maxPath)) ?: $size);
+
+        $this->photos->add(
+            $nameSid,
+            $maxPath,
+            $cardPath,
+            $previewPath,
+            $mime,
+            $storedSize,
+            $maxWidth,
+            $maxHeight,
+            (int) $user['ID']
+        );
 
         $this->audit->log($user, 'stocks.photo.add', 'nomenclature', null, ['name_sid' => $nameSid], null);
 
@@ -343,18 +389,28 @@ final class StocksService
         return ['photos' => $this->photos->listForName($photo['name_sid'])];
     }
 
-    public function photo(array $user, int $id): FileResponse
+    public function photo(array $user, array $capabilities, int $id, string $size = 'max'): FileResponse
     {
+        if (!in_array('stocks.view', $capabilities, true) && !in_array('stocks.import', $capabilities, true)) {
+            throw new HttpException(403, 'forbidden', 'Недостаточно прав');
+        }
+
         $photo = $this->photos->find($id);
 
         if ($photo === null) {
             throw new HttpException(404, 'not_found', 'Фото не найдено');
         }
 
-        $extension = (string) pathinfo($photo['storage_path'], PATHINFO_EXTENSION);
+        $path = match ($size) {
+            'preview' => $photo['preview_path'] !== '' ? $photo['preview_path'] : $photo['storage_path'],
+            'card' => $photo['card_path'] !== '' ? $photo['card_path'] : $photo['storage_path'],
+            default => $photo['storage_path'],
+        };
+
+        $extension = (string) pathinfo($path, PATHINFO_EXTENSION);
 
         return new FileResponse(
-            Storage::absolute($photo['storage_path']),
+            Storage::absolute($path),
             'photo-' . $id . ($extension !== '' ? '.' . $extension : ''),
             $photo['mime'] !== '' ? $photo['mime'] : 'application/octet-stream'
         );
@@ -950,6 +1006,7 @@ final class StocksService
 
             $warehouses = [];
             $nomenclature = [];
+            $newPositions = [];
             $imported = 0;
             $created = 0;
             $warehousesCreated = 0;
@@ -986,6 +1043,7 @@ final class StocksService
                 }
 
                 if (!isset($nomenclature[$itemName])) {
+                    $isNewPosition = !$this->stocks->nomenclatureExists($itemName);
                     $item = $this->stocks->upsertNomenclature($itemName, $unit);
 
                     if ($item === null) {
@@ -995,6 +1053,13 @@ final class StocksService
                     }
 
                     $nomenclature[$itemName] = $item;
+
+                    if ($isNewPosition) {
+                        $newPositions[$itemName] = [
+                            'sid' => (string) $item['SID'],
+                            'unit' => $unit,
+                        ];
+                    }
                 }
 
                 $key = (string) $warehouses[$stockName]['SID'] . '|' . (string) $nomenclature[$itemName]['SID'];
@@ -1005,7 +1070,6 @@ final class StocksService
                         $existing[$key]['id'],
                         $updateSid,
                         $actualDate,
-                        $unit,
                         $quantity
                     );
                 } else {
@@ -1042,6 +1106,33 @@ final class StocksService
                 }
             }
 
+            // Новая позиция добавляется ко всем складам: где количество не указано в импорте — 0.
+            // Существующие строки и настройки позиций (описание, группа, фото) не затрагиваются.
+            if ($newPositions !== []) {
+                foreach ($newPositions as $itemName => $position) {
+                    foreach ($this->stocks->allWarehouses() as $warehouse) {
+                        $key = $warehouse['SID'] . '|' . $position['sid'];
+
+                        if (isset($seen[$key]) || isset($existing[$key])) {
+                            continue;
+                        }
+
+                        $insert->execute([
+                            $updateSid,
+                            $actualDate,
+                            $warehouse['NAME'],
+                            $warehouse['SID'],
+                            $itemName,
+                            $position['sid'],
+                            $position['unit'] !== '' ? $position['unit'] : null,
+                            0,
+                        ]);
+
+                        $created++;
+                    }
+                }
+            }
+
             $zeroed = 0;
 
             foreach ($existing as $key => $row) {
@@ -1055,9 +1146,10 @@ final class StocksService
             $pdo->commit();
         } catch (Throwable $exception) {
             $pdo->rollBack();
-            $this->stocks->finishJob($jobId, 'failed', count($rows) + $skipped, 0, $skipped, [$exception->getMessage()]);
+            Logger::error('stocks.import failed', ['job' => $jobId, 'error' => $exception->getMessage()]);
+            $this->stocks->finishJob($jobId, 'failed', count($rows) + $skipped, 0, $skipped, ['Импорт не выполнен. Подробности — в журнале.']);
 
-            throw new HttpException(500, 'import_failed', 'Импорт не выполнен: ' . $exception->getMessage());
+            throw new HttpException(500, 'import_failed', 'Импорт не выполнен. Подробности — в журнале.');
         }
 
         $this->stocks->finishJob($jobId, 'done', count($rows) + $skipped, $imported, $skipped, $errors);
@@ -1080,6 +1172,7 @@ final class StocksService
             'rows_zeroed' => $zeroed,
             'rows_skipped' => $skipped,
             'warehouses_created' => $warehousesCreated,
+            'new_positions' => count($newPositions),
             'prices_imported' => $pricesImported,
             'errors' => array_slice($errors, 0, 20),
         ];
@@ -1486,7 +1579,8 @@ final class StocksService
             $spreadsheet = $reader->load($path);
             $sheet = $spreadsheet->getActiveSheet();
         } catch (Throwable $exception) {
-            throw new HttpException(422, 'read_failed', 'Не удалось прочитать Excel: ' . $exception->getMessage());
+            Logger::error('stocks.parseFile failed', ['error' => $exception->getMessage()]);
+            throw new HttpException(422, 'read_failed', 'Не удалось прочитать файл. Проверьте формат.');
         }
 
         $rows = [];

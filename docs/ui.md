@@ -49,7 +49,17 @@
 - **`FiltersModal.svelte`** — кнопка «Фильтры» + модалка (`onapply`, `onreset`, `onopen`, `count`).
 - **`ExportModal.svelte`** — выбор формата (XLSX/XLS/CSV/TXT/PDF) и способа (скачать/почта), `onpick(format, byEmail)`.
 - **`Logo.svelte`**, **`BarChart.svelte`** — логотип и гистограмма.
-- **`stocks/PhotoGallery.svelte`** — галерея фото: `photos`, `variant: 'list' | 'tile'` (tile — свайп/стрелки), `onopen`, `flush`.
+- **`stocks/PhotoGallery.svelte`** — галерея фото: `photos`, `variant: 'list' | 'tile'` (tile — свайп/стрелки), `onopen`, `flush`. Пропорции/вписывание и размер запрашиваемого варианта берутся из настроек (список → `preview`, tile → `card`).
+
+## Фото номенклатуры
+
+Формат отображения — системная настройка (`#/settings` → «Система»); применяется к плиткам, строкам, карточке позиции и ItemEdit:
+
+- **формат** (`stocks.photo_ratio`): динамический (по фото) / квадрат 1:1 / горизонтальный 4:3 / вертикальный 3:4;
+- **несовпадение пропорций** (`stocks.photo_fit`): вписывать (без обрезки, по умолчанию) / заполнять (с обрезкой);
+- **размеры вариантов** по длинной стороне, px (`stocks.photo_size_preview/card/max`, дефолт 160/600/1600).
+
+Список запрашивает `preview`, плитки/карточка/просмотр — `card`, полный размер — `max`. При загрузке фото уменьшается до `max` и генерируются варианты `card`/`preview` (см. [`architecture.md`](architecture.md)).
 
 ## Паттерны страниц
 

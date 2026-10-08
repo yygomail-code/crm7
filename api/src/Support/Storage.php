@@ -48,6 +48,24 @@ final class Storage
         return self::baseDir() . '/' . $relativePath;
     }
 
+    /**
+     * Выделяет уникальный относительный путь в подкаталоге (создаёт каталог),
+     * не записывая файл. Для производных изображений, которые пишет вызывающий код.
+     */
+    public static function allocate(string $subdir, string $extension = ''): string
+    {
+        $relativeDir = $subdir . '/' . date('Y/m');
+        $dir = self::baseDir() . '/' . $relativeDir;
+
+        if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+            throw new HttpException(500, 'storage_error', 'Не удалось сохранить файл');
+        }
+
+        $name = bin2hex(random_bytes(16)) . ($extension !== '' ? '.' . $extension : '');
+
+        return $relativeDir . '/' . $name;
+    }
+
     public static function delete(string $relativePath): void
     {
         $absolute = self::absolute($relativePath);

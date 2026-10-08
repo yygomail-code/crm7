@@ -274,6 +274,58 @@ const scenarios = [
       await expectVisible(page.getByText('Вход в систему').first(), 'аудит без русской подписи действия');
       await expectVisible(page.getByText('auth.login').first(), 'аудит без технического кода действия');
     }
+  },
+  {
+    name: 'безопасность: клиент не меняет мета заявки и не читает фото номенклатуры',
+    role: 'client',
+    async run(page, ctx) {
+      const token = ctx.session.token;
+      const api = async (method, path, body) => {
+        const response = await fetch(`${API}${path}`, {
+          method,
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: body ? JSON.stringify(body) : undefined
+        });
+        let json = null;
+        try {
+          json = await response.json();
+        } catch {
+          // не JSON — не важно для этих проверок
+        }
+        return { status: response.status, json };
+      };
+
+      const list = (await api('GET', '/requests?limit=30')).json.data.items;
+      let target = null;
+
+      for (const item of list) {
+        const detail = (await api('GET', `/requests/${item.id}`)).json.data;
+
+        if (detail.can?.cancel === true) {
+          target = { id: item.id, version: detail.request.version };
+          break;
+        }
+      }
+
+      assert(target, 'не найдена незавершённая заявка клиента для проверки');
+
+      const priority = await api('POST', `/requests/${target.id}/meta`, {
+        priority: 3,
+        version: target.version
+      });
+      assert(priority.status === 403, `клиент не должен менять важность (получено ${priority.status})`);
+
+      const subject = await api('POST', `/requests/${target.id}/meta`, {
+        subject: 'e2e-forbidden',
+        version: target.version
+      });
+      assert(subject.status === 403, `клиент не должен менять тему (получено ${subject.status})`);
+
+      const photo = await fetch(`${API}/stocks/photos/1`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      assert(photo.status === 403, `клиент не должен получать фото номенклатуры (получено ${photo.status})`);
+    }
   }
 ];
 

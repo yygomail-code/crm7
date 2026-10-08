@@ -40,6 +40,8 @@ final class AppSettingsController extends ApiController
             'manager_assign_enabled' => $this->settings->managerAssignEnabled(),
             'app_title' => $this->settings->appTitle(),
             'client_label' => $this->settings->clientLabel(),
+            'photo_ratio' => $this->settings->photoRatio(),
+            'photo_fit' => $this->settings->photoFit(),
             'demo_mode' => Config::demoMode(),
         ]);
     }

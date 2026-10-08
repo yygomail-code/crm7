@@ -290,6 +290,34 @@ final class StocksRepository
         return $stmt->fetch() !== false;
     }
 
+    /**
+     * Существует ли номенклатура с таким именем (с учётом коллации БД).
+     */
+    public function nomenclatureExists(string $name): bool
+    {
+        $stmt = Database::pdo()->prepare('SELECT 1 FROM nomenclature WHERE NAME_1C = ? LIMIT 1');
+        $stmt->execute([$name]);
+
+        return $stmt->fetch() !== false;
+    }
+
+    /**
+     * Все активные склады системы (для расширения новых позиций на все склады).
+     *
+     * @return array<int, array{SID: string, NAME: string}>
+     */
+    public function allWarehouses(): array
+    {
+        $rows = Database::pdo()->query(
+            "SELECT SID, NAME FROM stocks WHERE ACTIVE = 'Y' AND STATUS = 'Y' ORDER BY SORT ASC, NAME ASC"
+        )->fetchAll() ?: [];
+
+        return array_map(static fn (array $row): array => [
+            'SID' => (string) $row['SID'],
+            'NAME' => (string) $row['NAME'],
+        ], $rows);
+    }
+
     public function findWarehouseById(int $id): ?array
     {
         $stmt = Database::pdo()->prepare('SELECT * FROM stocks WHERE ID = ? LIMIT 1');
@@ -449,12 +477,12 @@ final class StocksRepository
         Database::pdo()->exec('UPDATE stock_levels SET QUANTITY = 0');
     }
 
-    public function updateLevelFromImport(int $id, string $updateSid, string $actualDate, string $unit, float $quantity): void
+    public function updateLevelFromImport(int $id, string $updateSid, string $actualDate, float $quantity): void
     {
         $stmt = Database::pdo()->prepare(
-            'UPDATE stock_levels SET LAST_STOCK_UPDATE_SID = ?, ACTUAL_DATE = ?, UNIT = ?, QUANTITY = ? WHERE ID = ?'
+            'UPDATE stock_levels SET LAST_STOCK_UPDATE_SID = ?, ACTUAL_DATE = ?, QUANTITY = ? WHERE ID = ?'
         );
-        $stmt->execute([$updateSid, $actualDate, $unit !== '' ? $unit : null, $quantity, $id]);
+        $stmt->execute([$updateSid, $actualDate, $quantity, $id]);
     }
 
     public function insertUpdate(string $sid, string $actualDate, string $fileName): int

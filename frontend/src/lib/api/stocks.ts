@@ -215,41 +215,49 @@ export function deleteItemPhoto(id: number): Promise<{ photos: StockPhoto[] }> {
   return apiRequest<{ photos: StockPhoto[] }>(`/stocks/photos/${id}`, { method: 'DELETE', auth: true });
 }
 
-const photoUrlCache = new Map<number, string | null>();
+const photoUrlCache = new Map<string, string | null>();
 
-export async function loadItemPhotoUrl(id: number): Promise<string | null> {
-  if (photoUrlCache.has(id)) {
-    return photoUrlCache.get(id) ?? null;
+export type ItemPhotoSize = 'preview' | 'card' | 'max';
+
+export async function loadItemPhotoUrl(id: number, size: ItemPhotoSize = 'card'): Promise<string | null> {
+  const key = `${id}:${size}`;
+
+  if (photoUrlCache.has(key)) {
+    return photoUrlCache.get(key) ?? null;
   }
 
   try {
-    const response = await fetch(`${config.apiV2Base}/stocks/photos/${id}`, {
+    const response = await fetch(`${config.apiV2Base}/stocks/photos/${id}?size=${size}`, {
       headers: auth.token ? { Authorization: `Bearer ${auth.token}` } : {}
     });
 
     if (!response.ok) {
-      photoUrlCache.set(id, null);
+      photoUrlCache.set(key, null);
 
       return null;
     }
 
     const url = URL.createObjectURL(await response.blob());
-    photoUrlCache.set(id, url);
+    photoUrlCache.set(key, url);
 
     return url;
   } catch {
-    photoUrlCache.set(id, null);
+    photoUrlCache.set(key, null);
 
     return null;
   }
 }
 
 export function invalidateItemPhoto(id: number): void {
-  const url = photoUrlCache.get(id);
+  const prefix = `${id}:`;
 
-  if (url) {
-    URL.revokeObjectURL(url);
+  for (const [key, url] of photoUrlCache) {
+    if (key.startsWith(prefix)) {
+      if (url) {
+        URL.revokeObjectURL(url);
+      }
+
+      photoUrlCache.delete(key);
+    }
   }
-
-  photoUrlCache.delete(id);
 }

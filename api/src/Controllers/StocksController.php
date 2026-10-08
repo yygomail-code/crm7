@@ -158,9 +158,14 @@ final class StocksController extends ApiController
 
     public function photo(Request $request, array $params): FileResponse
     {
-        [$user] = $this->context($request);
+        [$user, $capabilities] = $this->context($request);
 
-        return $this->service->photo($user, (int) ($params['id'] ?? 0));
+        return $this->service->photo(
+            $user,
+            $capabilities,
+            (int) ($params['id'] ?? 0),
+            $request->queryParam('size', 'max')
+        );
     }
 
     private function importMapping(Request $request): array

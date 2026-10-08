@@ -30,6 +30,8 @@
 
   const MAX_PHOTOS = 10;
   const isNew = $derived(id <= 0);
+  const photoAspect = $derived(appSettings.photoAspect);
+  const photoFit = $derived(appSettings.photoFit);
 
   let loading = $state(true);
   let saving = $state(false);
@@ -121,7 +123,7 @@
   async function loadPhotoUrls(): Promise<void> {
     for (const photo of photos) {
       if (photoUrls[photo.id] === undefined) {
-        photoUrls[photo.id] = await loadItemPhotoUrl(photo.id);
+        photoUrls[photo.id] = await loadItemPhotoUrl(photo.id, 'preview');
       }
     }
   }
@@ -287,7 +289,7 @@
           </div>
         {/if}
 
-        <div class="photo-grid">
+        <div class="photo-grid" style="--photo-ratio: {photoAspect}; --photo-fit: {photoFit};">
           {#each photos as photo (photo.id)}
             <div class="photo-item">
               {#if photoUrls[photo.id]}
@@ -508,7 +510,7 @@
 
   .photo-item {
     position: relative;
-    aspect-ratio: 1;
+    aspect-ratio: var(--photo-ratio, 1 / 1);
     border: 1px solid var(--border-secondary);
     border-radius: var(--radius-sm);
     overflow: hidden;
@@ -519,7 +521,7 @@
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: var(--photo-fit, contain);
   }
 
   .photo-remove {
@@ -549,7 +551,7 @@
     align-items: center;
     justify-content: center;
     gap: 4px;
-    aspect-ratio: 1;
+    aspect-ratio: var(--photo-ratio, 1 / 1);
     border: 1px dashed var(--border);
     border-radius: var(--radius-sm);
     color: var(--muted);

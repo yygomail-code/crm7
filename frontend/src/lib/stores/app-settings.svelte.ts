@@ -15,6 +15,8 @@ interface AppSettingsResponse {
   manager_assign_enabled: boolean;
   app_title: string;
   client_label: string;
+  photo_ratio: string;
+  photo_fit: string;
   demo_mode: boolean;
 }
 
@@ -45,6 +47,10 @@ class AppSettingsStore {
 
   clientLabel = $state('Клиент');
 
+  photoRatio = $state('square');
+
+  photoFit = $state('contain');
+
   demoMode = $state(false);
 
   loadedFor = $state<number | null>(null);
@@ -53,6 +59,20 @@ class AppSettingsStore {
 
   get loaded(): boolean {
     return this.loadedFor !== null;
+  }
+
+  get photoAspect(): string {
+    return this.photoRatio === 'landscape'
+      ? '4 / 3'
+      : this.photoRatio === 'portrait'
+        ? '3 / 4'
+        : this.photoRatio === 'square'
+          ? '1 / 1'
+          : 'auto';
+  }
+
+  get photoFactor(): number {
+    return this.photoRatio === 'landscape' ? 4 / 3 : this.photoRatio === 'portrait' ? 3 / 4 : 1;
   }
 
   async load(): Promise<void> {
@@ -79,6 +99,10 @@ class AppSettingsStore {
       this.managerAssignEnabled = data.manager_assign_enabled !== false;
       this.appTitle = (data.app_title || 'CRM7').trim() || 'CRM7';
       this.clientLabel = (data.client_label || 'Клиент').trim() || 'Клиент';
+      this.photoRatio = ['dynamic', 'square', 'landscape', 'portrait'].includes(data.photo_ratio)
+        ? data.photo_ratio
+        : 'square';
+      this.photoFit = data.photo_fit === 'cover' ? 'cover' : 'contain';
       this.demoMode = data.demo_mode === true;
       this.loadedFor = userId;
     } catch {
@@ -101,7 +125,9 @@ class AppSettingsStore {
     substitutionsEnabled = this.substitutionsEnabled,
     managerAssignEnabled = this.managerAssignEnabled,
     appTitle = this.appTitle,
-    clientLabel = this.clientLabel
+    clientLabel = this.clientLabel,
+    photoRatio = this.photoRatio,
+    photoFit = this.photoFit
   ): void {
     this.salesEnabled = salesEnabled;
     this.emailExportEnabled = emailExportEnabled;
@@ -116,6 +142,8 @@ class AppSettingsStore {
     this.managerAssignEnabled = managerAssignEnabled;
     this.appTitle = appTitle;
     this.clientLabel = clientLabel;
+    this.photoRatio = photoRatio;
+    this.photoFit = photoFit;
   }
 
   reset(): void {
@@ -132,6 +160,8 @@ class AppSettingsStore {
     this.managerAssignEnabled = true;
     this.appTitle = 'CRM7';
     this.clientLabel = 'Клиент';
+    this.photoRatio = 'square';
+    this.photoFit = 'contain';
     this.demoMode = false;
     this.loadedFor = null;
   }

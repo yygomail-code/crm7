@@ -101,4 +101,37 @@ final class SettingsRepository
 
         return $label !== '' ? $label : 'Клиент';
     }
+
+    public function photoRatio(): string
+    {
+        $ratio = (string) $this->get('stocks.photo_ratio');
+
+        return in_array($ratio, ['dynamic', 'square', 'landscape', 'portrait'], true) ? $ratio : 'square';
+    }
+
+    public function photoFit(): string
+    {
+        return $this->get('stocks.photo_fit') === 'cover' ? 'cover' : 'contain';
+    }
+
+    /**
+     * Размеры вариантов фото по длинной стороне (px), нормализованные: max >= card >= preview.
+     *
+     * @return array{preview: int, card: int, max: int}
+     */
+    public function photoSizes(): array
+    {
+        $preview = $this->photoSize('stocks.photo_size_preview', 160);
+        $card = max($this->photoSize('stocks.photo_size_card', 600), $preview);
+        $max = max($this->photoSize('stocks.photo_size_max', 1600), $card);
+
+        return ['preview' => $preview, 'card' => $card, 'max' => $max];
+    }
+
+    private function photoSize(string $key, int $default): int
+    {
+        $value = (int) $this->get($key);
+
+        return $value >= 80 && $value <= 4000 ? $value : $default;
+    }
 }

@@ -810,6 +810,16 @@ final class RequestService
                 throw new HttpException(403, 'forbidden', 'Недостаточно прав для изменения заявки');
             }
 
+            $isStaff = (int) ($user['LEVEL'] ?? 0) >= 10;
+
+            if (!$isStaff && (array_key_exists('subject', $input) || array_key_exists('body', $input))) {
+                throw new HttpException(403, 'forbidden', 'Редактирование текста заявки доступно сотрудникам');
+            }
+
+            if (!$isStaff && (array_key_exists('priority', $input) || array_key_exists('due_at', $input))) {
+                throw new HttpException(403, 'forbidden', 'Изменение приоритета и срока доступно сотрудникам');
+            }
+
             $status = $this->statuses->map()[(string) $request['status_id']] ?? null;
             $isFinal = $status !== null && (bool) $status['is_final'];
 

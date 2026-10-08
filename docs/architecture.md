@@ -60,13 +60,14 @@
 
 - **Пользователи/права:** `users` (`LOGIN`, `PASSWORD`, `LEVEL`, `ACTIVE`, `SID`), `level_capabilities`, `tokens`, `user_history`, `login_attempts`.
 - **Заявки:** `requests`, `request_items`, `request_statuses`, `request_assignments`, `request_history`, `request_activities`, `request_comments`, `request_drafts`.
-- **Склад:** `stocks` (склады), `stock_levels` (остатки), `nomenclature` (`SID`, `NAME`, `NAME_1C`, `UNIT`, `DESCRIPTION`, `group_id`), `nomenclature_photos`, `nomenclature_prices` (`name_sid`, `stock_sid`, `price_type_id`, `price`), `price_types`, `price_import_mappings`, `item_groups`.
+- **Склад:** `stocks` (склады), `stock_levels` (остатки), `nomenclature` (`SID`, `NAME`, `NAME_1C`, `UNIT`, `DESCRIPTION`, `group_id`), `nomenclature_photos` (`storage_path`/`card_path`/`preview_path`, `mime`, `size`, `width`, `height`), `nomenclature_prices` (`name_sid`, `stock_sid`, `price_type_id`, `price`), `price_types`, `price_import_mappings`, `item_groups`.
 - **Клиенты/чат/прочее:** `clients`, `client_managers`, `chat_threads`/`chat_messages`, `notifications`, `settings`, `audit`, `schema_migrations`.
 
 ### Инварианты
 
 - Остаток и цена привязаны к паре `(STOCK_SID, NAME_SID)`; цены — по типам и **по каждому складу отдельно**.
-- Фото и вложения хранятся в `storage/` (том); в БД — только метаданные (`storage_path`, `mime`, `size`).
+- Импорт остатков **не удаляет и не перезаписывает** номенклатуру: отсутствующие в файле позиции обнуляются (не удаляются); новые склады добавляются; новая позиция создаётся на всех складах (0 там, где количества нет в файле); настройки позиции (описание, группа, единица, фото) сохраняются.
+- Фото хранятся в `storage/` (том) в трёх вариантах: `storage_path` (максимум), `card_path` (карточка), `preview_path` (превью); в БД — метаданные (`mime`, `size`, `width`, `height`). Размеры вариантов — в настройках (`stocks.photo_size_preview/card/max`); при загрузке изображение уменьшается без увеличения (GD).
 - Миграции инкрементальные (`schema_migrations`); применённые файлы не редактируются.
 
 ## Окружения и выкладка

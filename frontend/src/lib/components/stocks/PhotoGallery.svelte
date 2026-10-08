@@ -1,6 +1,7 @@
 <script lang="ts">
   import { loadItemPhotoUrl } from '../../api/stocks';
   import type { StockPhoto } from '../../api/types';
+  import { appSettings } from '../../stores/app-settings.svelte';
   import Icon from '../ui/Icon.svelte';
 
   interface Props {
@@ -11,6 +12,8 @@
   }
 
   let { photos, variant = 'list', onopen, flush = false }: Props = $props();
+
+  const photoSize = $derived<'preview' | 'card'>(variant === 'tile' ? 'card' : 'preview');
 
   let index = $state(0);
   let urls = $state<Record<number, string | null>>({});
@@ -24,7 +27,7 @@
         continue;
       }
 
-      void loadItemPhotoUrl(photo.id).then((url) => {
+      void loadItemPhotoUrl(photo.id, photoSize).then((url) => {
         if (!cancelled) {
           urls[photo.id] = url;
         }
@@ -45,6 +48,9 @@
   const isCarousel = $derived(variant === 'tile');
   const currentId = $derived(isCarousel ? (photos[index]?.id ?? null) : (photos[0]?.id ?? null));
   const currentUrl = $derived(currentId === null ? null : urls[currentId] ?? null);
+  const photoAspect = $derived(appSettings.photoAspect);
+  const photoFactor = $derived(appSettings.photoFactor);
+  const photoFit = $derived(appSettings.photoFit);
 
   function open(): void {
     onopen?.();
@@ -105,6 +111,7 @@
   role={onopen !== undefined ? 'button' : 'group'}
   tabindex={onopen !== undefined ? 0 : undefined}
   aria-label={onopen !== undefined ? 'Подробнее о позиции' : 'Фото товара'}
+  style="--photo-ratio: {photoAspect}; --photo-factor: {photoFactor}; --photo-fit: {photoFit};"
   onclick={open}
   onkeydown={onKeydown}
   ontouchstart={onTouchStart}
@@ -145,7 +152,7 @@
   .gallery {
     position: relative;
     flex: 0 0 auto;
-    width: 56px;
+    width: calc(56px * var(--photo-factor, 1));
     height: 56px;
     border-radius: var(--radius-sm);
     overflow: hidden;
@@ -156,7 +163,7 @@
   .gallery.tile {
     width: 100%;
     height: auto;
-    aspect-ratio: 16 / 9;
+    aspect-ratio: var(--photo-ratio, 1 / 1);
   }
 
   .gallery.flush {
@@ -172,7 +179,7 @@
     display: block;
     width: 100%;
     height: 100%;
-    object-fit: cover;
+    object-fit: var(--photo-fit, contain);
   }
 
   .placeholder {

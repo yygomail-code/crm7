@@ -383,6 +383,11 @@ export interface SystemSettings {
   manager_assign_enabled: boolean;
   app_title: string;
   client_label: string;
+  photo_ratio: string;
+  photo_fit: string;
+  photo_size_preview: number;
+  photo_size_card: number;
+  photo_size_max: number;
   spf_steps: string[];
 }
 

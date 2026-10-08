@@ -52,6 +52,12 @@ final class AdminController extends ApiController
         $managerAssignEnabled = (bool) $request->input('manager_assign_enabled', true);
         $appTitle = mb_substr(trim((string) $request->input('app_title', '')), 0, 60);
         $clientLabel = mb_substr(trim((string) $request->input('client_label', '')), 0, 40);
+        $photoRatio = (string) $request->input('photo_ratio', 'square');
+        $photoRatio = in_array($photoRatio, ['dynamic', 'square', 'landscape', 'portrait'], true) ? $photoRatio : 'square';
+        $photoFit = (string) $request->input('photo_fit', 'contain') === 'cover' ? 'cover' : 'contain';
+        $photoSizePreview = $this->photoSize($request->input('photo_size_preview', 160), 160);
+        $photoSizeCard = max($this->photoSize($request->input('photo_size_card', 600), 600), $photoSizePreview);
+        $photoSizeMax = max($this->photoSize($request->input('photo_size_max', 1600), 1600), $photoSizeCard);
 
         $this->settings->many([
             'sla.reaction_hours' => (string) $reaction,
@@ -69,6 +75,11 @@ final class AdminController extends ApiController
             'module.manager_assign' => $managerAssignEnabled ? '1' : '0',
             'branding.title' => $appTitle,
             'branding.client_label' => $clientLabel,
+            'stocks.photo_ratio' => $photoRatio,
+            'stocks.photo_fit' => $photoFit,
+            'stocks.photo_size_preview' => (string) $photoSizePreview,
+            'stocks.photo_size_card' => (string) $photoSizeCard,
+            'stocks.photo_size_max' => (string) $photoSizeMax,
         ]);
 
         return Response::ok($this->systemSettingsPayload());
@@ -76,6 +87,8 @@ final class AdminController extends ApiController
 
     private function systemSettingsPayload(): array
     {
+        $photoSizes = $this->settings->photoSizes();
+
         return [
             'sla_reaction_hours' => (int) ($this->settings->get('sla.reaction_hours') ?? 2),
             'sla_resolution_hours' => (int) ($this->settings->get('sla.resolution_hours') ?? 24),
@@ -93,6 +106,11 @@ final class AdminController extends ApiController
             'manager_assign_enabled' => $this->settings->managerAssignEnabled(),
             'app_title' => $this->settings->appTitle(),
             'client_label' => $this->settings->clientLabel(),
+            'photo_ratio' => $this->settings->photoRatio(),
+            'photo_fit' => $this->settings->photoFit(),
+            'photo_size_preview' => $photoSizes['preview'],
+            'photo_size_card' => $photoSizes['card'],
+            'photo_size_max' => $photoSizes['max'],
             'spf_steps' => [
                 'SPF: добавьте в DNS TXT-запись домена с серверами отправки (v=spf1 …)',
                 'DKIM: включите подпись в панели почтового провайдера и опубликуйте публичный ключ',
@@ -100,6 +118,13 @@ final class AdminController extends ApiController
                 'Проверьте отправку тестового письма на внешний ящик и заголовки SPF/DKIM',
             ],
         ];
+    }
+
+    private function photoSize(mixed $value, int $default): int
+    {
+        $size = (int) $value;
+
+        return $size >= 80 && $size <= 4000 ? $size : $default;
     }
 
     public function priceTypes(Request $request): Response
