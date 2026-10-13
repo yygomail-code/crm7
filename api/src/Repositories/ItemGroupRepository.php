@@ -25,6 +25,22 @@ final class ItemGroupRepository
         ], $rows);
     }
 
+    /**
+     * Есть ли позиции без группы (номенклатура без группы, присутствующая на складах).
+     */
+    public function hasUngrouped(): bool
+    {
+        $value = Database::pdo()->query(
+            "SELECT EXISTS(
+                SELECT 1 FROM nomenclature n
+                WHERE n.group_id IS NULL
+                  AND EXISTS (SELECT 1 FROM stock_levels l WHERE l.NAME_SID = n.SID)
+            )"
+        )->fetchColumn();
+
+        return (int) $value === 1;
+    }
+
     public function find(int $id): ?array
     {
         $stmt = Database::pdo()->prepare('SELECT ID AS id, TITLE AS title, SORT AS sort FROM item_groups WHERE ID = ? LIMIT 1');

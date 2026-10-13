@@ -137,8 +137,11 @@ final class StocksService
 
         $priceMap = [];
         $allPrices = [];
+        $typePrices = [];
+        $assignedTypes = $this->prices->enabled() ? $this->prices->assignedTypesForUser($user) : [];
+        $assignedTypeIds = array_map(static fn (array $type): int => (int) $type['id'], $assignedTypes);
 
-        if ($priceTypeId !== null && $rows !== []) {
+        if ($rows !== []) {
             $sidsByStock = [];
 
             foreach ($rows as $row) {
@@ -152,7 +155,14 @@ final class StocksService
 
             foreach ($sidsByStock as $stockSid => $nameSet) {
                 $nameSids = array_keys($nameSet);
-                $priceMap[$stockSid] = $this->prices->pricesForStockItems($stockSid, $nameSids, $priceTypeId);
+
+                if ($priceTypeId !== null) {
+                    $priceMap[$stockSid] = $this->prices->pricesForStockItems($stockSid, $nameSids, $priceTypeId);
+                }
+
+                if ($assignedTypeIds !== []) {
+                    $typePrices[$stockSid] = $this->prices->pricesForStockItemsByTypes($stockSid, $nameSids, $assignedTypeIds);
+                }
 
                 if (in_array('stocks.edit', $capabilities, true)) {
                     $allPrices[$stockSid] = $this->prices->pricesForStockItemsAll($stockSid, $nameSids);
@@ -183,7 +193,7 @@ final class StocksService
         $photosBySid = $this->photos->forNames(array_keys($nameSids));
 
         return [
-            'items' => array_map(static function (array $row) use ($priceMap, $allPrices, $bySid, $photosBySid): array {
+            'items' => array_map(static function (array $row) use ($priceMap, $allPrices, $typePrices, $assignedTypes, $bySid, $photosBySid): array {
                 $stockSid = (string) ($row['stock_sid'] ?? '');
                 $sid = (string) ($row['name_sid'] ?? '');
                 $warehouse = $bySid[$stockSid] ?? null;
@@ -195,6 +205,17 @@ final class StocksService
                     'description' => (string) ($row['description'] ?? ''),
                     'actual_date' => $row['actual_date'] !== null ? (string) $row['actual_date'] : null,
                     'price' => $sid !== '' && isset($priceMap[$stockSid][$sid]) ? (float) $priceMap[$stockSid][$sid] : null,
+                    'price_list' => array_map(static function (array $type) use ($typePrices, $stockSid, $sid): array {
+                        $typeId = (int) $type['id'];
+                        $value = $typePrices[$stockSid][$sid][$typeId] ?? null;
+
+                        return [
+                            'id' => $typeId,
+                            'title' => (string) $type['title'],
+                            'is_default' => (bool) $type['is_default'],
+                            'price' => $value !== null ? (float) $value : null,
+                        ];
+                    }, $assignedTypes),
                     'group_id' => $row['group_id'] !== null ? (int) $row['group_id'] : null,
                     'group_title' => (string) ($row['group_title'] ?? ''),
                     'warehouse_id' => $warehouse !== null ? (int) $warehouse['ID'] : 0,
@@ -289,6 +310,21 @@ final class StocksService
             ];
         }
 
+        $stockSids = array_map(static fn (array $row): string => (string) $row['warehouse_sid'], $levels);
+        $typeIdsByStock = $this->prices->warehouseTypeIdsForStocks($stockSids);
+
+        foreach ($levels as $index => $row) {
+            $levels[$index]['price_type_ids'] = $typeIdsByStock[(string) $row['warehouse_sid']] ?? [];
+        }
+
+        $warehousePrices = [];
+
+        if ($canEdit) {
+            foreach ($stockSids as $whSid) {
+                $warehousePrices[$whSid] = $this->prices->pricesForStockItem($whSid, $nameSid);
+            }
+        }
+
         $type = $this->storedType((string) ($level['type'] ?? ''));
         $active = ($level['active'] ?? 'Y') === 'Y';
         $usage = $this->stocks->positionUsage($nameSid, (string) $level['name']);
@@ -325,6 +361,7 @@ final class StocksService
                 'warehouse_id' => (int) $warehouse['ID'],
                 'warehouse_name' => (string) $warehouse['NAME'],
                 'levels' => $levels,
+                'warehouse_prices' => $warehousePrices,
                 'article' => (string) ($level['article'] ?? ''),
                 'type' => $type,
                 'active' => $active,
@@ -1038,6 +1075,10 @@ final class StocksService
         $item = ['SID' => $nameSid, 'NAME' => $name];
         $this->savePrices($warehouse, $item, $input);
 
+        if (isset($input['warehouse_prices']) && is_array($input['warehouse_prices'])) {
+            $this->saveWarehousePrices($user, $capabilities, $nameSid, $input['warehouse_prices']);
+        }
+
         $this->audit->log($user, 'stocks.item.update', 'stocks', (int) $warehouse['ID'], [
             'id' => $itemId,
             'name' => $name,
@@ -1053,6 +1094,7 @@ final class StocksService
                 'description' => $description ?? '',
                 'actual_date' => date('Y-m-d'),
                 'prices' => $this->prices->pricesForStockItem((string) $warehouse['SID'], (string) $item['SID']),
+                'warehouse_prices' => $this->warehousePricesForItem($nameSid),
                 'group_id' => $groupId,
                 'group_title' => $this->groupTitle($groupId),
             ],
@@ -1070,6 +1112,48 @@ final class StocksService
             (string) ($item['SID'] ?? ''),
             $input['prices']
         );
+    }
+
+    /**
+     * Цены позиции по всем складам: stock_sid => (price_type_id => price).
+     *
+     * @return array<string, array<int, float>>
+     */
+    private function warehousePricesForItem(string $nameSid): array
+    {
+        $map = [];
+
+        foreach ($this->stocks->levelsForName($nameSid) as $row) {
+            $stockSid = (string) $row['stock_sid'];
+            $map[$stockSid] = $this->prices->pricesForStockItem($stockSid, $nameSid);
+        }
+
+        return $map;
+    }
+
+    /**
+     * Сохраняет цены позиции по складам (матрица), проверяя доступ к каждому складу.
+     *
+     * @param array<string, mixed> $matrix
+     */
+    private function saveWarehousePrices(array $user, array $capabilities, string $nameSid, array $matrix): void
+    {
+        foreach ($matrix as $stockSid => $prices) {
+            $stockSid = (string) $stockSid;
+
+            if ($stockSid === '' || !is_array($prices)) {
+                continue;
+            }
+
+            $warehouse = $this->stocks->findWarehouseBySid($stockSid);
+
+            if ($warehouse === null) {
+                continue;
+            }
+
+            $this->requireWarehouse($user, $capabilities, (int) $warehouse['ID']);
+            $this->prices->saveItemPrices($stockSid, $nameSid, $prices);
+        }
     }
 
     /**
@@ -1399,6 +1483,10 @@ final class StocksService
             $this->stocks->clearDefaultWarehouse((string) $warehouse['SID']);
         }
 
+        if (array_key_exists('price_type_ids', $input)) {
+            $this->prices->setWarehouseTypes((string) $warehouse['SID'], (array) $input['price_type_ids']);
+        }
+
         $this->audit->log($user, 'stocks.warehouse.update', 'stocks', $id, [
             'name' => $fields['name'],
             'active' => $fields['active'],
@@ -1427,6 +1515,10 @@ final class StocksService
 
         if ($fields['is_default']) {
             $this->stocks->clearDefaultWarehouse((string) $warehouse['SID']);
+        }
+
+        if (array_key_exists('price_type_ids', $input)) {
+            $this->prices->setWarehouseTypes((string) $warehouse['SID'], (array) $input['price_type_ids']);
         }
 
         $this->audit->log($user, 'stocks.warehouse.create', 'stocks', (int) $warehouse['ID'], ['name' => $fields['name']], null);
@@ -1711,6 +1803,8 @@ final class StocksService
             'responsible' => $responsible,
             'active' => ($warehouse['ACTIVE'] ?? 'N') === 'Y',
             'levels' => array_values(array_unique(array_map('intval', $matches[1] ?? []))),
+            'price_types_set' => (int) ($warehouse['PRICE_TYPES_SET'] ?? 0) === 1,
+            'price_type_ids' => $this->prices->warehouseTypeIds((string) $warehouse['SID']),
         ];
     }
 

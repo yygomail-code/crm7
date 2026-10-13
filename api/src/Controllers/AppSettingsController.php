@@ -90,6 +90,9 @@ final class AppSettingsController extends ApiController
             'sort' => (int) $group['sort'],
         ], $this->groups->list());
 
-        return Response::ok(['items' => $items]);
+        return Response::ok([
+            'items' => $items,
+            'has_ungrouped' => $this->groups->hasUngrouped(),
+        ]);
     }
 }

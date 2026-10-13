@@ -866,47 +866,49 @@ async function saveSettings(): Promise<void> {
       </div>
     </div>
 
-    <div class="card">
-      <h2>Типы цен (типы профиля)</h2>
-      <p class="hint">
-        Каждому клиенту можно назначить тип профиля — например, «Оптовая». Цена позиции для клиента
-        берётся по его типу. Если тип не назначен, используется первый в списке.
-      </p>
+    {#if pricesEnabled}
+      <div class="card">
+        <h2>Типы цен (типы профиля)</h2>
+        <p class="hint">
+          Каждому клиенту можно назначить тип профиля — например, «Оптовая». Цена позиции для клиента
+          берётся по его типу. Если тип не назначен, используется первый в списке.
+        </p>
 
-      <div class="price-types">
-        {#each priceTypes as type (type.id)}
-          <div class="pt-row">
-            <input class="pt-title" bind:value={priceTypeDrafts[type.id]} maxlength="255" />
-            <span class="pt-meta">
-              {type.users_count ?? 0} польз. · {type.prices_count ?? 0} цен
-            </span>
-            <Button variant="ghost" disabled={priceTypesBusy} onclick={() => void savePriceType(type)}>
-              Сохранить
-            </Button>
-            <button
-              type="button"
-              class="pt-del"
-              disabled={priceTypesBusy}
-              onclick={() => void removePriceType(type)}
-            >
-              Удалить
-            </button>
-          </div>
-        {/each}
-      </div>
+        <div class="price-types">
+          {#each priceTypes as type (type.id)}
+            <div class="pt-row">
+              <input class="pt-title" bind:value={priceTypeDrafts[type.id]} maxlength="255" />
+              <span class="pt-meta">
+                {type.users_count ?? 0} польз. · {type.prices_count ?? 0} цен
+              </span>
+              <Button variant="ghost" disabled={priceTypesBusy} onclick={() => void savePriceType(type)}>
+                Сохранить
+              </Button>
+              <button
+                type="button"
+                class="pt-del"
+                disabled={priceTypesBusy}
+                onclick={() => void removePriceType(type)}
+              >
+                Удалить
+              </button>
+            </div>
+          {/each}
+        </div>
 
-      <div class="pt-add">
-        <Input label="Новый тип цен" bind:value={newPriceTypeTitle} placeholder="Например: Партнёрская" />
-        <Button
-          variant="ghost"
-          loading={priceTypesBusy}
-          disabled={!newPriceTypeTitle.trim()}
-          onclick={() => void addPriceType()}
-        >
-          Добавить тип
-        </Button>
+        <div class="pt-add">
+          <Input label="Новый тип цен" bind:value={newPriceTypeTitle} placeholder="Например: Партнёрская" />
+          <Button
+            variant="ghost"
+            loading={priceTypesBusy}
+            disabled={!newPriceTypeTitle.trim()}
+            onclick={() => void addPriceType()}
+          >
+            Добавить тип
+          </Button>
+        </div>
       </div>
-    </div>
+    {/if}
 
     <div class="card">
       <h2>Шаблоны писем</h2>

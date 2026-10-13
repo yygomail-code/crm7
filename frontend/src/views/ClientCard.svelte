@@ -17,15 +17,24 @@
     updateClientContacts
   } from '../lib/api/clients';
   import { listManagers, listRequests, requestFilters } from '../lib/api/requests';
-  import type { ClientCard, ClientInterest, ManagerItem, RequestItem, RequestStatus } from '../lib/api/types';
+  import type {
+    AssignedPriceType,
+    ClientCard,
+    ClientInterest,
+    ManagerItem,
+    RequestItem,
+    RequestStatus
+  } from '../lib/api/types';
   import { todayIso } from '../lib/period';
   import { tooltip } from '../lib/actions/tooltip';
   import Button from '../lib/components/ui/Button.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
   import Pagination from '../lib/components/ui/Pagination.svelte';
+  import PriceTypesPicker from '../lib/components/ui/PriceTypesPicker.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
   import StatusBadge from '../lib/components/StatusBadge.svelte';
+  import { appSettings } from '../lib/stores/app-settings.svelte';
   import { auth } from '../lib/stores/auth.svelte';
   import { router } from '../lib/router.svelte';
 
@@ -42,6 +51,7 @@
   let actionNotice = $state('');
   let busy = $state(false);
   let editOpen = $state(false);
+  let pricePickerOpen = $state(false);
   let tab = $state<'summary' | 'requests' | 'interests' | 'history'>('summary');
   let editBusy = $state(false);
   let editForm = $state({ name: '', company: '', inn: '', position: '', phone: '', email: '' });
@@ -79,6 +89,8 @@
   });
 
   const canConfirm = $derived(auth.can('clients.confirm'));
+  const pricesEnabled = $derived(appSettings.pricesEnabled);
+  const canAssignPrices = $derived(pricesEnabled && auth.can('prices.assign'));
   const canManage = $derived(card?.can.manage ?? false);
   const transferInProgress = $derived(
     card?.transfer !== null && card?.transfer !== undefined
@@ -378,6 +390,19 @@
     }
   }
 
+  function onPriceTypesSaved(assigned: AssignedPriceType[]): void {
+    if (card === null) {
+      return;
+    }
+
+    const defaultType = assigned.find((type) => type.is_default) ?? null;
+    card = {
+      ...card,
+      client: { ...card.client, price_types: assigned, price_type_id: defaultType?.id ?? null }
+    };
+    actionNotice = 'Типы цен обновлены';
+  }
+
   function formatDateTime(value: string): string {
     return value ? value.replace('T', ' ').slice(0, 16) : '';
   }
@@ -516,6 +541,11 @@
           {#if card.can.assign}
             <Button variant="ghost" disabled={busy} onclick={openAssign}>Назначить</Button>
           {/if}
+          {#if canAssignPrices}
+            <Button variant="ghost" disabled={busy} onclick={() => (pricePickerOpen = true)}>
+              Типы цен
+            </Button>
+          {/if}
           {#if canManage}
             {#if canStartTransfer}
               <Button variant="ghost" disabled={busy} onclick={openTransfer}>Передать</Button>
@@ -573,6 +603,20 @@
           <dt>Последняя активность</dt>
           <dd>{card.client.last_seen_at ? formatDateTime(card.client.last_seen_at) : '—'}</dd>
         </div>
+        {#if pricesEnabled}
+          <div>
+            <dt>Типы цен</dt>
+            <dd>
+              {#if card.client.price_types.length > 0}
+                {card.client.price_types
+                  .map((type) => (type.is_default ? `${type.title} (по умолч.)` : type.title))
+                  .join(', ')}
+              {:else}
+                —
+              {/if}
+            </dd>
+          </div>
+        {/if}
       </dl>
 
       <div class="manager-row">
@@ -1000,6 +1044,15 @@
         <Button loading={managerBusy} onclick={() => void saveTransfer()}>Передать</Button>
       </div>
     </Modal>
+
+    <PriceTypesPicker
+      open={pricePickerOpen}
+      userId={card.client.id}
+      userName={card.client.name}
+      assigned={card.client.price_types}
+      onclose={() => (pricePickerOpen = false)}
+      onsaved={onPriceTypesSaved}
+    />
   {/if}
 </section>
 

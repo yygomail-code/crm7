@@ -24,6 +24,7 @@
     NomenclatureItem,
     PriceType,
     StockCompositionItem,
+    StockLevel,
     StockLevelEntry,
     StockPhoto,
     StockWarehouse
@@ -84,7 +85,7 @@
   let quantity = $state('0');
   let description = $state('');
   let groupId = $state(0);
-  let prices = $state<Record<string, string>>({});
+  let warehousePrices = $state<Record<string, Record<string, string>>>({});
 
   let warehouses = $state<StockWarehouse[]>([]);
   let warehouseId = $state(0);
@@ -92,7 +93,7 @@
   let groups = $state<ItemGroup[]>([]);
   let priceTypes = $state<PriceType[]>([]);
 
-  let tab = $state<'main' | 'levels' | 'composition'>('main');
+  let tab = $state<'main' | 'levels' | 'prices' | 'composition'>('main');
   let levels = $state<StockLevelEntry[]>([]);
   let levelEdits = $state<Record<string, string>>({});
 
@@ -114,6 +115,36 @@
   function typeTitleOf(code: string): string {
     return itemTypes.find((type) => type.code === code)?.title ?? TYPE_TITLES[code] ?? code;
   }
+
+  function buildWarehousePrices(item: StockLevel): Record<string, Record<string, string>> {
+    const matrix = item.warehouse_prices ?? {};
+    const legacy = item.prices ?? {};
+    const result: Record<string, Record<string, string>> = {};
+
+    for (const level of levels) {
+      const sid = level.warehouse_sid;
+      const source: Record<string, number> = {
+        ...(level.current ? legacy : {}),
+        ...(matrix[sid] ?? {})
+      };
+      const row: Record<string, string> = {};
+
+      for (const type of priceTypes) {
+        const value = source[String(type.id)];
+        row[String(type.id)] = value === undefined || value === null ? '' : String(value);
+      }
+
+      result[sid] = row;
+    }
+
+    return result;
+  }
+
+  const priceColumns = $derived(
+    priceTypes.filter((type) =>
+      levels.some((level) => (level.price_type_ids ?? []).includes(type.id))
+    )
+  );
 
   const currentLevel = $derived(levels.find((level) => level.current) ?? null);
   const totalQuantity = $derived(
@@ -173,6 +204,7 @@
   async function load(): Promise<void> {
     loading = true;
     error = '';
+    let loadedItem: StockLevel | null = null;
 
     try {
       if (isNew) {
@@ -214,10 +246,8 @@
         photos = item.photos ?? [];
         levels = item.levels ?? [];
         levelEdits = Object.fromEntries(levels.map((level) => [level.warehouse_sid, String(level.quantity)]));
-        prices = Object.fromEntries(
-          Object.entries(item.prices ?? {}).map(([typeId, value]) => [typeId, String(value)])
-        );
         void loadPhotoUrls();
+        loadedItem = item;
       }
 
       if (pricesEnabled) {
@@ -228,10 +258,8 @@
         groups = (await listItemGroups().catch(() => ({ items: [] }))).items;
       }
 
-      for (const type of priceTypes) {
-        if (prices[String(type.id)] === undefined) {
-          prices[String(type.id)] = '';
-        }
+      if (loadedItem !== null) {
+        warehousePrices = buildWarehousePrices(loadedItem);
       }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить позицию';
@@ -401,25 +429,37 @@
       return;
     }
 
-    const pricePayload: Record<string, number | null> = {};
+    const pricePayload: Record<string, Record<string, number | null>> = {};
 
     if (pricesEnabled) {
-      for (const type of priceTypes) {
-        const raw = (prices[String(type.id)] ?? '').trim();
+      for (const level of levels) {
+        const row = warehousePrices[level.warehouse_sid] ?? {};
+        const usedTypes = level.price_type_ids ?? [];
+        const warehouseRow: Record<string, number | null> = {};
 
-        if (raw === '') {
-          pricePayload[String(type.id)] = null;
-          continue;
+        for (const type of priceTypes) {
+          if (!usedTypes.includes(type.id)) {
+            continue;
+          }
+
+          const raw = (row[String(type.id)] ?? '').trim();
+
+          if (raw === '') {
+            warehouseRow[String(type.id)] = null;
+            continue;
+          }
+
+          const value = Number(raw.replace(',', '.'));
+
+          if (!Number.isFinite(value) || value < 0) {
+            error = `Некорректная цена «${type.title}» для склада «${level.warehouse_name}»`;
+            return;
+          }
+
+          warehouseRow[String(type.id)] = value;
         }
 
-        const value = Number(raw.replace(',', '.'));
-
-        if (!Number.isFinite(value) || value < 0) {
-          error = `Некорректная цена «${type.title}»`;
-          return;
-        }
-
-        pricePayload[String(type.id)] = value;
+        pricePayload[level.warehouse_sid] = warehouseRow;
       }
     }
 
@@ -470,7 +510,7 @@
         type: itemType,
         quantity: qty,
         description: description.trim(),
-        ...(pricesEnabled && priceTypes.length > 0 ? { prices: pricePayload } : {}),
+        ...(pricesEnabled && priceColumns.length > 0 ? { warehouse_prices: pricePayload } : {}),
         ...(groupsEnabled ? { group_id: groupId > 0 ? groupId : null } : {}),
         ...(levelsPayload.length > 0 ? { levels: levelsPayload } : {}),
         ...(isSet ? { composition: compositionPayload } : {})
@@ -489,20 +529,10 @@
         quantity: Number(String(levelEdits[level.warehouse_sid] ?? level.quantity).replace(',', '.'))
       }));
 
-      const savedPrices: Record<string, number | null> = result.item.prices ?? {};
-      const nextPrices: Record<string, string> = { ...prices };
-
-      for (const [typeId, value] of Object.entries(savedPrices)) {
-        nextPrices[typeId] = value === null ? '' : String(value);
+      if (result.item.warehouse_prices) {
+        warehousePrices = buildWarehousePrices(result.item);
       }
 
-      for (const type of priceTypes) {
-        if (nextPrices[String(type.id)] === undefined) {
-          nextPrices[String(type.id)] = '';
-        }
-      }
-
-      prices = nextPrices;
       message = 'Изменения сохранены';
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить позицию';
@@ -647,6 +677,15 @@
             <button type="button" class:active={tab === 'levels'} onclick={() => (tab = 'levels')}>
               Количество
             </button>
+            {#if pricesEnabled && priceColumns.length > 0}
+              <button
+                type="button"
+                class:active={tab === 'prices'}
+                onclick={() => (tab = 'prices')}
+              >
+                Цены
+              </button>
+            {/if}
             {#if isSet}
               <button
                 type="button"
@@ -726,16 +765,6 @@
             ></textarea>
           </label>
 
-          {#if pricesEnabled && priceTypes.length > 0}
-            <div class="prices">
-              <span class="label">Цены</span>
-              <div class="row">
-                {#each priceTypes as type (type.id)}
-                  <Input label={type.title} bind:value={prices[String(type.id)]} placeholder="0,00" />
-                {/each}
-              </div>
-            </div>
-          {/if}
         </div>
         {:else if tab === 'levels'}
           <div class="levels">
@@ -759,6 +788,51 @@
                 <span class="level-date">{level.actual_date ? formatDate(level.actual_date) : '—'}</span>
               </div>
             {/each}
+          </div>
+        {:else if tab === 'prices'}
+          <div class="price-table">
+            <p class="hint">
+              Цены по складам. Для склада доступны только отмеченные в его настройках типы цен;
+              для остальных — прочерк.
+            </p>
+
+            <div class="pt-scroll">
+              <table>
+                <thead>
+                  <tr>
+                    <th class="pt-wh">Склад</th>
+                    {#each priceColumns as type (type.id)}
+                      <th>{type.title}</th>
+                    {/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each levels as level (level.warehouse_sid)}
+                    <tr class:current={level.current}>
+                      <td class="pt-wh">
+                        <span class="pt-wh-name">{level.warehouse_name}</span>
+                        {#if level.current}<span class="tag">текущий</span>{/if}
+                      </td>
+                      {#each priceColumns as type (type.id)}
+                        <td>
+                          {#if (level.price_type_ids ?? []).includes(type.id)}
+                            <input
+                              type="text"
+                              inputmode="decimal"
+                              placeholder="0,00"
+                              disabled={!canEdit}
+                              bind:value={warehousePrices[level.warehouse_sid][String(type.id)]}
+                            />
+                          {:else}
+                            <span class="pt-dash">—</span>
+                          {/if}
+                        </td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
           </div>
         {:else}
           <div class="levels">
@@ -1106,10 +1180,101 @@
     box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
   }
 
-  .prices {
+  .price-table {
     display: flex;
     flex-direction: column;
-    gap: var(--space-1);
+    gap: var(--space-3);
+  }
+
+  .pt-scroll {
+    max-height: 70vh;
+    overflow: auto;
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--radius-sm);
+  }
+
+  .price-table table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    min-width: 420px;
+  }
+
+  .price-table th,
+  .price-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-secondary);
+    text-align: left;
+    font-size: 14px;
+    white-space: nowrap;
+  }
+
+  .price-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background: color-mix(in srgb, var(--text) 4%, var(--surface));
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .price-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .price-table tbody tr.current {
+    background: var(--focus-ring);
+  }
+
+  .pt-wh {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    border-right: 1px solid var(--border-secondary);
+    background: var(--surface);
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .price-table thead th.pt-wh {
+    z-index: 3;
+    background: color-mix(in srgb, var(--text) 4%, var(--surface));
+  }
+
+  .price-table tbody tr.current .pt-wh {
+    background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+  }
+
+  .pt-wh-name {
+    margin-right: var(--space-2);
+  }
+
+  .price-table td input {
+    width: 100%;
+    min-width: 90px;
+    height: 32px;
+    padding: 0 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
+    outline: none;
+  }
+
+  .price-table td input:focus {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
+  }
+
+  .price-table td input:disabled {
+    background: var(--fill-tertiary);
+    color: var(--text-description);
+  }
+
+  .pt-dash {
+    color: var(--text-description);
   }
 
   .tabs {

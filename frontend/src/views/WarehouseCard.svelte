@@ -15,7 +15,8 @@
     type WarehouseUser
   } from '../lib/api/stocks';
   import { listManagers } from '../lib/api/requests';
-  import type { ManagerItem } from '../lib/api/types';
+  import { listPriceTypes } from '../lib/api/prices';
+  import type { ManagerItem, PriceType } from '../lib/api/types';
   import { appSettings } from '../lib/stores/app-settings.svelte';
   import { router } from '../lib/router.svelte';
   import Button from '../lib/components/ui/Button.svelte';
@@ -58,7 +59,9 @@
   let error = $state('');
   let notice = $state('');
 
-  let tab = $state<'main' | 'contacts' | 'access'>('main');
+  let tab = $state<'main' | 'contacts' | 'prices' | 'access'>('main');
+  let priceTypes = $state<PriceType[]>([]);
+  let priceTypeIds = $state<number[]>([]);
 
   let name = $state('');
   let name1c = $state('');
@@ -134,6 +137,14 @@
       }
 
       managers = (await listManagers()).items;
+
+      if (appSettings.pricesEnabled) {
+        priceTypes = (await listPriceTypes().catch(() => ({ items: [] }))).items;
+
+        if (isNew) {
+          priceTypeIds = priceTypes.map((type) => type.id);
+        }
+      }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить склад';
     } finally {
@@ -159,6 +170,7 @@
     responsibleSid = data.responsible?.sid ?? '';
     levels = [...data.levels];
     active = data.active;
+    priceTypeIds = [...(data.price_type_ids ?? [])];
   }
 
   async function save(): Promise<void> {
@@ -183,7 +195,8 @@
         is_default: isDefault,
         allow_orders: allowOrders,
         in_reports: inReports,
-        responsible_sid: responsibleSid
+        responsible_sid: responsibleSid,
+        ...(appSettings.pricesEnabled ? { price_type_ids: priceTypeIds } : {})
       };
 
       if (isNew) {
@@ -207,6 +220,12 @@
     levels = levels.includes(level) ? levels.filter((item) => item !== level) : [...levels, level];
   }
 
+  function togglePriceType(id: number): void {
+    priceTypeIds = priceTypeIds.includes(id)
+      ? priceTypeIds.filter((item) => item !== id)
+      : [...priceTypeIds, id];
+  }
+
   function responsibleLabel(): string {
     const manager = managers.find((item) => item.sid === responsibleSid);
 
@@ -220,6 +239,19 @@
 
   function pickResponsible(manager: ManagerItem): void {
     responsibleSid = manager.sid;
+
+    if (contactName.trim() === '') {
+      contactName = manager.name;
+    }
+
+    if (phone.trim() === '') {
+      phone = manager.phone;
+    }
+
+    if (email.trim() === '') {
+      email = manager.email;
+    }
+
     respOpen = false;
   }
 
@@ -364,6 +396,11 @@
       <button type="button" class:active={tab === 'contacts'} onclick={() => (tab = 'contacts')}>
         Контакты
       </button>
+      {#if appSettings.pricesEnabled}
+        <button type="button" class:active={tab === 'prices'} onclick={() => (tab = 'prices')}>
+          Цены
+        </button>
+      {/if}
       {#if !isNew}
         <button type="button" class:active={tab === 'access'} onclick={() => (tab = 'access')}>
           Доступ{users.length > 0 ? ` (${users.length})` : ''}
@@ -392,13 +429,16 @@
             </select>
           </label>
           <div class="field">
-            <span class="field-label">Ответственный</span>
+            <span class="field-label">Ответственный (сотрудник)</span>
             <button type="button" class="picker" onclick={openResponsible}>
               <span class="picker-value" class:picker-empty={responsibleSid === ''}>
                 {responsibleLabel()}
               </span>
               <span class="picker-icon"><Icon name="arrow-down" size={14} /></span>
             </button>
+            <span class="field-hint">
+              Сотрудник системы, ответственный за склад. Контактные данные — на вкладке «Контакты».
+            </span>
           </div>
         </div>
 
@@ -442,8 +482,12 @@
         </div>
 
         <h2>Контакты</h2>
+        <p class="hint contacts-hint">
+          К кому и как обращаться по складу. Может совпадать с ответственным сотрудником или быть
+          отдельным лицом (например, кладовщик). Подставляется из профиля ответственного, если пусто.
+        </p>
         <div class="grid">
-          <Input label="Контактное лицо" bind:value={contactName} />
+          <Input label="Контактное лицо (для связи)" bind:value={contactName} />
           <Input label="Телефон" bind:value={phone} />
           <Input label="E-mail" bind:value={email} />
         </div>
@@ -457,6 +501,35 @@
             placeholder="Внутренняя заметка о складе"
           ></textarea>
         </label>
+
+        <div class="actions">
+          <Button loading={busy} onclick={() => void save()}>{isNew ? 'Создать' : 'Сохранить'}</Button>
+        </div>
+      </div>
+    {:else if tab === 'prices'}
+      <div class="card">
+        <h2>Типы цен склада</h2>
+        <p class="hint">
+          Отметьте типы цен, которые ведёт склад. В карточке позиции цены этого склада
+          редактируются только по отмеченным типам; для остальных будет прочерк.
+        </p>
+
+        {#if priceTypes.length === 0}
+          <p class="hint">Типы цен не заданы. Добавьте их в «Настройках» → «Типы цен».</p>
+        {:else}
+          <div class="flags">
+            {#each priceTypes as priceType (priceType.id)}
+              <label class="checkbox">
+                <input
+                  type="checkbox"
+                  checked={priceTypeIds.includes(priceType.id)}
+                  onchange={() => togglePriceType(priceType.id)}
+                />
+                {priceType.title}
+              </label>
+            {/each}
+          </div>
+        {/if}
 
         <div class="actions">
           <Button loading={busy} onclick={() => void save()}>{isNew ? 'Создать' : 'Сохранить'}</Button>
@@ -781,6 +854,16 @@
   .field-label {
     font-size: 14px;
     color: var(--text);
+  }
+
+  .field-hint {
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-description);
+  }
+
+  .contacts-hint {
+    margin: 0 0 var(--space-3);
   }
 
   select,

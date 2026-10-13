@@ -38,6 +38,7 @@ final class UserController extends ApiController
             'name' => (string) $row['name'],
             'level' => (int) $row['level'],
             'email' => (string) ($row['email'] ?? ''),
+            'phone' => (string) ($row['phone'] ?? ''),
         ], $this->users->listManagers());
 
         return Response::ok(['items' => $items]);
@@ -116,6 +117,24 @@ final class UserController extends ApiController
 
         $result = $this->admin->resetPassword($user, $capabilities, (int) ($params['id'] ?? 0));
         $this->audit($request, $user, 'user.reset_password', 'user', (int) ($params['id'] ?? 0));
+
+        return Response::ok($result);
+    }
+
+    public function setPriceTypes(Request $request, array $params): Response
+    {
+        $this->denyInDemo();
+
+        [$user, $capabilities] = $this->context($request);
+
+        $id = (int) ($params['id'] ?? 0);
+        $result = $this->admin->setPriceTypes($user, $capabilities, $id, $request->bodyAll());
+        $this->audit($request, $user, 'user.price_types', 'user', $id, [
+            'price_type_ids' => array_map(
+                static fn (array $type): int => (int) $type['id'],
+                $result['price_types']
+            ),
+        ]);
 
         return Response::ok($result);
     }

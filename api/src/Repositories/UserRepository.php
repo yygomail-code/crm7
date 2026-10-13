@@ -199,7 +199,8 @@ final class UserRepository
     public function listManagers(): array
     {
         $stmt = Database::pdo()->query(
-            "SELECT ID AS id, SID AS sid, LOGIN AS login, FULL_NAME AS name, LEVEL AS level, EMAIL AS email
+            "SELECT ID AS id, SID AS sid, LOGIN AS login, FULL_NAME AS name, LEVEL AS level,
+                    EMAIL AS email, PHONE AS phone
              FROM users
              WHERE ACTIVE = 'Y' AND STATUS = 'Y' AND LEVEL IN (10, 50, 90)
              ORDER BY FULL_NAME ASC

@@ -185,6 +185,8 @@ export interface WarehouseCardData {
   responsible: WarehouseResponsible | null;
   active: boolean;
   levels: number[];
+  price_types_set: boolean;
+  price_type_ids: number[];
 }
 
 export interface WarehousePayload {
@@ -204,6 +206,7 @@ export interface WarehousePayload {
   allow_orders: boolean;
   in_reports: boolean;
   responsible_sid: string;
+  price_type_ids?: number[];
 }
 
 export interface WarehouseUser {

@@ -128,6 +128,133 @@ final class PriceService
     }
 
     /**
+     * Закреплённые типы цен пользователя; если ничего не закреплено — тип по умолчанию.
+     *
+     * @return array<int, array{id:int,title:string,is_default:bool}>
+     */
+    public function assignedTypesForUser(?array $user): array
+    {
+        if ($user === null) {
+            return [];
+        }
+
+        $userId = (int) ($user['ID'] ?? 0);
+
+        if ($userId > 0) {
+            $assigned = $this->prices->assignedTypes($userId);
+
+            if ($assigned !== []) {
+                return $assigned;
+            }
+        }
+
+        $defaultId = $this->effectiveTypeIdForUser($user);
+
+        if ($defaultId === null) {
+            return [];
+        }
+
+        $type = $this->prices->findType($defaultId);
+
+        return $type !== null ? [[
+            'id' => (int) $type['id'],
+            'title' => (string) $type['title'],
+            'is_default' => true,
+        ]] : [];
+    }
+
+    /**
+     * @return int[]
+     */
+    public function assignedTypeIdsForUser(?array $user): array
+    {
+        return array_map(static fn (array $row): int => (int) $row['id'], $this->assignedTypesForUser($user));
+    }
+
+    /**
+     * Заменяет закреплённый набор типов цен пользователя и тип по умолчанию.
+     * Тип по умолчанию синхронизируется с users.price_type_id (расчёты заявок и заказов).
+     *
+     * @param array<int, mixed> $typeIds
+     * @return array<int, array{id:int,title:string,is_default:bool}>
+     */
+    public function setAssignedTypes(int $userId, array $typeIds, ?int $defaultId): array
+    {
+        $ids = [];
+
+        foreach ($typeIds as $value) {
+            $id = (int) $value;
+
+            if ($id > 0 && !in_array($id, $ids, true) && $this->prices->findType($id) !== null) {
+                $ids[] = $id;
+            }
+        }
+
+        if ($ids === []) {
+            $defaultId = null;
+        } elseif ($defaultId === null || !in_array($defaultId, $ids, true)) {
+            $defaultId = $ids[0];
+        }
+
+        $this->prices->replaceAssignedTypes($userId, $ids, $defaultId);
+        $this->prices->setUserDefaultType($userId, $defaultId);
+
+        return $this->assignedTypesForUser(['ID' => $userId, 'price_type_id' => $defaultId]);
+    }
+
+    /**
+     * Типы цен, используемые складом. Если настройка не задана — все типы.
+     *
+     * @return int[]
+     */
+    public function warehouseTypeIds(string $stockSid): array
+    {
+        $config = $this->prices->warehousePriceTypes($stockSid);
+
+        return $config['set'] ? $config['ids'] : $this->prices->allTypeIds();
+    }
+
+    /**
+     * @param string[] $stockSids
+     * @return array<string, int[]>
+     */
+    public function warehouseTypeIdsForStocks(array $stockSids): array
+    {
+        $configs = $this->prices->warehousePriceTypesForStocks($stockSids);
+        $all = null;
+        $result = [];
+
+        foreach ($configs as $sid => $config) {
+            if ($config['set']) {
+                $result[$sid] = $config['ids'];
+            } else {
+                $all ??= $this->prices->allTypeIds();
+                $result[$sid] = $all;
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param array<int, mixed> $typeIds
+     */
+    public function setWarehouseTypes(string $stockSid, array $typeIds): void
+    {
+        $ids = [];
+
+        foreach ($typeIds as $value) {
+            $id = (int) $value;
+
+            if ($id > 0 && !in_array($id, $ids, true) && $this->prices->findType($id) !== null) {
+                $ids[] = $id;
+            }
+        }
+
+        $this->prices->setWarehousePriceTypes($stockSid, $ids);
+    }
+
+    /**
      * Дополняет позиции заявки ценой (снапшот) и типом цен.
      * Цена берётся по складу позиции: остаток → склад, либо склад заявки по названию.
      *
@@ -313,6 +440,16 @@ final class PriceService
     public function pricesForStockItemsAll(string $stockSid, array $nameSids): array
     {
         return $this->prices->pricesForStockItemsAll($stockSid, $nameSids);
+    }
+
+    /**
+     * @param array<int, string> $nameSids
+     * @param int[] $typeIds
+     * @return array<string, array<int, float>>
+     */
+    public function pricesForStockItemsByTypes(string $stockSid, array $nameSids, array $typeIds): array
+    {
+        return $this->prices->pricesForStockItemsByTypes($stockSid, $nameSids, $typeIds);
     }
 
     /**

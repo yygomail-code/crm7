@@ -365,6 +365,7 @@ export interface ManagerItem {
   name: string;
   level: number;
   email: string;
+  phone: string;
 }
 
 export interface SystemSettings {
@@ -422,6 +423,7 @@ export interface AdminUser {
   last_seen_at: string | null;
   price_type_id: number | null;
   price_type_title: string | null;
+  price_types: AssignedPriceType[];
 }
 
 export interface PriceType {
@@ -431,6 +433,12 @@ export interface PriceType {
   sort: number;
   users_count?: number;
   prices_count?: number;
+}
+
+export interface AssignedPriceType {
+  id: number;
+  title: string;
+  is_default: boolean;
 }
 
 export interface ItemGroup {
@@ -540,6 +548,7 @@ export interface StockLevelEntry {
   unit: string;
   actual_date: string | null;
   current: boolean;
+  price_type_ids?: number[];
 }
 
 export interface ItemType {
@@ -566,6 +575,13 @@ export interface NomenclatureItem {
   article: string;
 }
 
+export interface PriceListItem {
+  id: number;
+  title: string;
+  is_default: boolean;
+  price: number | null;
+}
+
 export interface StockLevel {
   id: number;
   name: string;
@@ -574,12 +590,14 @@ export interface StockLevel {
   description: string;
   actual_date: string | null;
   price: number | null;
+  price_list?: PriceListItem[];
   prices?: Record<string, number>;
   group_id: number | null;
   group_title: string;
   warehouse_id: number;
   warehouse_name: string;
   levels?: StockLevelEntry[];
+  warehouse_prices?: Record<string, Record<string, number>>;
   article?: string;
   type?: string;
   active?: boolean;
@@ -595,6 +613,7 @@ export interface StockItemPayload {
   prices?: Record<string, number | null>;
   group_id?: number | null;
   levels?: { warehouse_sid: string; quantity: number }[];
+  warehouse_prices?: Record<string, Record<string, number | null>>;
   article?: string;
   type?: string;
   composition?: { item_sid: string; quantity: number }[];
@@ -744,6 +763,8 @@ export interface ClientCard {
     reg_state: string;
     registered_at: string;
     last_seen_at: string | null;
+    price_type_id: number | null;
+    price_types: AssignedPriceType[];
   };
   manager: ClientManagerInfo | null;
   transfer: ClientTransferInfo | null;

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Repositories;
 
 use App\Core\Database;
+use Throwable;
 
 final class PriceRepository
 {
@@ -58,11 +59,245 @@ final class PriceRepository
         return $value === false ? null : (int) $value;
     }
 
+    /**
+     * Закреплённые типы цен пользователя (по умолчанию — первым).
+     *
+     * @return array<int, array{id:int,title:string,is_default:bool}>
+     */
+    public function assignedTypes(int $userId): array
+    {
+        if ($userId <= 0) {
+            return [];
+        }
+
+        $stmt = Database::pdo()->prepare(
+            'SELECT pt.ID AS id, pt.TITLE AS title, upt.is_default AS is_default
+             FROM user_price_types upt
+             JOIN price_types pt ON pt.ID = upt.price_type_id
+             WHERE upt.user_id = ?
+             ORDER BY upt.is_default DESC, upt.sort ASC, pt.SORT ASC, pt.ID ASC'
+        );
+        $stmt->execute([$userId]);
+
+        return $this->mapAssignedRows($stmt->fetchAll() ?: []);
+    }
+
+    /**
+     * @param int[] $userIds
+     * @return array<int, array<int, array{id:int,title:string,is_default:bool}>>
+     */
+    public function assignedTypesForUsers(array $userIds): array
+    {
+        $userIds = array_values(array_unique(array_filter(
+            array_map('intval', $userIds),
+            static fn (int $id): bool => $id > 0
+        )));
+
+        if ($userIds === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($userIds), '?'));
+        $stmt = Database::pdo()->prepare(
+            'SELECT upt.user_id AS user_id, pt.ID AS id, pt.TITLE AS title, upt.is_default AS is_default
+             FROM user_price_types upt
+             JOIN price_types pt ON pt.ID = upt.price_type_id
+             WHERE upt.user_id IN (' . $placeholders . ')
+             ORDER BY upt.is_default DESC, upt.sort ASC, pt.SORT ASC, pt.ID ASC'
+        );
+        $stmt->execute($userIds);
+
+        $map = [];
+
+        foreach ($stmt->fetchAll() ?: [] as $row) {
+            $map[(int) $row['user_id']][] = [
+                'id' => (int) $row['id'],
+                'title' => (string) $row['title'],
+                'is_default' => (int) $row['is_default'] === 1,
+            ];
+        }
+
+        return $map;
+    }
+
+    /**
+     * @return int[]
+     */
+    public function assignedTypeIds(int $userId): array
+    {
+        return array_map(static fn (array $row): int => (int) $row['id'], $this->assignedTypes($userId));
+    }
+
+    /**
+     * Полностью заменяет закреплённый набор типов цен пользователя.
+     *
+     * @param int[] $typeIds
+     */
+    public function replaceAssignedTypes(int $userId, array $typeIds, ?int $defaultId): void
+    {
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $pdo->prepare('DELETE FROM user_price_types WHERE user_id = ?')->execute([$userId]);
+
+            $insert = $pdo->prepare(
+                'INSERT INTO user_price_types (user_id, price_type_id, sort, is_default) VALUES (?, ?, ?, ?)'
+            );
+
+            $sort = 0;
+
+            foreach ($typeIds as $typeId) {
+                $insert->execute([$userId, $typeId, $sort, $typeId === $defaultId ? 1 : 0]);
+                $sort += 10;
+            }
+
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+
+            throw $exception;
+        }
+    }
+
+    public function setUserDefaultType(int $userId, ?int $typeId): void
+    {
+        Database::pdo()->prepare('UPDATE users SET price_type_id = ? WHERE ID = ?')->execute([$typeId, $userId]);
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @return array<int, array{id:int,title:string,is_default:bool}>
+     */
+    private function mapAssignedRows(array $rows): array
+    {
+        return array_map(static fn (array $row): array => [
+            'id' => (int) $row['id'],
+            'title' => (string) $row['title'],
+            'is_default' => (int) $row['is_default'] === 1,
+        ], $rows);
+    }
+
     public function nextSort(): int
     {
         $value = Database::pdo()->query('SELECT COALESCE(MAX(SORT), 0) + 10 FROM price_types')->fetchColumn();
 
         return (int) $value;
+    }
+
+    /**
+     * @return int[]
+     */
+    public function allTypeIds(): array
+    {
+        $rows = Database::pdo()->query('SELECT ID AS id FROM price_types ORDER BY SORT ASC, ID ASC')->fetchAll() ?: [];
+
+        return array_map('intval', array_column($rows, 'id'));
+    }
+
+    /**
+     * Настроенный набор типов цен склада и признак «настройка задана».
+     *
+     * @return array{set:bool,ids:int[]}
+     */
+    public function warehousePriceTypes(string $stockSid): array
+    {
+        if ($stockSid === '') {
+            return ['set' => false, 'ids' => []];
+        }
+
+        $pdo = Database::pdo();
+        $flagStmt = $pdo->prepare('SELECT PRICE_TYPES_SET FROM stocks WHERE SID = ? LIMIT 1');
+        $flagStmt->execute([$stockSid]);
+        $flag = $flagStmt->fetchColumn();
+
+        $stmt = $pdo->prepare(
+            'SELECT price_type_id FROM stock_price_types WHERE stock_sid = ? ORDER BY sort ASC, price_type_id ASC'
+        );
+        $stmt->execute([$stockSid]);
+
+        return [
+            'set' => $flag !== false && (int) $flag === 1,
+            'ids' => array_map('intval', array_column($stmt->fetchAll() ?: [], 'price_type_id')),
+        ];
+    }
+
+    /**
+     * @param string[] $stockSids
+     * @return array<string, array{set:bool,ids:int[]}>
+     */
+    public function warehousePriceTypesForStocks(array $stockSids): array
+    {
+        $stockSids = array_values(array_unique(array_filter(
+            $stockSids,
+            static fn ($sid): bool => is_string($sid) && $sid !== ''
+        )));
+
+        if ($stockSids === []) {
+            return [];
+        }
+
+        $placeholders = implode(',', array_fill(0, count($stockSids), '?'));
+        $pdo = Database::pdo();
+        $map = [];
+
+        foreach ($stockSids as $sid) {
+            $map[$sid] = ['set' => false, 'ids' => []];
+        }
+
+        $flagStmt = $pdo->prepare('SELECT SID, PRICE_TYPES_SET FROM stocks WHERE SID IN (' . $placeholders . ')');
+        $flagStmt->execute($stockSids);
+
+        foreach ($flagStmt->fetchAll() ?: [] as $row) {
+            $map[(string) $row['SID']]['set'] = (int) $row['PRICE_TYPES_SET'] === 1;
+        }
+
+        $stmt = $pdo->prepare(
+            'SELECT stock_sid, price_type_id FROM stock_price_types
+             WHERE stock_sid IN (' . $placeholders . ')
+             ORDER BY sort ASC, price_type_id ASC'
+        );
+        $stmt->execute($stockSids);
+
+        foreach ($stmt->fetchAll() ?: [] as $row) {
+            $map[(string) $row['stock_sid']]['ids'][] = (int) $row['price_type_id'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * Полностью заменяет набор типов цен склада и помечает настройку заданной.
+     *
+     * @param int[] $typeIds
+     */
+    public function setWarehousePriceTypes(string $stockSid, array $typeIds): void
+    {
+        if ($stockSid === '') {
+            return;
+        }
+
+        $pdo = Database::pdo();
+        $pdo->beginTransaction();
+
+        try {
+            $pdo->prepare('DELETE FROM stock_price_types WHERE stock_sid = ?')->execute([$stockSid]);
+
+            $insert = $pdo->prepare('INSERT INTO stock_price_types (stock_sid, price_type_id, sort) VALUES (?, ?, ?)');
+            $sort = 0;
+
+            foreach ($typeIds as $typeId) {
+                $insert->execute([$stockSid, $typeId, $sort]);
+                $sort += 10;
+            }
+
+            $pdo->prepare('UPDATE stocks SET PRICE_TYPES_SET = 1 WHERE SID = ?')->execute([$stockSid]);
+            $pdo->commit();
+        } catch (Throwable $exception) {
+            $pdo->rollBack();
+
+            throw $exception;
+        }
     }
 
     public function createType(string $code, string $title, int $sort): int
@@ -142,6 +377,45 @@ final class PriceRepository
         $stmt = Database::pdo()->prepare(
             'SELECT name_sid, price_type_id, price FROM nomenclature_prices
              WHERE stock_sid = ? AND name_sid IN (' . $placeholders . ')'
+        );
+        $stmt->execute($params);
+
+        $map = [];
+
+        foreach ($stmt->fetchAll() ?: [] as $row) {
+            $map[(string) $row['name_sid']][(int) $row['price_type_id']] = (float) $row['price'];
+        }
+
+        return $map;
+    }
+
+    /**
+     * Цены позиций склада по заданным типам: name_sid => (price_type_id => price).
+     *
+     * @param array<int, string> $nameSids
+     * @param int[] $typeIds
+     * @return array<string, array<int, float>>
+     */
+    public function pricesForStockItemsByTypes(string $stockSid, array $nameSids, array $typeIds): array
+    {
+        $nameSids = array_values(array_unique(array_filter($nameSids, static fn (string $sid): bool => $sid !== '')));
+        $typeIds = array_values(array_unique(array_filter(
+            array_map('intval', $typeIds),
+            static fn (int $id): bool => $id > 0
+        )));
+
+        if ($stockSid === '' || $nameSids === [] || $typeIds === []) {
+            return [];
+        }
+
+        $namePlaceholders = implode(',', array_fill(0, count($nameSids), '?'));
+        $typePlaceholders = implode(',', array_fill(0, count($typeIds), '?'));
+        $params = array_merge([$stockSid], $typeIds, $nameSids);
+
+        $stmt = Database::pdo()->prepare(
+            'SELECT name_sid, price_type_id, price FROM nomenclature_prices
+             WHERE stock_sid = ? AND price_type_id IN (' . $typePlaceholders . ')
+               AND name_sid IN (' . $namePlaceholders . ')'
         );
         $stmt->execute($params);
 

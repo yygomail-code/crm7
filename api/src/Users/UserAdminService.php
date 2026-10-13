@@ -7,6 +7,7 @@ namespace App\Users;
 use App\Audit\AuditService;
 use App\Core\Database;
 use App\Http\HttpException;
+use App\Prices\PriceService;
 use App\Repositories\PriceRepository;
 use App\Repositories\TokenRepository;
 use App\Repositories\UserHistoryRepository;
@@ -25,7 +26,8 @@ final class UserAdminService
         private readonly UserHistoryRepository $history = new UserHistoryRepository(),
         private readonly TokenRepository $tokens = new TokenRepository(),
         private readonly AuditService $audit = new AuditService(),
-        private readonly PriceRepository $prices = new PriceRepository()
+        private readonly PriceRepository $prices = new PriceRepository(),
+        private readonly PriceService $priceService = new PriceService()
     ) {
     }
 
@@ -70,24 +72,34 @@ final class UserAdminService
              LIMIT ' . max(1, min(100, $perPage)) . ' OFFSET ' . $offset
         );
         $stmt->execute($params);
+        $rows = $stmt->fetchAll() ?: [];
+        $assignedMap = $this->prices->assignedTypesForUsers(array_map(
+            static fn (array $row): int => (int) $row['id'],
+            $rows
+        ));
 
-        $items = array_map(static fn (array $row): array => [
-            'id' => (int) $row['id'],
-            'login' => (string) ($row['login'] ?? ''),
-            'name' => (string) ($row['name'] ?? ''),
-            'email' => (string) ($row['email'] ?? ''),
-            'phone' => (string) ($row['phone'] ?? ''),
-            'company' => (string) ($row['company'] ?? ''),
-            'inn' => (string) ($row['inn'] ?? ''),
-            'position' => (string) ($row['position'] ?? ''),
-            'level' => (int) $row['level'],
-            'active' => ($row['active'] ?? 'N') === 'Y',
-            'reg_state' => (string) ($row['reg_state'] ?? 'active'),
-            'created_at' => (string) ($row['created_at'] ?? ''),
-            'last_seen_at' => $row['last_seen_at'] !== null ? (string) $row['last_seen_at'] : null,
-            'price_type_id' => $row['price_type_id'] !== null ? (int) $row['price_type_id'] : null,
-            'price_type_title' => $row['price_type_title'] !== null ? (string) $row['price_type_title'] : null,
-        ], $stmt->fetchAll() ?: []);
+        $items = array_map(static function (array $row) use ($assignedMap): array {
+            $id = (int) $row['id'];
+
+            return [
+                'id' => $id,
+                'login' => (string) ($row['login'] ?? ''),
+                'name' => (string) ($row['name'] ?? ''),
+                'email' => (string) ($row['email'] ?? ''),
+                'phone' => (string) ($row['phone'] ?? ''),
+                'company' => (string) ($row['company'] ?? ''),
+                'inn' => (string) ($row['inn'] ?? ''),
+                'position' => (string) ($row['position'] ?? ''),
+                'level' => (int) $row['level'],
+                'active' => ($row['active'] ?? 'N') === 'Y',
+                'reg_state' => (string) ($row['reg_state'] ?? 'active'),
+                'created_at' => (string) ($row['created_at'] ?? ''),
+                'last_seen_at' => $row['last_seen_at'] !== null ? (string) $row['last_seen_at'] : null,
+                'price_type_id' => $row['price_type_id'] !== null ? (int) $row['price_type_id'] : null,
+                'price_type_title' => $row['price_type_title'] !== null ? (string) $row['price_type_title'] : null,
+                'price_types' => $assignedMap[$id] ?? [],
+            ];
+        }, $rows);
 
         $countStmt = Database::pdo()->prepare('SELECT COUNT(*) FROM users u WHERE ' . $whereSql);
         $countStmt->execute($params);
@@ -107,7 +119,12 @@ final class UserAdminService
         $position = trim((string) ($input['position'] ?? ''));
         $level = (int) ($input['level'] ?? 5);
         $password = (string) ($input['password'] ?? '');
-        $priceTypeId = $this->normalizePriceTypeId($input['price_type_id'] ?? null);
+        $priceTypeIds = $this->normalizePriceTypeIds($input['price_type_ids'] ?? null);
+        $priceTypeId = $this->normalizePriceTypeId($input['price_type_id'] ?? ($priceTypeIds[0] ?? null));
+
+        if ($priceTypeIds === [] && $priceTypeId !== null) {
+            $priceTypeIds = [$priceTypeId];
+        }
 
         if (mb_strlen($name) < 3) {
             throw new HttpException(422, 'validation_error', 'Укажите ФИО');
@@ -169,12 +186,19 @@ final class UserAdminService
         ]);
 
         $userId = (int) $pdo->lastInsertId();
+
+        if ($priceTypeIds !== []) {
+            $this->priceService->setAssignedTypes($userId, $priceTypeIds, $priceTypeId);
+        }
+
         $this->history->add($userId, 'created', (int) $actor['ID'], 'Создан администратором');
 
         return [
             'id' => $userId,
             'login' => $email,
             'password' => $generated ? $password : null,
+            'price_type_id' => $priceTypeId,
+            'price_types' => $this->priceService->assignedTypesForUser(['ID' => $userId, 'price_type_id' => $priceTypeId]),
         ];
     }
 
@@ -194,9 +218,19 @@ final class UserAdminService
         $inn = preg_replace('/\s+/', '', (string) ($input['inn'] ?? (string) ($user['INN'] ?? ''))) ?? '';
         $position = trim((string) ($input['position'] ?? (string) ($user['DOLGNOST'] ?? '')));
         $level = isset($input['level']) ? (int) $input['level'] : (int) $user['LEVEL'];
-        $priceTypeId = array_key_exists('price_type_id', $input)
-            ? $this->normalizePriceTypeId($input['price_type_id'])
+        $hasTypes = array_key_exists('price_type_ids', $input);
+        $hasDefault = array_key_exists('price_type_id', $input) || array_key_exists('default_price_type_id', $input);
+        $priceTypeIds = $hasTypes
+            ? $this->normalizePriceTypeIds($input['price_type_ids'])
+            : $this->prices->assignedTypeIds($userId);
+        $defaultInput = $input['price_type_id'] ?? $input['default_price_type_id'] ?? null;
+        $priceTypeId = $hasDefault
+            ? $this->normalizePriceTypeId($defaultInput)
             : ($user['price_type_id'] !== null ? (int) $user['price_type_id'] : null);
+
+        if ($priceTypeIds === [] && $priceTypeId !== null) {
+            $priceTypeIds = [$priceTypeId];
+        }
 
         if (mb_strlen($name) < 3) {
             throw new HttpException(422, 'validation_error', 'Укажите ФИО');
@@ -246,9 +280,51 @@ final class UserAdminService
             $userId,
         ]);
 
+        if ($hasTypes || $hasDefault) {
+            $this->priceService->setAssignedTypes($userId, $priceTypeIds, $priceTypeId);
+        }
+
         $this->history->add($userId, 'updated', (int) $actor['ID'], 'Изменён администратором');
 
-        return ['id' => $userId, 'level' => $level, 'price_type_id' => $priceTypeId];
+        return [
+            'id' => $userId,
+            'level' => $level,
+            'price_type_id' => $priceTypeId,
+            'price_types' => $this->priceService->assignedTypesForUser(['ID' => $userId, 'price_type_id' => $priceTypeId]),
+        ];
+    }
+
+    public function setPriceTypes(array $actor, array $capabilities, int $userId, array $input): array
+    {
+        if (!in_array('prices.assign', $capabilities, true)) {
+            throw new HttpException(403, 'forbidden', 'Недостаточно прав для закрепления типов цен');
+        }
+
+        $user = $this->users->findById($userId);
+
+        if ($user === null) {
+            throw new HttpException(404, 'not_found', 'Пользователь не найден');
+        }
+
+        $typeIds = $this->normalizePriceTypeIds($input['price_type_ids'] ?? []);
+        $defaultId = $this->normalizePriceTypeId($input['default_price_type_id'] ?? ($input['price_type_id'] ?? null));
+        $assigned = $this->priceService->setAssignedTypes($userId, $typeIds, $defaultId);
+        $resolvedDefault = null;
+
+        foreach ($assigned as $type) {
+            if ($type['is_default']) {
+                $resolvedDefault = (int) $type['id'];
+                break;
+            }
+        }
+
+        $this->history->add($userId, 'price_types', (int) $actor['ID'], 'Обновлены закреплённые типы цен');
+
+        return [
+            'id' => $userId,
+            'price_type_id' => $resolvedDefault,
+            'price_types' => $assigned,
+        ];
     }
 
     public function block(array $actor, array $capabilities, int $userId, bool $block): array
@@ -445,6 +521,28 @@ final class UserAdminService
         }
 
         return $id;
+    }
+
+    /**
+     * @return int[]
+     */
+    private function normalizePriceTypeIds(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $ids = [];
+
+        foreach ($value as $item) {
+            $id = $this->normalizePriceTypeId($item);
+
+            if ($id !== null && !in_array($id, $ids, true)) {
+                $ids[] = $id;
+            }
+        }
+
+        return $ids;
     }
 
     private function assertKeepsAdmin(array $target, string $action): void

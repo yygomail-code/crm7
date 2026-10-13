@@ -6,6 +6,7 @@ namespace App\Clients;
 
 use App\Http\HttpException;
 use App\Notifications\NotificationService;
+use App\Prices\PriceService;
 use App\Support\Validator;
 use App\Repositories\RequestRepository;
 use App\Repositories\UserHistoryRepository;
@@ -20,7 +21,8 @@ final class ClientService
         private readonly RequestRepository $requests = new RequestRepository(),
         private readonly ClientManagerService $managers = new ClientManagerService(),
         private readonly NotificationService $notifications = new NotificationService(),
-        private readonly ViewLogRepository $views = new ViewLogRepository()
+        private readonly ViewLogRepository $views = new ViewLogRepository(),
+        private readonly PriceService $prices = new PriceService()
     ) {
     }
 
@@ -286,6 +288,8 @@ final class ClientService
                 'reg_state' => (string) ($client['reg_state'] ?? 'active'),
                 'registered_at' => (string) ($client['TIME_ADD'] ?? ''),
                 'last_seen_at' => $client['TIME_ACTIVE'] !== null ? (string) $client['TIME_ACTIVE'] : null,
+                'price_type_id' => $client['price_type_id'] !== null ? (int) $client['price_type_id'] : null,
+                'price_types' => $this->prices->assignedTypesForUser($client),
             ],
             'manager' => $this->managerInfo($clientId),
             'transfer' => $this->transferInfo($actor, $capabilities, $clientId),

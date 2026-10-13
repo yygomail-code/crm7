@@ -268,6 +268,7 @@ $router->patch('/users/{id}', [$users, 'update']);
 $router->post('/users/{id}/block', [$users, 'block']);
 $router->post('/users/{id}/unblock', [$users, 'unblock']);
 $router->post('/users/{id}/reset-password', [$users, 'resetPassword']);
+$router->put('/users/{id}/price-types', [$users, 'setPriceTypes']);
 $router->get('/roles', [$users, 'roles']);
 $router->post('/roles/{level}', [$users, 'saveRole']);
 

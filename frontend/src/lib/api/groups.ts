@@ -1,8 +1,8 @@
 import { apiRequest } from './client';
 import type { ItemGroup } from './types';
 
-export function listItemGroups(): Promise<{ items: ItemGroup[] }> {
-  return apiRequest<{ items: ItemGroup[] }>('/item-groups', { auth: true });
+export function listItemGroups(): Promise<{ items: ItemGroup[]; has_ungrouped: boolean }> {
+  return apiRequest<{ items: ItemGroup[]; has_ungrouped: boolean }>('/item-groups', { auth: true });
 }
 
 export function listAdminItemGroups(): Promise<{ items: ItemGroup[] }> {

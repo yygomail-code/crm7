@@ -28,6 +28,11 @@ final class ItemGroupService
         return $this->groups->all();
     }
 
+    public function hasUngrouped(): bool
+    {
+        return $this->groups->hasUngrouped();
+    }
+
     public function find(int $id): ?array
     {
         return $this->groups->find($id);

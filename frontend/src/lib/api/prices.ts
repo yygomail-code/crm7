@@ -1,8 +1,23 @@
 import { apiRequest } from './client';
-import type { PriceType } from './types';
+import type { AssignedPriceType, PriceType } from './types';
 
 export function listPriceTypes(): Promise<{ items: PriceType[] }> {
   return apiRequest<{ items: PriceType[] }>('/price-types', { auth: true });
+}
+
+export function setUserPriceTypes(
+  userId: number,
+  priceTypeIds: number[],
+  defaultPriceTypeId: number | null
+): Promise<{ id: number; price_type_id: number | null; price_types: AssignedPriceType[] }> {
+  return apiRequest<{ id: number; price_type_id: number | null; price_types: AssignedPriceType[] }>(
+    `/users/${userId}/price-types`,
+    {
+      method: 'PUT',
+      auth: true,
+      body: { price_type_ids: priceTypeIds, default_price_type_id: defaultPriceTypeId }
+    }
+  );
 }
 
 export function listAdminPriceTypes(): Promise<{ items: PriceType[] }> {

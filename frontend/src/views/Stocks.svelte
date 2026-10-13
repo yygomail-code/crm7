@@ -13,6 +13,7 @@
     type StockFilters
   } from '../lib/api/stocks';
   import type {
+    PriceListItem,
     StockImportJob,
     StockLevel,
     StockUpdate,
@@ -50,6 +51,7 @@
     per_page: 20,
     view: 'list',
     photos: true,
+    price_types: [] as number[],
     query: '',
     page: 1,
     active: 'all'
@@ -78,6 +80,15 @@
   let importMapping = $state<Record<string, number>>({});
   let exportOpen = $state(false);
   let counts = $state<Record<string, number>>({});
+  let priceTypeTitle = $state('');
+  let priceTypeFilter = $state<number[]>(
+    Array.isArray(initialStockFilters.price_types)
+      ? (initialStockFilters.price_types as number[])
+          .map(Number)
+          .filter((id) => Number.isFinite(id) && id > 0)
+      : []
+  );
+  let priceTypesDraft = $state<number[]>([]);
 
   let groups = $state<ItemGroup[]>([]);
 
@@ -96,8 +107,7 @@
           { field: 'price', label: 'Цена' }
         ]
   );
-  const groupsPreselected =
-    Array.isArray(initialStockFilters.group_ids) && initialStockFilters.group_ids.length > 0;
+  const groupsPreselected = Array.isArray(initialStockFilters.group_ids);
   let stockSort = $state(initialStockFilters.sort);
   let stockGroups = $state<number[]>(parseGroups(initialStockFilters.group_ids));
   let stockNoGroup = $state<boolean>(initialStockFilters.group_no_group !== false);
@@ -118,6 +128,7 @@
   let groupOpen = $state(false);
   let groupDraft = $state<number[]>([]);
   let groupNoGroupDraft = $state<boolean>(true);
+  let hasUngrouped = $state(true);
   let warehouseOpen = $state(false);
   let warehouseDraft = $state<number[]>([]);
   let helpOpen = $state(false);
@@ -130,8 +141,21 @@
   const pageItems = $derived(buildPageItems(page, pages));
   const pricesEnabled = $derived(appSettings.pricesEnabled);
   const groupsEnabled = $derived(appSettings.groupsEnabled);
+  const availablePriceTypes = $derived.by(() => {
+    const map = new Map<number, PriceListItem>();
+
+    for (const level of levels) {
+      for (const row of level.price_list ?? []) {
+        if (!map.has(row.id)) {
+          map.set(row.id, row);
+        }
+      }
+    }
+
+    return [...map.values()];
+  });
   const listVars = $derived(
-    `--photo: ${showPhotos ? '88px' : '0px'}; --price: ${pricesEnabled ? '100px' : '0px'}; --cart: ${canCreate ? '120px' : '0px'};`
+    `--photo: ${showPhotos ? '88px' : '0px'}; --price: ${pricesEnabled ? '150px' : '0px'}; --cart: ${canCreate ? '120px' : '0px'};`
   );
 
   $effect(() => {
@@ -159,12 +183,18 @@
     try {
       const data = await listItemGroups();
       groups = data.items;
+      hasUngrouped = data.has_ungrouped;
     } catch {
       groups = [];
     }
 
     if (!groupsPreselected && stockGroups.length === 0) {
       stockGroups = groups.map((item) => item.id);
+    }
+
+    if (!hasUngrouped) {
+      stockNoGroup = false;
+      groupNoGroupDraft = false;
     }
   }
 
@@ -174,10 +204,13 @@
     }
 
     const allGroups = groups.length > 0 && stockGroups.length === groups.length;
-    const noneSelected = stockGroups.length === 0 && !stockNoGroup;
 
-    return !(allGroups && stockNoGroup) && !noneSelected;
+    return !(allGroups && (stockNoGroup || !hasUngrouped));
   });
+
+  const groupFilterEmpty = $derived(
+    groupsEnabled && groupFilterActive && stockGroups.length === 0 && !stockNoGroup
+  );
 
   const filters = $derived.by((): StockFilters => {
     const result: StockFilters = {
@@ -207,6 +240,41 @@
   function openDetail(level: StockLevel): void {
     detailTarget = level;
     detailOpen = true;
+  }
+
+  function priceRows(level: StockLevel): PriceListItem[] {
+    if (level.price_list && level.price_list.length > 0) {
+      return level.price_list;
+    }
+
+    if (level.price !== null || priceTypeTitle !== '') {
+      return [{ id: 0, title: priceTypeTitle, is_default: true, price: level.price ?? null }];
+    }
+
+    return [];
+  }
+
+  function visiblePriceRows(level: StockLevel): PriceListItem[] {
+    const rows = priceRows(level);
+
+    if (priceTypeFilter.length === 0) {
+      return rows;
+    }
+
+    const filtered = rows.filter((row) => priceTypeFilter.includes(row.id));
+
+    return filtered.length > 0 ? filtered : rows;
+  }
+
+  function togglePriceTypesDraft(id: number): void {
+    const allIds = availablePriceTypes.map((type) => type.id);
+
+    if (priceTypesDraft.includes(id)) {
+      const next = priceTypesDraft.filter((value) => value !== id);
+      priceTypesDraft = next.length > 0 ? next : [...allIds];
+    } else {
+      priceTypesDraft = [...priceTypesDraft, id];
+    }
   }
 
   function addToCart(level: StockLevel): void {
@@ -264,7 +332,7 @@
   }
 
   async function refreshCounts(): Promise<void> {
-    if (!hasFilters) {
+    if (!hasFilters || groupFilterEmpty) {
       counts = {};
       return;
     }
@@ -399,6 +467,7 @@
       per_page: perPage,
       view: viewMode,
       photos: showPhotos,
+      price_types: priceTypeFilter,
       query,
       page,
       active: stockActive
@@ -408,18 +477,34 @@
   function openView(): void {
     viewDraft = viewMode;
     photoDraft = showPhotos;
+    priceTypesDraft =
+      priceTypeFilter.length > 0
+        ? [...priceTypeFilter]
+        : availablePriceTypes.map((type) => type.id);
     viewOpen = true;
   }
 
   function applyView(): void {
     viewOpen = false;
 
-    if (viewDraft === viewMode && photoDraft === showPhotos) {
+    const allIds = availablePriceTypes.map((type) => type.id);
+    const nextFilter =
+      priceTypesDraft.length === 0 || priceTypesDraft.length === allIds.length
+        ? []
+        : [...priceTypesDraft];
+
+    if (
+      viewDraft === viewMode &&
+      photoDraft === showPhotos &&
+      nextFilter.length === priceTypeFilter.length &&
+      nextFilter.every((id, index) => id === priceTypeFilter[index])
+    ) {
       return;
     }
 
     viewMode = viewDraft;
     showPhotos = photoDraft;
+    priceTypeFilter = nextFilter;
     saveStockFilters();
   }
 
@@ -440,12 +525,21 @@
 
   function openGroup(): void {
     groupDraft = [...stockGroups];
-    groupNoGroupDraft = stockNoGroup;
+    groupNoGroupDraft = hasUngrouped ? stockNoGroup : false;
     groupOpen = true;
   }
 
-  function toggleAllGroups(): void {
-    groupDraft = groupDraft.length === groups.length ? [] : groups.map((item) => item.id);
+  function selectAllGroups(): void {
+    groupDraft = groups.map((item) => item.id);
+
+    if (hasUngrouped) {
+      groupNoGroupDraft = true;
+    }
+  }
+
+  function clearAllGroups(): void {
+    groupDraft = [];
+    groupNoGroupDraft = false;
   }
 
   function applyGroup(): void {
@@ -476,10 +570,12 @@
     warehouseOpen = true;
   }
 
-  function toggleAllWarehouses(): void {
-    warehouseDraft = warehouseDraft.length === warehouses.length
-      ? []
-      : warehouses.map((item) => item.id);
+  function selectAllWarehouses(): void {
+    warehouseDraft = warehouses.map((item) => item.id);
+  }
+
+  function clearAllWarehouses(): void {
+    warehouseDraft = [];
   }
 
   function applyWarehouse(): void {
@@ -495,7 +591,7 @@
   }
 
   async function loadLevels(silent = false): Promise<void> {
-    if (selectedIds.length === 0) {
+    if (selectedIds.length === 0 || groupFilterEmpty) {
       levels = [];
       total = 0;
       return;
@@ -510,6 +606,7 @@
       const data = await listLevels(selectedIds, filters, page, perPage);
       levels = data.items;
       total = data.total;
+      priceTypeTitle = data.prices?.type?.title ?? '';
     } catch (cause) {
       if (!silent) {
         error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить остатки';
@@ -1035,19 +1132,17 @@
 
     <Modal open={groupOpen} title="Группы позиций" onclose={() => (groupOpen = false)}>
       <div class="sort-options">
-        <label class="sort-option">
-          <input
-            type="checkbox"
-            checked={groupDraft.length === groups.length && groups.length > 0}
-            onchange={toggleAllGroups}
-          />
-          <span>Все группы</span>
-        </label>
+        <div class="options-head">
+          <button type="button" class="link-btn" onclick={selectAllGroups}>Отметить все</button>
+          <button type="button" class="link-btn" onclick={clearAllGroups}>Снять все</button>
+        </div>
 
-        <label class="sort-option">
-          <input type="checkbox" bind:checked={groupNoGroupDraft} />
-          <span>Без группы</span>
-        </label>
+        {#if hasUngrouped}
+          <label class="sort-option">
+            <input type="checkbox" bind:checked={groupNoGroupDraft} />
+            <span>Без группы</span>
+          </label>
+        {/if}
 
         {#each groups as group (group.id)}
           <label class="sort-option">
@@ -1064,14 +1159,10 @@
 
     <Modal open={warehouseOpen} title="Склады" onclose={() => (warehouseOpen = false)}>
       <div class="sort-options">
-        <label class="sort-option">
-          <input
-            type="checkbox"
-            checked={warehouseDraft.length === warehouses.length && warehouses.length > 0}
-            onchange={toggleAllWarehouses}
-          />
-          <span>Все склады</span>
-        </label>
+        <div class="options-head">
+          <button type="button" class="link-btn" onclick={selectAllWarehouses}>Отметить все</button>
+          <button type="button" class="link-btn" onclick={clearAllWarehouses}>Снять все</button>
+        </div>
 
         {#each warehouses as warehouse (warehouse.id)}
           <label class="sort-option warehouse-option">
@@ -1128,6 +1219,25 @@
         </div>
       </div>
 
+      {#if pricesEnabled && availablePriceTypes.length > 1}
+        <div class="view-prices">
+          <p class="sort-hint">Цены</p>
+          <div class="price-filter">
+            {#each availablePriceTypes as type (type.id)}
+              <button
+                type="button"
+                class="price-chip"
+                class:active={priceTypesDraft.includes(type.id)}
+                aria-pressed={priceTypesDraft.includes(type.id)}
+                onclick={() => togglePriceTypesDraft(type.id)}
+              >
+                {type.title}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       <div class="modal-actions">
         <Button variant="ghost" onclick={() => (viewOpen = false)}>Отмена</Button>
         <Button onclick={applyView}>Применить</Button>
@@ -1144,6 +1254,8 @@
       {#if detailTarget}
         {@const target = detailTarget}
         {@const detailCartQty = inCart(target)}
+        {@const availability =
+          target.quantity < 0 ? 'order' : target.quantity === 0 ? 'none' : 'in'}
         <div class="detail">
           <div class="detail-photo">
             <PhotoGallery photos={target.photos ?? []} variant="tile" />
@@ -1167,36 +1279,63 @@
               {/if}
             </div>
 
-            {#if target.warehouse_name || (groupsEnabled && target.group_title)}
-              <div class="meta">
-                {#if warehousesEnabled && target.warehouse_name}<span class="wh">{target.warehouse_name}</span>{/if}
-                {#if groupsEnabled && target.group_title}<span class="group">{target.group_title}</span>{/if}
-              </div>
-            {/if}
+            <div class="detail-tags">
+              <span
+                class="availability"
+                class:in={availability === 'in'}
+                class:order={availability === 'order'}
+                class:none={availability === 'none'}
+              >
+                {availability === 'in'
+                  ? 'В наличии'
+                  : availability === 'order'
+                    ? 'Под заказ'
+                    : 'Нет в наличии'}
+              </span>
+              {#if target.active === false}
+                <span class="inactive-tag">деактивирована</span>
+              {/if}
+              {#if warehousesEnabled && target.warehouse_name}
+                <span class="detail-tag">{target.warehouse_name}</span>
+              {/if}
+              {#if groupsEnabled && target.group_title}
+                <span class="detail-tag">{target.group_title}</span>
+              {/if}
+            </div>
 
             {#if target.description !== ''}
               <p class="detail-desc">{target.description}</p>
             {/if}
 
-            <div class="detail-fields">
-              <div class="field-row">
-                <span class="field-label">Остаток на складе</span>
-                <span class="field-value quantity" class:on-order={target.quantity < 0}>
+            <div class="detail-metrics">
+              <div class="metric">
+                <span class="metric-label">Остаток на складе</span>
+                <span class="metric-value quantity" class:on-order={target.quantity < 0}>
                   {stockQuantityText(target.quantity, target.unit)}
                 </span>
+                {#if target.actual_date}
+                  <span class="metric-note">остатки на {formatDate(target.actual_date)}</span>
+                {/if}
               </div>
 
               {#if pricesEnabled}
-                <div class="field-row">
-                  <span class="field-label">Цена</span>
-                  <span class="field-value price" class:missing={target.price === null}>
-                    {formatPrice(target.price)}
-                  </span>
+                <div class="metric">
+                  <span class="metric-label">Цены</span>
+                  <div class="price-lines">
+                    {#each visiblePriceRows(target) as row (row.id)}
+                      <span class="price-line">
+                        <span class="price-type">{row.title || 'Цена'}</span>
+                        <span class="price" class:missing={row.price === null}>
+                          {formatPrice(row.price)}
+                        </span>
+                      </span>
+                    {/each}
+                  </div>
                 </div>
               {/if}
             </div>
 
-            {#if canCreate}
+            {#if canCreate && target.active !== false}
               <div class="detail-cart">
                 {#if detailCartQty > 0}
                   <span class="stat-label">В корзине</span>
@@ -1222,7 +1361,9 @@
                     </button>
                   </span>
                 {:else}
-                  <Button onclick={() => addToCart(target)}>Добавить в корзину</Button>
+                  <Button onclick={() => addToCart(target)}>
+                    <Icon name="cart" size={16} /> Добавить в корзину
+                  </Button>
                 {/if}
               </div>
             {/if}
@@ -1450,14 +1591,17 @@
 
               {#if pricesEnabled}
                 <div class="stat col-price">
-                  <span class="stat-label">Цена</span>
-                  <span
-                    class="price"
-                    class:missing={level.price === null}
-                    title={level.price === null ? 'Цена не задана' : 'Цена'}
-                  >
-                    {formatPrice(level.price)}
-                  </span>
+                  <span class="stat-label">Цены</span>
+                  <div class="price-lines">
+                    {#each visiblePriceRows(level) as row (row.id)}
+                      <span class="price-line">
+                        <span class="price-type">{row.title || 'Цена'}</span>
+                        <span class="price" class:missing={row.price === null}>
+                          {formatPrice(row.price)}
+                        </span>
+                      </span>
+                    {/each}
+                  </div>
                 </div>
               {/if}
 
@@ -1803,6 +1947,29 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
+  }
+
+  .options-head {
+    display: flex;
+    gap: var(--space-4);
+    margin-bottom: var(--space-1);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-secondary);
+  }
+
+  .link-btn {
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 13px;
+    color: var(--primary);
+    cursor: pointer;
+  }
+
+  .link-btn:hover {
+    color: var(--primary-hover);
+    text-decoration: underline;
   }
 
   .sort-hint {
@@ -2225,8 +2392,8 @@
 
   .detail {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: var(--space-4);
+    grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
+    gap: var(--space-5);
     align-items: start;
   }
 
@@ -2241,10 +2408,68 @@
     min-width: 0;
   }
 
+  .detail-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
   .detail-name {
     margin: 0;
-    font-size: 16px;
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--text);
     overflow-wrap: anywhere;
+  }
+
+  .detail-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 0 0 auto;
+  }
+
+  .detail-tags {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .detail-tag {
+    padding: 0 8px;
+    border: 1px solid var(--border-secondary);
+    border-radius: 4px;
+    background: var(--fill-tertiary);
+    font-size: 12px;
+    line-height: 20px;
+    color: var(--muted);
+  }
+
+  .availability {
+    padding: 0 8px;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 20px;
+  }
+
+  .availability.in {
+    border-color: var(--success-border);
+    background: var(--success-bg);
+    color: var(--success-text);
+  }
+
+  .availability.order {
+    background: var(--warning-bg);
+    color: var(--warning-text);
+  }
+
+  .availability.none {
+    background: var(--danger-bg);
+    color: var(--danger);
   }
 
   .detail-desc {
@@ -2256,54 +2481,41 @@
     overflow-wrap: anywhere;
   }
 
-  .detail-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
+  .detail-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
     gap: var(--space-3);
   }
 
-  .detail-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: 0 0 auto;
-  }
-
-  .detail-fields {
+  .metric {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: 2px;
     padding: var(--space-3);
     border: 1px solid var(--border-secondary);
     border-radius: var(--radius-md);
-    background: var(--surface);
+    background: var(--fill-tertiary);
   }
 
-  .field-row {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-3);
-  }
-
-  .field-label {
-    font-size: 14px;
+  .metric-label {
+    font-size: 12px;
     color: var(--text-description);
   }
 
-  .field-value {
-    font-weight: 500;
-    text-align: right;
+  .metric-value {
+    font-size: 18px;
+    font-weight: 600;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
   }
 
-  .field-value.on-order {
+  .metric-value.on-order {
     color: var(--warning-text);
   }
 
-  .field-value.missing {
+  .metric-note {
+    font-size: 12px;
     color: var(--muted);
-    font-weight: 400;
   }
 
   .detail-cart {
@@ -2313,7 +2525,7 @@
     gap: var(--space-2);
   }
 
-  @media (max-width: 560px) {
+  @media (max-width: 640px) {
     .detail {
       grid-template-columns: minmax(0, 1fr);
     }
@@ -2536,6 +2748,74 @@
     font-weight: 400;
   }
 
+  .price-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .price-line {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+
+  .price-lines .price {
+    flex: 0 0 auto;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .price-lines .price.missing {
+    color: var(--muted);
+    font-weight: 400;
+  }
+
+  .price-type {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 400;
+  }
+
+  .price-filter {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 6px;
+  }
+
+  .price-chip {
+    padding: 1px 8px;
+    border: 1px solid var(--border-secondary);
+    border-radius: 10px;
+    background: var(--surface);
+    font: inherit;
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--muted);
+    cursor: pointer;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+
+  .price-chip:hover {
+    color: var(--text);
+    border-color: var(--border);
+  }
+
+  .price-chip.active {
+    border-color: var(--primary);
+    background: var(--primary-bg);
+    color: var(--primary);
+  }
+
   .zero-mark {
     font-size: 12px;
     color: var(--muted);
@@ -2575,6 +2855,12 @@
   .view-column + .view-column {
     padding-left: var(--space-4);
     border-left: 1px solid var(--border-secondary);
+  }
+
+  .view-prices {
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-secondary);
   }
 
   .levels .level.cart-over .qty {

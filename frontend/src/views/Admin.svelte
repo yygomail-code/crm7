@@ -19,7 +19,7 @@
     unblockUser,
     updateUser
   } from '../lib/api/admin';
-  import type { ItemType } from '../lib/api/types';
+  import type { AssignedPriceType, ItemType } from '../lib/api/types';
   import { listLegalDocuments, saveLegalDocument, type LegalDocument } from '../lib/api/legal';
   import { listPriceTypes } from '../lib/api/prices';
   import {
@@ -46,6 +46,7 @@
   import { clampDates, todayIso } from '../lib/period';
   import Button from '../lib/components/ui/Button.svelte';
   import FiltersModal from '../lib/components/ui/FiltersModal.svelte';
+  import PriceTypesPicker from '../lib/components/ui/PriceTypesPicker.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
   import { formatDateTime } from '../lib/format';
@@ -78,6 +79,7 @@
   let usersLoading = $state(true);
 
   let editing = $state<AdminUser | null>(null);
+  let pricePicker = $state<AdminUser | null>(null);
   let showCreate = $state(false);
   let priceTypes = $state<PriceType[]>([]);
   let itemGroups = $state<ItemGroup[]>([]);
@@ -145,6 +147,7 @@
   const canManageUsers = $derived(auth.can('users.manage'));
   const canViewAudit = $derived(auth.can('audit.view'));
   const canManageRoles = $derived(auth.can('roles.manage'));
+  const pricesEnabled = $derived(appSettings.pricesEnabled);
 
   onMount(() => {
     if (canManageUsers) {
@@ -368,6 +371,26 @@
       error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить';
     } finally {
       busy = false;
+    }
+  }
+
+  function onPriceTypesSaved(userId: number, assigned: AssignedPriceType[]): void {
+    const defaultType = assigned.find((type) => type.is_default) ?? null;
+
+    users = users.map((user) =>
+      user.id === userId
+        ? {
+            ...user,
+            price_types: assigned,
+            price_type_id: defaultType?.id ?? null,
+            price_type_title: defaultType?.title ?? null
+          }
+        : user
+    );
+
+    if (editing !== null && editing.id === userId) {
+      editing = { ...editing, price_types: assigned, price_type_id: defaultType?.id ?? null };
+      editForm = { ...editForm, price_type_id: defaultType?.id ?? 0 };
     }
   }
 
@@ -958,15 +981,17 @@
               <option value={90}>Сисадмин</option>
             </select>
           </label>
-          <label>
-            <span>Тип профиля (цены)</span>
-            <select bind:value={form.price_type_id}>
-              <option value={0}>Не задан — цены по умолчанию</option>
-              {#each priceTypes as type (type.id)}
-                <option value={type.id}>{type.title}</option>
-              {/each}
-            </select>
-          </label>
+          {#if pricesEnabled}
+            <label>
+              <span>Тип профиля (цены)</span>
+              <select bind:value={form.price_type_id}>
+                <option value={0}>Не задан — цены по умолчанию</option>
+                {#each priceTypes as type (type.id)}
+                  <option value={type.id}>{type.title}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
           <label>
             <span>Пароль (пусто — сгенерировать)</span>
             <input bind:value={form.password} />
@@ -996,17 +1021,22 @@
               <option value={90}>Сисадмин</option>
             </select>
           </label>
-          <label>
-            <span>Тип профиля (цены)</span>
-            <select bind:value={editForm.price_type_id}>
-              <option value={0}>Не задан — цены по умолчанию</option>
-              {#each priceTypes as type (type.id)}
-                <option value={type.id}>{type.title}</option>
-              {/each}
-            </select>
-          </label>
+          {#if pricesEnabled}
+            <label>
+              <span>Тип цен по умолчанию</span>
+              <select bind:value={editForm.price_type_id}>
+                <option value={0}>Не задан — цены по умолчанию</option>
+                {#each priceTypes as type (type.id)}
+                  <option value={type.id}>{type.title}</option>
+                {/each}
+              </select>
+            </label>
+          {/if}
         </div>
         <div class="actions">
+          {#if pricesEnabled}
+            <Button variant="ghost" onclick={() => (pricePicker = editing)}>Типы цен…</Button>
+          {/if}
           <Button loading={busy} onclick={() => void submitEdit()}>Сохранить</Button>
           <Button variant="ghost" onclick={() => (editing = null)}>Отмена</Button>
         </div>
@@ -1030,13 +1060,26 @@
                 {#if user.company}<span>{user.company}</span>{/if}
                 {#if user.inn}<span>ИНН {user.inn}</span>{/if}
                 {#if user.phone}<span>{user.phone}</span>{/if}
-                {#if user.price_type_title}<span>цены: {user.price_type_title}</span>{/if}
+                {#if pricesEnabled}
+                  {#if user.price_types.length > 0}
+                    <span>
+                      цены: {user.price_types
+                        .map((type) => (type.is_default ? `${type.title} (по умолч.)` : type.title))
+                        .join(', ')}
+                    </span>
+                  {:else if user.price_type_title}
+                    <span>цены: {user.price_type_title}</span>
+                  {/if}
+                {/if}
                 {#if user.last_seen_at}<span>был(а) {formatDateTime(user.last_seen_at)}</span>{/if}
               </div>
             </div>
             <div class="row-actions">
               {#if !appSettings.demoMode}
                 <Button variant="ghost" onclick={() => startEdit(user)}>Изменить</Button>
+                {#if pricesEnabled}
+                  <Button variant="ghost" onclick={() => (pricePicker = user)}>Типы цен</Button>
+                {/if}
                 <Button variant="ghost" onclick={() => void resetPassword(user)}>Сбросить пароль</Button>
                 <Button variant="ghost" onclick={() => void toggleBlock(user)}>
                   {user.active ? 'Заблокировать' : 'Разблокировать'}
@@ -1062,6 +1105,15 @@
       </div>
     {/if}
   {/if}
+
+  <PriceTypesPicker
+    open={pricePicker !== null}
+    userId={pricePicker?.id ?? 0}
+    userName={pricePicker?.name ?? ''}
+    assigned={pricePicker?.price_types ?? []}
+    onclose={() => (pricePicker = null)}
+    onsaved={(assigned) => onPriceTypesSaved(pricePicker?.id ?? 0, assigned)}
+  />
 
   {#if tab === 'audit'}
     <div class="filters">
