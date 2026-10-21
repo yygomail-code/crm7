@@ -20,6 +20,7 @@
 
   let history = $state<string[]>([]);
   let showHistory = $state(false);
+  let activeIndex = $state(-1);
 
   function openHistory(): void {
     if (historyKey === '') {
@@ -27,13 +28,23 @@
     }
 
     history = getHistory(historyKey);
+    activeIndex = -1;
     showHistory = value === '' && history.length > 0;
   }
 
   function pick(item: string): void {
     value = item;
     showHistory = false;
+    activeIndex = -1;
     onpick?.();
+  }
+
+  function moveHistory(step: number): void {
+    if (history.length === 0) {
+      return;
+    }
+
+    activeIndex = Math.min(Math.max(activeIndex + step, 0), history.length - 1);
   }
 </script>
 
@@ -43,11 +54,34 @@
     bind:value
     {placeholder}
     onfocus={openHistory}
-    oninput={() => (showHistory = false)}
-    onblur={() => (showHistory = false)}
+    oninput={() => {
+      showHistory = false;
+      activeIndex = -1;
+    }}
+    onblur={() => {
+      showHistory = false;
+      activeIndex = -1;
+    }}
     onkeydown={(event) => {
       if (event.key === 'Escape') {
         showHistory = false;
+        activeIndex = -1;
+        return;
+      }
+
+      if (!showHistory) {
+        return;
+      }
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        moveHistory(1);
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        moveHistory(-1);
+      } else if (event.key === 'Enter' && activeIndex >= 0) {
+        event.preventDefault();
+        pick(history[activeIndex]);
       }
     }}
   />
@@ -69,10 +103,11 @@
 
   {#if showHistory}
     <div class="history">
-      {#each history as item (item)}
+      {#each history as item, index (item)}
         <button
           type="button"
           class="history-item"
+          class:active={index === activeIndex}
           title={item}
           onmousedown={(event) => {
             event.preventDefault();
@@ -169,6 +204,10 @@
   }
 
   .history-item:hover {
+    background: var(--bg);
+  }
+
+  .history-item.active {
     background: var(--bg);
   }
 </style>

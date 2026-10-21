@@ -21,6 +21,7 @@
     ItemGroup
   } from '../lib/api/types';
   import { listItemGroups } from '../lib/api/groups';
+  import { listPriceTypes } from '../lib/api/prices';
   import Button from '../lib/components/ui/Button.svelte';
   import ExportModal from '../lib/components/ui/ExportModal.svelte';
   import Icon from '../lib/components/ui/Icon.svelte';
@@ -37,6 +38,12 @@
   import { config } from '../lib/config';
   import { formatDate, formatDateTime, formatPrice, stockQuantityText } from '../lib/format';
 
+  function todayLocal(): string {
+    const now = new Date();
+
+    return new Date(now.getTime() - now.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  }
+
   let warehouses = $state<StockWarehouse[]>([]);
   let levels = $state<StockLevel[]>([]);
   let jobs = $state<StockImportJob[]>([]);
@@ -52,11 +59,17 @@
     view: 'list',
     photos: true,
     price_types: [] as number[],
+    warehouse_ids: null as number[] | null,
     query: '',
     page: 1,
     active: 'all'
   };
   const initialStockFilters = loadFilters('stocks', stockFilterDefaults);
+  const initialWarehouseIds = Array.isArray(initialStockFilters.warehouse_ids)
+    ? (initialStockFilters.warehouse_ids as number[])
+        .map(Number)
+        .filter((id) => Number.isFinite(id) && id > 0)
+    : [];
 
   let query = $state(String(initialStockFilters.query));
   let searchInput = $state(String(initialStockFilters.query));
@@ -71,7 +84,7 @@
   let canEdit = $state(false);
   let busy = $state(false);
   let file = $state<File | null>(null);
-  let actualDate = $state(new Date().toISOString().slice(0, 10));
+  let actualDate = $state(todayLocal());
   let importOpen = $state(false);
   let importError = $state('');
   let importTab = $state<'import' | 'history'>('import');
@@ -97,7 +110,7 @@
     warehousesEnabled
       ? [
           { field: 'name', label: 'Наименование' },
-          { field: 'qty', label: 'Остаток на складе' },
+          { field: 'qty', label: 'Остаток' },
           { field: 'warehouse', label: 'Склад' },
           { field: 'price', label: 'Цена' }
         ]
@@ -133,6 +146,7 @@
   let warehouseDraft = $state<number[]>([]);
   let helpOpen = $state(false);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let loadSeq = 0;
 
   const canCreate = $derived(auth.can('requests.create') && appSettings.cartEnabled);
   const pages = $derived(perPage <= 0 ? 1 : Math.max(1, Math.ceil(total / perPage)));
@@ -141,18 +155,24 @@
   const pageItems = $derived(buildPageItems(page, pages));
   const pricesEnabled = $derived(appSettings.pricesEnabled);
   const groupsEnabled = $derived(appSettings.groupsEnabled);
-  const availablePriceTypes = $derived.by(() => {
-    const map = new Map<number, PriceListItem>();
+  let priceTypes = $state<{ id: number; title: string }[]>([]);
+  let priceTypesLoaded = $state(false);
+  const availablePriceTypes = $derived.by((): { id: number; title: string }[] => {
+    if (priceTypes.length > 0) {
+      return priceTypes;
+    }
+
+    const map = new Map<number, string>();
 
     for (const level of levels) {
       for (const row of level.price_list ?? []) {
         if (!map.has(row.id)) {
-          map.set(row.id, row);
+          map.set(row.id, row.title);
         }
       }
     }
 
-    return [...map.values()];
+    return [...map.entries()].map(([id, title]) => ({ id, title }));
   });
   const listVars = $derived(
     `--photo: ${showPhotos ? '88px' : '0px'}; --price: ${pricesEnabled ? '150px' : '0px'}; --cart: ${canCreate ? '120px' : '0px'};`
@@ -161,6 +181,12 @@
   $effect(() => {
     if (groupsEnabled && groups.length === 0) {
       void loadGroups();
+    }
+  });
+
+  $effect(() => {
+    if (pricesEnabled && !priceTypesLoaded) {
+      void loadPriceTypes();
     }
   });
 
@@ -178,6 +204,17 @@
 
     return () => clearTimeout(searchTimer);
   });
+
+  async function loadPriceTypes(): Promise<void> {
+    try {
+      const data = await listPriceTypes();
+      priceTypes = data.items.map((type) => ({ id: type.id, title: type.title }));
+    } catch {
+      priceTypes = [];
+    } finally {
+      priceTypesLoaded = true;
+    }
+  }
 
   async function loadGroups(): Promise<void> {
     try {
@@ -199,11 +236,11 @@
   }
 
   const groupFilterActive = $derived.by(() => {
-    if (!groupsEnabled) {
+    if (!groupsEnabled || groups.length === 0) {
       return false;
     }
 
-    const allGroups = groups.length > 0 && stockGroups.length === groups.length;
+    const allGroups = stockGroups.length === groups.length;
 
     return !(allGroups && (stockNoGroup || !hasUngrouped));
   });
@@ -231,7 +268,9 @@
     return result;
   });
 
-  const hasFilters = $derived(query !== '');
+  const hasFilters = $derived(
+    query !== '' || groupFilterActive || (canDeactivate && stockActive !== 'all')
+  );
   const selectedWarehouses = $derived(warehouses.filter((item) => selectedIds.includes(item.id)));
   const headDate = $derived(
     selectedWarehouses.length === 1 ? selectedWarehouses[0].actual_date : null
@@ -263,7 +302,13 @@
 
     const filtered = rows.filter((row) => priceTypeFilter.includes(row.id));
 
-    return filtered.length > 0 ? filtered : rows;
+    if (filtered.length > 0) {
+      return filtered;
+    }
+
+    const defaults = rows.filter((row) => row.is_default);
+
+    return defaults.length > 0 ? defaults : rows;
   }
 
   function togglePriceTypesDraft(id: number): void {
@@ -314,7 +359,10 @@
       canEdit = data.can_edit;
 
       if (warehouses.length > 0) {
-        await setWarehouses(warehouses.map((item) => item.id));
+        const valid = new Set(warehouses.map((item) => item.id));
+        const preferred = initialWarehouseIds.filter((id) => valid.has(id));
+
+        await setWarehouses(preferred.length > 0 ? preferred : warehouses.map((item) => item.id));
       }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить склады';
@@ -327,6 +375,7 @@
     selectedIds = [...ids].sort((a, b) => a - b);
     page = 1;
     query = searchInput.trim();
+    saveStockFilters();
     void refreshCounts();
     await loadLevels();
   }
@@ -416,14 +465,14 @@
     changeSort();
   }
 
-  function sortTerm(field: string): 'asc' | 'desc' | null {
-    const terms = parseSort(stockSort);
+  const parsedSort = $derived(parseSort(stockSort));
 
-    if (terms.includes(`${field}_asc`)) {
+  function sortTerm(field: string): 'asc' | 'desc' | null {
+    if (parsedSort.includes(`${field}_asc`)) {
       return 'asc';
     }
 
-    if (terms.includes(`${field}_desc`)) {
+    if (parsedSort.includes(`${field}_desc`)) {
       return 'desc';
     }
 
@@ -431,7 +480,7 @@
   }
 
   function sortIndex(field: string): number {
-    return parseSort(stockSort).findIndex((term) => term.startsWith(`${field}_`)) + 1;
+    return parsedSort.findIndex((term) => term.startsWith(`${field}_`)) + 1;
   }
 
   function headerSort(field: string): void {
@@ -468,6 +517,7 @@
       view: viewMode,
       photos: showPhotos,
       price_types: priceTypeFilter,
+      warehouse_ids: selectedIds,
       query,
       page,
       active: stockActive
@@ -597,6 +647,8 @@
       return;
     }
 
+    const seq = ++loadSeq;
+
     if (!silent) {
       loadingLevels = true;
       error = '';
@@ -604,15 +656,20 @@
 
     try {
       const data = await listLevels(selectedIds, filters, page, perPage);
+
+      if (seq !== loadSeq) {
+        return;
+      }
+
       levels = data.items;
       total = data.total;
       priceTypeTitle = data.prices?.type?.title ?? '';
     } catch (cause) {
-      if (!silent) {
+      if (seq === loadSeq && !silent) {
         error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить остатки';
       }
     } finally {
-      if (!silent) {
+      if (seq === loadSeq && !silent) {
         loadingLevels = false;
       }
     }
@@ -818,32 +875,28 @@
 </script>
 
 <section class="page page-wide">
-  <div class="head">
-    <h1>Номенклатура</h1>
-    {#if headDate}
-      <p class="head-subtitle">Остатки на {formatDate(headDate)}</p>
-    {/if}
-  </div>
-
   {#if error}
-    <div class="alert">
+    <div class="alert" role="alert">
       <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
       <span>{error}</span>
     </div>
   {/if}
   {#if message}
-    <div class="notice">
+    <div class="notice" role="status">
       <span class="notice-icon"><Icon name="check-circle" size={16} /></span>
       <span>{message}</span>
     </div>
   {/if}
 
-  {#if loading}
-    <div class="center"><Spinner size={26} /></div>
-  {:else if warehouses.length === 0}
-    <div class="empty">Нет доступных складов</div>
-  {:else}
-    <div class="filters">
+  <div class="filters">
+    <div class="head">
+      <h1>Номенклатура</h1>
+      {#if headDate}
+        <p class="head-subtitle">Остатки на {formatDate(headDate)}</p>
+      {/if}
+    </div>
+
+    {#if !loading && warehouses.length > 0}
       <form
         class="search"
         onsubmit={(event) => {
@@ -957,8 +1010,14 @@
           <Icon name="help" size={16} />
         </button>
       </div>
-    </div>
+    {/if}
+  </div>
 
+  {#if loading}
+    <div class="center"><Spinner size={26} /></div>
+  {:else if warehouses.length === 0}
+    <div class="empty">Нет доступных складов</div>
+  {:else}
     <Modal
       open={importOpen}
       title="Импорт остатков из 1С"
@@ -1041,7 +1100,7 @@
             <Button loading={busy} disabled={file === null} onclick={() => void doImport()}>Загрузить</Button>
           </div>
         {/if}
-      {:else if jobs.length === 0}
+      {:else if jobs.length === 0 && updates.length === 0}
         <p class="empty">Импортов ещё не было</p>
       {:else}
         <div class="history">
@@ -1061,6 +1120,19 @@
                 <span>на дату {job.actual_date}</span>
               </div>
               {#if job.errors}<div class="errors">{job.errors}</div>{/if}
+            </div>
+          {/each}
+          {#each updates as update (`legacy-${update.id}`)}
+            <div class="job">
+              <div class="row">
+                <span class="file">{update.file || 'обновление остатков'}</span>
+                <span class="status">{update.status || 'загружено'}</span>
+              </div>
+              <div class="job-meta">
+                <span>{formatDateTime(update.created_at)}</span>
+                <span>строк: {update.rows_count}</span>
+                {#if update.actual_date}<span>на дату {update.actual_date}</span>{/if}
+              </div>
             </div>
           {/each}
         </div>
@@ -1511,7 +1583,7 @@
             {/if}
           </button>
           <button type="button" class="levels-head-cell col-stock" onclick={() => headerSort('qty')}>
-            <span class="levels-head-label">Остаток на складе</span>
+            <span class="levels-head-label">Остаток</span>
             {#if sortIndex('qty') > 0}
               <span class="sort-badge">
                 <Icon name={sortTerm('qty') === 'desc' ? 'arrow-down' : 'arrow-up'} size={12} />
@@ -1542,7 +1614,16 @@
             class="level"
             class:cart-over={cartQty > 0 && cartQty > level.quantity}
             class:inactive={level.active === false}
+            role="button"
+            tabindex="0"
+            aria-label={`Открыть позицию: ${level.name}`}
             onclick={() => openDetail(level)}
+            onkeydown={(event) => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openDetail(level);
+              }
+            }}
           >
             {#if showPhotos}
               <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -1653,6 +1734,29 @@
       </div>
       </div>
 
+      {#snippet pagerPrev()}
+        <button
+          type="button"
+          class="page-btn"
+          disabled={page <= 1}
+          aria-label="Предыдущая страница"
+          onclick={() => void goToPage(page - 1)}
+        >
+          <Icon name="arrow-left" size={14} />
+        </button>
+      {/snippet}
+      {#snippet pagerNext()}
+        <button
+          type="button"
+          class="page-btn"
+          disabled={page >= pages}
+          aria-label="Следующая страница"
+          onclick={() => void goToPage(page + 1)}
+        >
+          <Icon name="arrow-right" size={14} />
+        </button>
+      {/snippet}
+
       <div class="pager">
         <label class="per-page">
           <span>Показывать</span>
@@ -1670,15 +1774,7 @@
             <span class="pager-total">{rangeFrom}–{rangeTo} из {total}</span>
 
             <div class="pager-pages" aria-label="Постраничная навигация">
-              <button
-                type="button"
-                class="page-btn"
-                disabled={page <= 1}
-                aria-label="Предыдущая страница"
-                onclick={() => void goToPage(page - 1)}
-              >
-                <Icon name="arrow-left" size={14} />
-              </button>
+              {@render pagerPrev()}
 
               {#each pageItems as item, index (`${item}-${index}`)}
                 {#if item === '...'}
@@ -1697,37 +1793,13 @@
                 {/if}
               {/each}
 
-              <button
-                type="button"
-                class="page-btn"
-                disabled={page >= pages}
-                aria-label="Следующая страница"
-                onclick={() => void goToPage(page + 1)}
-              >
-                <Icon name="arrow-right" size={14} />
-              </button>
+              {@render pagerNext()}
             </div>
 
             <div class="pager-simple" aria-label="Постраничная навигация">
-              <button
-                type="button"
-                class="page-btn"
-                disabled={page <= 1}
-                aria-label="Предыдущая страница"
-                onclick={() => void goToPage(page - 1)}
-              >
-                <Icon name="arrow-left" size={14} />
-              </button>
+              {@render pagerPrev()}
               <span class="pager-simple-count">{page} / {pages}</span>
-              <button
-                type="button"
-                class="page-btn"
-                disabled={page >= pages}
-                aria-label="Следующая страница"
-                onclick={() => void goToPage(page + 1)}
-              >
-                <Icon name="arrow-right" size={14} />
-              </button>
+              {@render pagerNext()}
             </div>
 
             <form class="pager-jump" onsubmit={submitJump}>
@@ -1888,7 +1960,7 @@
     flex-wrap: wrap;
     gap: var(--space-4);
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
   }
 
   .search {
@@ -1904,6 +1976,7 @@
     display: flex;
     align-items: center;
     gap: var(--space-2);
+    margin-left: auto;
   }
 
   .sort-button {
@@ -2260,7 +2333,7 @@
       z-index: 2;
       display: grid;
       grid-template-columns:
-        var(--photo, 88px) minmax(0, 1fr) minmax(0, 130px) var(--price, 100px)
+        var(--photo, 88px) minmax(0, 1fr) minmax(0, 150px) var(--price, 100px)
         var(--cart, 120px);
       align-items: stretch;
       gap: 0;
@@ -2303,7 +2376,7 @@
     .levels:not(.tiles) .level {
       display: grid;
       grid-template-columns:
-        var(--photo, 88px) minmax(0, 1fr) minmax(0, 130px) var(--price, 100px)
+        var(--photo, 88px) minmax(0, 1fr) minmax(0, 150px) var(--price, 100px)
         var(--cart, 120px);
       align-items: center;
       gap: 0;
