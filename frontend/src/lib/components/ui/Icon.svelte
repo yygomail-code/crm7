@@ -29,6 +29,7 @@
   import SortAscendingOutlined from '@ant-design/icons-svg/es/asn/SortAscendingOutlined';
   import SwapOutlined from '@ant-design/icons-svg/es/asn/SwapOutlined';
   import TableOutlined from '@ant-design/icons-svg/es/asn/TableOutlined';
+  import TagsOutlined from '@ant-design/icons-svg/es/asn/TagsOutlined';
   import TeamOutlined from '@ant-design/icons-svg/es/asn/TeamOutlined';
   import type { IconDefinition } from '@ant-design/icons-svg/es/types';
   import { renderIconDefinitionToSVGElement } from '@ant-design/icons-svg/es/helpers';
@@ -69,6 +70,7 @@
     sort: SortAscendingOutlined,
     stocks: DatabaseOutlined,
     substitutions: SwapOutlined,
+    tags: TagsOutlined,
     trash: DeleteOutlined,
     view: TableOutlined,
     warehouse: ShopOutlined

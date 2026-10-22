@@ -982,6 +982,18 @@
 
         <span class="toolbar-divider" aria-hidden="true"></span>
 
+        {#if auth.can('settings.manage')}
+          <button
+            type="button"
+            class="sort-button"
+            title="Управление группами"
+            aria-label="Управление группами"
+            onclick={() => router.navigate('/stocks/groups')}
+          >
+            <Icon name="tags" size={16} />
+          </button>
+        {/if}
+
         {#if canEdit}
           <button
             type="button"

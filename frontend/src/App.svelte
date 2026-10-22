@@ -19,6 +19,7 @@
   import ClientCard from './views/ClientCard.svelte';
   import Chat from './views/Chat.svelte';
   import Stocks from './views/Stocks.svelte';
+  import StockGroups from './views/StockGroups.svelte';
   import Warehouses from './views/Warehouses.svelte';
   import WarehouseCard from './views/WarehouseCard.svelte';
   import WarehouseView from './views/WarehouseView.svelte';
@@ -106,6 +107,8 @@
       <Chat />
     {:else if route === '/stocks'}
       <Stocks />
+    {:else if route === '/stocks/groups'}
+      <StockGroups />
     {:else if route === '/warehouses'}
       <Warehouses />
     {:else if route === '/warehouses/new'}

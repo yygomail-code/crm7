@@ -22,16 +22,9 @@
   import type { AssignedPriceType, ItemType } from '../lib/api/types';
   import { listLegalDocuments, saveLegalDocument, type LegalDocument } from '../lib/api/legal';
   import { listPriceTypes } from '../lib/api/prices';
-  import {
-    createItemGroup,
-    deleteItemGroup,
-    listAdminItemGroups,
-    updateItemGroup
-  } from '../lib/api/groups';
   import type {
     AdminUser,
     AuditEntry,
-    ItemGroup,
     PriceType,
     RoleCapability,
     RoleInfo,
@@ -66,7 +59,7 @@
   const auditFilterDefaults = { from: '', to: '' };
 
   let tab = $state<
-    'users' | 'modules' | 'types' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs' | 'groups'
+    'users' | 'modules' | 'types' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs'
   >('users');
 
   let users = $state<AdminUser[]>([]);
@@ -82,10 +75,6 @@
   let pricePicker = $state<AdminUser | null>(null);
   let showCreate = $state(false);
   let priceTypes = $state<PriceType[]>([]);
-  let itemGroups = $state<ItemGroup[]>([]);
-  let groupDrafts = $state<Record<number, string>>({});
-  let newGroupTitle = $state('');
-  let groupsBusy = $state(false);
   let form = $state({
     name: '',
     email: '',
@@ -167,82 +156,6 @@
       priceTypes = (await listPriceTypes()).items;
     } catch {
       priceTypes = [];
-    }
-  }
-
-  async function loadItemGroups(): Promise<void> {
-    try {
-      const data = await listAdminItemGroups();
-      itemGroups = data.items;
-      groupDrafts = Object.fromEntries(data.items.map((group) => [group.id, group.title]));
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить группы';
-    }
-  }
-
-  async function addGroup(): Promise<void> {
-    const title = newGroupTitle.trim();
-
-    if (title === '') {
-      return;
-    }
-
-    groupsBusy = true;
-    error = '';
-    message = '';
-
-    try {
-      await createItemGroup(title);
-      newGroupTitle = '';
-      await loadItemGroups();
-      message = 'Группа добавлена';
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось добавить группу';
-    } finally {
-      groupsBusy = false;
-    }
-  }
-
-  async function saveGroup(group: ItemGroup): Promise<void> {
-    const title = (groupDrafts[group.id] ?? '').trim();
-
-    if (title === '') {
-      error = 'Укажите название группы';
-      return;
-    }
-
-    groupsBusy = true;
-    error = '';
-    message = '';
-
-    try {
-      await updateItemGroup(group.id, title);
-      await loadItemGroups();
-      message = 'Группа сохранена';
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить группу';
-    } finally {
-      groupsBusy = false;
-    }
-  }
-
-  async function removeGroup(group: ItemGroup): Promise<void> {
-    if (!confirm(`Удалить группу «${group.title}»? Позиции останутся без группы.`)) {
-      return;
-    }
-
-    groupsBusy = true;
-    error = '';
-    message = '';
-
-    try {
-      await deleteItemGroup(group.id);
-      await loadItemGroups();
-      message = 'Группа удалена';
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось удалить группу';
-    } finally {
-      groupsBusy = false;
     }
   }
 
@@ -483,7 +396,7 @@
   }
 
   async function openTab(
-    next: 'users' | 'modules' | 'types' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs' | 'groups'
+    next: 'users' | 'modules' | 'types' | 'audit' | 'searches' | 'roles' | 'refs' | 'docs'
   ): Promise<void> {
     tab = next;
 
@@ -505,10 +418,6 @@
       } catch {
         // некритично
       }
-    }
-
-    if (next === 'groups') {
-      await loadItemGroups();
     }
 
     if (next === 'audit' && audit.length === 0) {
@@ -797,9 +706,6 @@
     {/if}
     <button type="button" class:active={tab === 'roles'} onclick={() => void openTab('roles')}>Роли</button>
     <button type="button" class:active={tab === 'refs'} onclick={() => void openTab('refs')}>Справочники</button>
-    {#if auth.can('settings.manage')}
-      <button type="button" class:active={tab === 'groups'} onclick={() => void openTab('groups')}>Группы позиций</button>
-    {/if}
     {#if auth.can('settings.manage')}
       <button type="button" class:active={tab === 'docs'} onclick={() => void openTab('docs')}>Документы</button>
     {/if}
@@ -1273,56 +1179,6 @@
     </div>
   {/if}
 
-  {#if tab === 'groups'}
-    <div class="card form">
-      <h2>Группы позиций</h2>
-      <p class="hint">
-        Группы включаются настройкой «Разрешить использовать группы позиций» в «Настройках». Группа
-        назначается позиции при редактировании на складе; по группам можно фильтровать остатки и
-        выбор позиций в заявке.
-      </p>
-
-      {#if itemGroups.length === 0}
-        <p class="hint">Групп пока нет — добавьте первую.</p>
-      {:else}
-        <div class="groups">
-          {#each itemGroups as group (group.id)}
-            <div class="group-row">
-              <input class="group-title" bind:value={groupDrafts[group.id]} maxlength="255" />
-              <span class="group-meta">{group.positions_count ?? 0} поз.</span>
-              <Button variant="ghost" disabled={groupsBusy} onclick={() => void saveGroup(group)}>
-                Сохранить
-              </Button>
-              <button
-                type="button"
-                class="group-del"
-                disabled={groupsBusy}
-                onclick={() => void removeGroup(group)}
-              >
-                Удалить
-              </button>
-            </div>
-          {/each}
-        </div>
-      {/if}
-
-      <div class="group-add">
-        <label>
-          <span>Новая группа</span>
-          <input bind:value={newGroupTitle} placeholder="Например: Смартфоны" maxlength="255" />
-        </label>
-        <Button
-          variant="ghost"
-          loading={groupsBusy}
-          disabled={!newGroupTitle.trim()}
-          onclick={() => void addGroup()}
-        >
-          Добавить группу
-        </Button>
-      </div>
-    </div>
-  {/if}
-
   {#if tab === 'refs'}
     <div class="card">
       <h2>Статусы заявок</h2>
@@ -1657,77 +1513,6 @@
     margin: 0;
     color: var(--muted);
     font-size: 13px;
-  }
-
-  .groups {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .group-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: var(--space-2) var(--space-3);
-  }
-
-  .group-title {
-    flex: 1;
-    min-width: 180px;
-    padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    outline: none;
-  }
-
-  .group-title:focus {
-    border-color: var(--primary);
-  }
-
-  .group-meta {
-    color: var(--muted);
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .group-del {
-    padding: 9px 16px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--danger);
-    cursor: pointer;
-    font-size: 14px;
-    font-weight: 500;
-  }
-
-  .group-del:hover:not(:disabled) {
-    border-color: var(--danger);
-    background: rgba(220, 38, 38, 0.06);
-  }
-
-  .group-del:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-  }
-
-  .group-add {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    gap: var(--space-2);
-  }
-
-  .group-add label {
-    flex: 1;
-    min-width: 200px;
   }
 
   .users {
