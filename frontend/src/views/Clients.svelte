@@ -11,7 +11,9 @@
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
   import { clearFilters, countActive, loadFilters, saveFilters } from '../lib/filters';
+  import { formatDate } from '../lib/format';
   import { addHistory } from '../lib/search-history';
+  import { router } from '../lib/router.svelte';
 
   const filterDefaults = {
     state: '',
@@ -100,12 +102,6 @@
   function submitSearch(): void {
     search = searchInput.trim();
     addHistory('clients', search);
-    applySearch();
-  }
-
-  function resetSearch(): void {
-    searchInput = '';
-    search = '';
     applySearch();
   }
 
@@ -212,9 +208,15 @@
       <p class="hint">Откройте карточку клиента — подтверждение и отклонение там</p>
       <div class="list">
         {#each pending as item (item.id)}
-          <div class="card pending-card">
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="card pending-card" onclick={() => router.navigate(`/clients/${item.id}`)}>
             <div class="info">
-              <a class="name link" href={`#/clients/${item.id}`}>{item.name}</a>
+              <a
+                class="name link"
+                href={`#/clients/${item.id}`}
+                onclick={(event) => event.stopPropagation()}>{item.name}</a
+              >
               <div class="meta">
                 {#if item.company}<span>{item.company}</span>{/if}
                 {#if item.inn}<span>ИНН {item.inn}</span>{/if}
@@ -237,10 +239,21 @@
   {:else}
     <div class="list">
       {#each clients as client (client.id)}
-        <div class="card" class:pending={client.reg_state === 'pending'} class:blocked={!client.active}>
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+          class="card"
+          class:pending={client.reg_state === 'pending'}
+          class:blocked={!client.active}
+          onclick={() => router.navigate(`/clients/${client.id}`)}
+        >
           <div class="info">
             <div class="name-row">
-              <a class="name link" href={`#/clients/${client.id}`}>{client.name}</a>
+              <a
+                class="name link"
+                href={`#/clients/${client.id}`}
+                onclick={(event) => event.stopPropagation()}>{client.name}</a
+              >
               {#if client.reg_state === 'pending'}
                 <span class="state">ожидает подтверждения</span>
               {/if}
@@ -264,7 +277,7 @@
                 без менеджера
               {/if}
               · заявок: {client.requests_total}
-              {#if client.registered_at}· зарегистрирован: {client.registered_at.slice(0, 10)}{/if}
+              {#if client.registered_at}· зарегистрирован: {formatDate(client.registered_at)}{/if}
             </div>
           </div>
         </div>
@@ -272,14 +285,15 @@
     </div>
 
     <Pagination
-    page={page}
-    perPage={perPage}
-    total={total}
-    loading={loading}
-    perPageOptions={[20, 50, 100]}
-    onchange={goToPage}
-    onperpage={changePerPage}
-  />
+      page={page}
+      perPage={perPage}
+      total={total}
+      loading={loading}
+      perPageOptions={[20, 50, 100]}
+      always
+      onchange={goToPage}
+      onperpage={changePerPage}
+    />
   {/if}
 </section>
 
@@ -300,7 +314,10 @@
 
   h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--text);
   }
 
   h2 {
@@ -402,11 +419,10 @@
   .link {
     color: inherit;
     text-decoration: none;
-    border-bottom: 1px dashed var(--border);
   }
 
-  .link:hover {
-    border-bottom-color: var(--primary);
+  .card:hover .name {
+    color: var(--primary);
   }
 
   .search-row {
@@ -470,11 +486,12 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-sm);
+    cursor: pointer;
     transition: background 0.12s ease, border-color 0.12s ease;
   }
 
   .card:hover {
-    background: var(--bg);
+    background: var(--fill-tertiary);
     border-color: var(--primary);
   }
 

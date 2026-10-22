@@ -26,8 +26,10 @@
     RequestStatus
   } from '../lib/api/types';
   import { todayIso } from '../lib/period';
+  import { formatDate, formatDateTime } from '../lib/format';
   import { tooltip } from '../lib/actions/tooltip';
   import Button from '../lib/components/ui/Button.svelte';
+  import Icon from '../lib/components/ui/Icon.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
   import Pagination from '../lib/components/ui/Pagination.svelte';
   import PriceTypesPicker from '../lib/components/ui/PriceTypesPicker.svelte';
@@ -403,14 +405,6 @@
     actionNotice = 'Типы цен обновлены';
   }
 
-  function formatDateTime(value: string): string {
-    return value ? value.replace('T', ' ').slice(0, 16) : '';
-  }
-
-  function formatDate(value: string | null): string {
-    return value ? value.slice(0, 10).split('-').reverse().join('.') : '';
-  }
-
   async function loadManagers(): Promise<void> {
     if (managers.length > 0) {
       return;
@@ -565,16 +559,25 @@
   </div>
 
   {#if actionError}
-    <div class="alert">{actionError}</div>
+    <div class="alert" role="alert">
+      <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+      <span>{actionError}</span>
+    </div>
   {/if}
   {#if actionNotice}
-    <div class="notice">{actionNotice}</div>
+    <div class="notice">
+      <span class="notice-icon"><Icon name="check-circle" size={16} /></span>
+      <span>{actionNotice}</span>
+    </div>
   {/if}
 
   {#if loading}
     <div class="center"><Spinner size={26} /></div>
   {:else if error}
-    <div class="alert">{error}</div>
+    <div class="alert" role="alert">
+      <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+      <span>{error}</span>
+    </div>
   {:else if card}
     <div class="card profile">
       <div class="row">
@@ -941,7 +944,10 @@
       </div>
 
       {#if actionError}
-        <div class="alert">{actionError}</div>
+        <div class="alert" role="alert">
+          <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+          <span>{actionError}</span>
+        </div>
       {/if}
 
       <div class="modal-actions">
@@ -970,7 +976,10 @@
       </div>
 
       {#if actionError}
-        <div class="alert">{actionError}</div>
+        <div class="alert" role="alert">
+          <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+          <span>{actionError}</span>
+        </div>
       {/if}
 
       <div class="modal-actions">
@@ -1036,7 +1045,10 @@
       </p>
 
       {#if actionError}
-        <div class="alert">{actionError}</div>
+        <div class="alert" role="alert">
+          <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+          <span>{actionError}</span>
+        </div>
       {/if}
 
       <div class="modal-actions">
@@ -1078,20 +1090,40 @@
     flex-wrap: wrap;
   }
 
-  .alert {
+  .alert,
+  .notice {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
     padding: 8px 12px;
-    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .alert {
+    border-color: var(--error-border);
     background: var(--danger-bg);
-    color: var(--danger);
-    font-size: 13px;
   }
 
   .notice {
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: #e7f5ec;
-    color: #1e6b3a;
-    font-size: 13px;
+    border-color: var(--success-border);
+    background: var(--success-bg);
+  }
+
+  .alert-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--danger);
+  }
+
+  .notice-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--success);
   }
 
   .hint {
@@ -1133,30 +1165,31 @@
 
   .card-tabs {
     display: flex;
-    gap: var(--space-1);
-    border-bottom: 1px solid var(--border);
+    gap: var(--space-6);
+    border-bottom: 1px solid var(--border-secondary);
     margin-bottom: var(--space-4);
   }
 
   .card-tab {
-    padding: 10px 16px;
+    padding: 12px 0;
     border: none;
     border-bottom: 2px solid transparent;
     background: none;
     font: inherit;
-    color: var(--muted);
+    font-size: 14px;
+    color: var(--text);
     cursor: pointer;
+    transition: color 0.2s ease;
     white-space: nowrap;
   }
 
   .card-tab:hover {
-    color: var(--text);
+    color: var(--primary);
   }
 
   .card-tab.active {
     color: var(--primary);
     border-bottom-color: var(--primary);
-    font-weight: 500;
   }
 
   .interests .tr {
@@ -1324,7 +1357,10 @@
 
   h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--text);
   }
 
   h2 {
@@ -1372,8 +1408,8 @@
   }
 
   .state.on {
-    border-color: #1e6b3a;
-    color: #1e6b3a;
+    border-color: var(--success-border);
+    color: var(--success-text);
   }
 
   .contacts {
@@ -1429,7 +1465,7 @@
   }
 
   .value.warn {
-    color: #b45309;
+    color: var(--warning-text);
   }
 
   .label {
@@ -1502,7 +1538,7 @@
 
   .overdue {
     font-size: 12px;
-    color: #b45309;
+    color: var(--warning-text);
   }
 
   .subject {
@@ -1513,14 +1549,6 @@
   .empty {
     color: var(--muted);
     margin: 0;
-  }
-
-  .alert {
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: var(--danger-bg);
-    color: var(--danger);
-    font-size: 13px;
   }
 
   .center {
