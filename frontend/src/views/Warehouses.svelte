@@ -295,6 +295,7 @@
 
   async function doExport(format: string, byEmail: boolean): Promise<void> {
     exportOpen = false;
+    busy = true;
     error = '';
     message = '';
 
@@ -307,6 +308,8 @@
       }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось выполнить экспорт';
+    } finally {
+      busy = false;
     }
   }
 </script>
@@ -486,6 +489,7 @@
             <option value={10}>10</option>
             <option value={20}>20</option>
             <option value={50}>50</option>
+            <option value={100}>100</option>
             <option value={0}>Все</option>
           </select>
         </label>
@@ -641,6 +645,13 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    width: 100%;
+    max-width: 1280px;
+    margin-inline: auto;
+  }
+
+  .page:has(.levels.tiles) {
+    max-width: 1600px;
   }
 
   .head {
@@ -991,6 +1002,7 @@
   .levels.tiles .level {
     flex-direction: column;
     align-items: stretch;
+    justify-content: flex-start;
     gap: var(--space-2);
     padding: var(--space-3);
     border: 1px solid var(--border-secondary);

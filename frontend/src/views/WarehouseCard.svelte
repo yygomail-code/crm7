@@ -401,11 +401,9 @@
           Цены
         </button>
       {/if}
-      {#if !isNew}
-        <button type="button" class:active={tab === 'access'} onclick={() => (tab = 'access')}>
-          Доступ{users.length > 0 ? ` (${users.length})` : ''}
-        </button>
-      {/if}
+      <button type="button" class:active={tab === 'access'} onclick={() => (tab = 'access')}>
+        Доступ{users.length > 0 ? ` (${users.length})` : ''}
+      </button>
     </div>
 
     {#if tab === 'main'}
@@ -559,34 +557,36 @@
           <Button loading={busy} onclick={() => void save()}>{isNew ? 'Создать' : 'Сохранить'}</Button>
         </div>
 
-        <div class="row-head">
-          <h2>Пользователи с доступом</h2>
-          <Button onclick={openAdd}>Добавить</Button>
-        </div>
-
-        {#if users.length === 0}
-          <div class="empty">Персональный доступ никому не выдан</div>
-        {:else}
-          <div class="users">
-            {#each users as user (user.id)}
-              <div class="user">
-                <div class="who">
-                  <strong>{user.full_name || user.login}</strong>
-                  <span class="login">{user.login}</span>
-                  {#if !user.active}<span class="tag">неактивен</span>{/if}
-                </div>
-                <button
-                  type="button"
-                  class="icon-btn"
-                  title="Убрать доступ"
-                  aria-label={`Убрать доступ: ${user.full_name || user.login}`}
-                  onclick={() => void removeUser(user)}
-                >
-                  <Icon name="trash" size={16} />
-                </button>
-              </div>
-            {/each}
+        {#if !isNew}
+          <div class="row-head">
+            <h2>Пользователи с доступом</h2>
+            <Button onclick={openAdd}>Добавить</Button>
           </div>
+
+          {#if users.length === 0}
+            <div class="empty">Персональный доступ никому не выдан</div>
+          {:else}
+            <div class="users">
+              {#each users as user (user.id)}
+                <div class="user">
+                  <div class="who">
+                    <strong>{user.full_name || user.login}</strong>
+                    <span class="login">{user.login}</span>
+                    {#if !user.active}<span class="tag">неактивен</span>{/if}
+                  </div>
+                  <button
+                    type="button"
+                    class="icon-btn"
+                    title="Убрать доступ"
+                    aria-label={`Убрать доступ: ${user.full_name || user.login}`}
+                    onclick={() => void removeUser(user)}
+                  >
+                    <Icon name="trash" size={16} />
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -741,6 +741,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    width: 100%;
+    max-width: 1280px;
+    margin-inline: auto;
   }
 
   .head {
