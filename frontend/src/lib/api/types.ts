@@ -543,6 +543,7 @@ export interface StockPhoto {
 export interface StockLevelEntry {
   id: number;
   warehouse_sid: string;
+  warehouse_id: number;
   warehouse_name: string;
   quantity: number;
   unit: string;

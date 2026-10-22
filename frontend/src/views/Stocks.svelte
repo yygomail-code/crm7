@@ -48,14 +48,13 @@
   let levels = $state<StockLevel[]>([]);
   let jobs = $state<StockImportJob[]>([]);
   let updates = $state<StockUpdate[]>([]);
-  let detailOpen = $state(false);
-  let detailTarget = $state<StockLevel | null>(null);
   let selectedIds = $state<number[]>([]);
   const stockFilterDefaults = {
     sort: 'name_asc',
     group_ids: null as number[] | null,
     group_no_group: true,
-    per_page: 20,
+    per_page_list: 20,
+    per_page_tiles: 12,
     view: 'list',
     photos: true,
     price_types: [] as number[],
@@ -130,8 +129,15 @@
       : 'all'
   );
   const canDeactivate = $derived(auth.can('stocks.deactivate'));
-  let perPage = $state<number>(typeof initialStockFilters.per_page === 'number' ? initialStockFilters.per_page : 20);
-  let viewMode = $state<'list' | 'tiles'>(initialStockFilters.view === 'tiles' ? 'tiles' : 'list');
+  const initialView: 'list' | 'tiles' = initialStockFilters.view === 'tiles' ? 'tiles' : 'list';
+  const initialPerPageList =
+    typeof initialStockFilters.per_page_list === 'number' ? initialStockFilters.per_page_list : 20;
+  const initialPerPageTiles =
+    typeof initialStockFilters.per_page_tiles === 'number' ? initialStockFilters.per_page_tiles : 12;
+  let viewMode = $state<'list' | 'tiles'>(initialView);
+  let perPageList = $state<number>(initialPerPageList);
+  let perPageTiles = $state<number>(initialPerPageTiles);
+  let perPage = $state<number>(initialView === 'tiles' ? initialPerPageTiles : initialPerPageList);
   let showPhotos = $state<boolean>(initialStockFilters.photos !== false);
   let viewOpen = $state(false);
   let viewDraft = $state<'list' | 'tiles'>('list');
@@ -153,6 +159,7 @@
   const rangeFrom = $derived(perPage <= 0 ? (total === 0 ? 0 : 1) : Math.min((page - 1) * perPage + 1, total));
   const rangeTo = $derived(perPage <= 0 ? total : Math.min(page * perPage, total));
   const pageItems = $derived(buildPageItems(page, pages));
+  const perPageOptions = $derived(viewMode === 'tiles' ? [12, 24, 48, 96] : [10, 20, 50, 100]);
   const pricesEnabled = $derived(appSettings.pricesEnabled);
   const groupsEnabled = $derived(appSettings.groupsEnabled);
   let priceTypes = $state<{ id: number; title: string }[]>([]);
@@ -276,9 +283,8 @@
     selectedWarehouses.length === 1 ? selectedWarehouses[0].actual_date : null
   );
 
-  function openDetail(level: StockLevel): void {
-    detailTarget = level;
-    detailOpen = true;
+  function openItem(level: StockLevel): void {
+    router.navigate(`/stocks/items/${level.id}`);
   }
 
   function priceRows(level: StockLevel): PriceListItem[] {
@@ -513,7 +519,8 @@
       sort: stockSort,
       group_ids: stockGroups,
       group_no_group: stockNoGroup,
-      per_page: perPage,
+      per_page_list: perPageList,
+      per_page_tiles: perPageTiles,
       view: viewMode,
       photos: showPhotos,
       price_types: priceTypeFilter,
@@ -552,9 +559,20 @@
       return;
     }
 
+    const viewChanged = viewDraft !== viewMode;
+
     viewMode = viewDraft;
     showPhotos = photoDraft;
     priceTypeFilter = nextFilter;
+
+    if (viewChanged) {
+      perPage = viewMode === 'tiles' ? perPageTiles : perPageList;
+      page = 1;
+      saveStockFilters();
+      void loadLevels();
+      return;
+    }
+
     saveStockFilters();
   }
 
@@ -761,6 +779,12 @@
   }
 
   function changePerPage(): void {
+    if (viewMode === 'tiles') {
+      perPageTiles = perPage;
+    } else {
+      perPageList = perPage;
+    }
+
     page = 1;
     saveStockFilters();
     void loadLevels();
@@ -865,11 +889,6 @@
   function onFileChange(event: Event): void {
     const input = event.target as HTMLInputElement;
     file = input.files?.[0] ?? null;
-  }
-
-  function openItemPage(level: StockLevel): void {
-    detailOpen = false;
-    router.navigate(`/stocks/items/${level.id}/edit`);
   }
 
 </script>
@@ -1316,134 +1335,6 @@
       </div>
     </Modal>
 
-    <Modal
-      open={detailOpen}
-      label={detailTarget?.name ?? 'Позиция'}
-      wide
-      closeButton={false}
-      onclose={() => (detailOpen = false)}
-    >
-      {#if detailTarget}
-        {@const target = detailTarget}
-        {@const detailCartQty = inCart(target)}
-        {@const availability =
-          target.quantity < 0 ? 'order' : target.quantity === 0 ? 'none' : 'in'}
-        <div class="detail">
-          <div class="detail-photo">
-            <PhotoGallery photos={target.photos ?? []} variant="tile" />
-          </div>
-
-          <div class="detail-info">
-            <div class="detail-head">
-              <h3 class="detail-name">{target.name}</h3>
-              {#if canEdit}
-                <div class="detail-actions">
-                  <button
-                    type="button"
-                    class="icon-btn"
-                    title="Редактировать карточку позиции"
-                    aria-label={`Редактировать позицию: ${target.name}`}
-                    onclick={() => openItemPage(target)}
-                  >
-                    <Icon name="edit" size={16} />
-                  </button>
-                </div>
-              {/if}
-            </div>
-
-            <div class="detail-tags">
-              <span
-                class="availability"
-                class:in={availability === 'in'}
-                class:order={availability === 'order'}
-                class:none={availability === 'none'}
-              >
-                {availability === 'in'
-                  ? 'В наличии'
-                  : availability === 'order'
-                    ? 'Под заказ'
-                    : 'Нет в наличии'}
-              </span>
-              {#if target.active === false}
-                <span class="inactive-tag">деактивирована</span>
-              {/if}
-              {#if warehousesEnabled && target.warehouse_name}
-                <span class="detail-tag">{target.warehouse_name}</span>
-              {/if}
-              {#if groupsEnabled && target.group_title}
-                <span class="detail-tag">{target.group_title}</span>
-              {/if}
-            </div>
-
-            {#if target.description !== ''}
-              <p class="detail-desc">{target.description}</p>
-            {/if}
-
-            <div class="detail-metrics">
-              <div class="metric">
-                <span class="metric-label">Остаток на складе</span>
-                <span class="metric-value quantity" class:on-order={target.quantity < 0}>
-                  {stockQuantityText(target.quantity, target.unit)}
-                </span>
-                {#if target.actual_date}
-                  <span class="metric-note">остатки на {formatDate(target.actual_date)}</span>
-                {/if}
-              </div>
-
-              {#if pricesEnabled}
-                <div class="metric">
-                  <span class="metric-label">Цены</span>
-                  <div class="price-lines">
-                    {#each visiblePriceRows(target) as row (row.id)}
-                      <span class="price-line">
-                        <span class="price-type">{row.title || 'Цена'}</span>
-                        <span class="price" class:missing={row.price === null}>
-                          {formatPrice(row.price)}
-                        </span>
-                      </span>
-                    {/each}
-                  </div>
-                </div>
-              {/if}
-            </div>
-
-            {#if canCreate && target.active !== false}
-              <div class="detail-cart">
-                {#if detailCartQty > 0}
-                  <span class="stat-label">В корзине</span>
-                  <span class="add">
-                    <button
-                      type="button"
-                      class="step"
-                      aria-label={`Уменьшить: ${target.name}`}
-                      onclick={() => cart.decreaseAt(target.warehouse_id, target.name)}
-                    >
-                      −
-                    </button>
-                    <span class="qty" aria-label={`В корзине: ${target.name}`}>
-                      {detailCartQty.toLocaleString('ru-RU', { maximumFractionDigits: 3 })}
-                    </span>
-                    <button
-                      type="button"
-                      class="step"
-                      aria-label={`Увеличить: ${target.name}`}
-                      onclick={() => cart.increaseAt(target.warehouse_id, target.name)}
-                    >
-                      +
-                    </button>
-                  </span>
-                {:else}
-                  <Button onclick={() => addToCart(target)}>
-                    <Icon name="cart" size={16} /> Добавить в корзину
-                  </Button>
-                {/if}
-              </div>
-            {/if}
-          </div>
-        </div>
-      {/if}
-    </Modal>
-
     <Modal open={helpOpen} title="Как пользоваться" onclose={() => (helpOpen = false)} wide>
       <div class="help">
         <p class="help-intro">
@@ -1582,15 +1473,7 @@
               </span>
             {/if}
           </button>
-          <button type="button" class="levels-head-cell col-stock" onclick={() => headerSort('qty')}>
-            <span class="levels-head-label">Остаток</span>
-            {#if sortIndex('qty') > 0}
-              <span class="sort-badge">
-                <Icon name={sortTerm('qty') === 'desc' ? 'arrow-down' : 'arrow-up'} size={12} />
-                <span class="sort-num">{sortIndex('qty')}</span>
-              </span>
-            {/if}
-          </button>
+          <span class="levels-head-cell col-meta" aria-hidden="true"></span>
           {#if pricesEnabled}
             <button type="button" class="levels-head-cell col-price" onclick={() => headerSort('price')}>
               <span class="levels-head-label">Цена</span>
@@ -1602,6 +1485,15 @@
               {/if}
             </button>
           {/if}
+          <button type="button" class="levels-head-cell col-stock" onclick={() => headerSort('qty')}>
+            <span class="levels-head-label">Остаток</span>
+            {#if sortIndex('qty') > 0}
+              <span class="sort-badge">
+                <Icon name={sortTerm('qty') === 'desc' ? 'arrow-down' : 'arrow-up'} size={12} />
+                <span class="sort-num">{sortIndex('qty')}</span>
+              </span>
+            {/if}
+          </button>
           {#if canCreate}<span class="levels-head-cell head-cart col-cart">Корзина</span>{/if}
         </div>
       {/if}
@@ -1617,11 +1509,11 @@
             role="button"
             tabindex="0"
             aria-label={`Открыть позицию: ${level.name}`}
-            onclick={() => openDetail(level)}
+            onclick={() => openItem(level)}
             onkeydown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                openDetail(level);
+                openItem(level);
               }
             }}
           >
@@ -1633,7 +1525,7 @@
                   photos={level.photos ?? []}
                   variant={viewMode === 'tiles' ? 'tile' : 'list'}
                   flush={viewMode === 'tiles'}
-                  onopen={() => openDetail(level)}
+                  onopen={() => openItem(level)}
                 />
               </div>
             {/if}
@@ -1645,29 +1537,30 @@
                 title="Подробнее о позиции"
                 onclick={(event) => {
                   event.stopPropagation();
-                  openDetail(level);
+                openItem(level);
                 }}
               >
                 {level.name}
               </button>
 
-              {#if level.warehouse_name || (groupsEnabled && level.group_title) || level.active === false}
+              {#if level.active === false}
                 <div class="meta">
-                  {#if warehousesEnabled && level.warehouse_name}<span class="wh">{level.warehouse_name}</span>{/if}
-                  {#if groupsEnabled && level.group_title}<span class="group">{level.group_title}</span>{/if}
-                  {#if level.active === false}<span class="inactive-tag">деактивирована</span>{/if}
+                  <span class="inactive-tag">деактивирована</span>
                 </div>
               {/if}
             </div>
+            {#if (warehousesEnabled && level.warehouse_name) || (groupsEnabled && level.group_title)}
+              <div class="meta col-meta">
+                {#if warehousesEnabled && level.warehouse_name}<span class="wh">{level.warehouse_name}</span>{/if}
+                {#if groupsEnabled && level.group_title}<span class="group">{level.group_title}</span>{/if}
+              </div>
+            {/if}
             <div class="level-bottom">
               <div class="stat col-stock">
-                <span class="stat-label">Остаток на складе</span>
+                <span class="stat-label">Остаток</span>
                 <span class="quantity" class:on-order={level.quantity < 0}>
                   {stockQuantityText(level.quantity, level.unit)}
                 </span>
-                {#if level.quantity === 0}
-                  <span class="zero-mark">нет в наличии</span>
-                {/if}
               </div>
 
               {#if pricesEnabled}
@@ -1690,8 +1583,8 @@
                 <!-- svelte-ignore a11y_click_events_have_key_events -->
                 <!-- svelte-ignore a11y_no_static_element_interactions -->
                 <div class="stat cart-stat col-cart" onclick={(event) => event.stopPropagation()}>
-                  <span class="stat-label">В корзине</span>
                   {#if cartQty > 0}
+                    <span class="stat-label">В корзине</span>
                     <span class="add">
                       <button
                         type="button"
@@ -1761,10 +1654,9 @@
         <label class="per-page">
           <span>Показывать</span>
           <select bind:value={perPage} onchange={changePerPage}>
-            <option value={10}>10</option>
-            <option value={20}>20</option>
-            <option value={50}>50</option>
-            <option value={100}>100</option>
+            {#each perPageOptions as option (option)}
+              <option value={option}>{option}</option>
+            {/each}
             <option value={0}>Все</option>
           </select>
         </label>
@@ -1828,6 +1720,13 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    width: 100%;
+    max-width: 1280px;
+    margin-inline: auto;
+  }
+
+  .page:has(.levels.tiles) {
+    max-width: 1600px;
   }
 
   .head {
@@ -2261,7 +2160,7 @@
     grid-column: 2;
   }
 
-  .col-stock {
+  .col-meta {
     grid-column: 3;
   }
 
@@ -2269,8 +2168,21 @@
     grid-column: 4;
   }
 
-  .col-cart {
+  .col-stock {
     grid-column: 5;
+  }
+
+  .col-cart {
+    grid-column: 6;
+  }
+
+  .col-photo,
+  .col-name,
+  .col-meta,
+  .col-price,
+  .col-stock,
+  .col-cart {
+    grid-row: 1;
   }
 
   .levels-head-cell {
@@ -2333,8 +2245,8 @@
       z-index: 2;
       display: grid;
       grid-template-columns:
-        var(--photo, 88px) minmax(0, 1fr) minmax(0, 150px) var(--price, 100px)
-        var(--cart, 120px);
+        var(--photo, 88px) minmax(0, 1fr) minmax(0, 180px) var(--price, 100px)
+        minmax(0, 150px) var(--cart, 120px);
       align-items: stretch;
       gap: 0;
       padding: 0;
@@ -2376,8 +2288,8 @@
     .levels:not(.tiles) .level {
       display: grid;
       grid-template-columns:
-        var(--photo, 88px) minmax(0, 1fr) minmax(0, 150px) var(--price, 100px)
-        var(--cart, 120px);
+        var(--photo, 88px) minmax(0, 1fr) minmax(0, 180px) var(--price, 100px)
+        minmax(0, 150px) var(--cart, 120px);
       align-items: center;
       gap: 0;
       padding: 0;
@@ -2385,6 +2297,7 @@
 
     .levels:not(.tiles) .level > .cell,
     .levels:not(.tiles) .level > .name-col,
+    .levels:not(.tiles) .level > .col-meta,
     .levels:not(.tiles) .level > .level-bottom > .stat {
       padding: 12px var(--space-4);
     }
@@ -2399,6 +2312,21 @@
 
     .levels:not(.tiles) .name {
       font-weight: 600;
+    }
+
+    .levels:not(.tiles) .col-meta {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 2px;
+      font-size: 12px;
+    }
+
+    .levels:not(.tiles) .col-meta .wh,
+    .levels:not(.tiles) .col-meta .group {
+      max-width: 100%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     .levels:not(.tiles) .col-stock,
@@ -2463,147 +2391,6 @@
     white-space: nowrap;
   }
 
-  .detail {
-    display: grid;
-    grid-template-columns: minmax(0, 300px) minmax(0, 1fr);
-    gap: var(--space-5);
-    align-items: start;
-  }
-
-  .detail-photo {
-    min-width: 0;
-  }
-
-  .detail-info {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    min-width: 0;
-  }
-
-  .detail-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: var(--space-3);
-  }
-
-  .detail-name {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    line-height: 1.4;
-    color: var(--text);
-    overflow-wrap: anywhere;
-  }
-
-  .detail-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    flex: 0 0 auto;
-  }
-
-  .detail-tags {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2);
-  }
-
-  .detail-tag {
-    padding: 0 8px;
-    border: 1px solid var(--border-secondary);
-    border-radius: 4px;
-    background: var(--fill-tertiary);
-    font-size: 12px;
-    line-height: 20px;
-    color: var(--muted);
-  }
-
-  .availability {
-    padding: 0 8px;
-    border: 1px solid transparent;
-    border-radius: 4px;
-    font-size: 12px;
-    line-height: 20px;
-  }
-
-  .availability.in {
-    border-color: var(--success-border);
-    background: var(--success-bg);
-    color: var(--success-text);
-  }
-
-  .availability.order {
-    background: var(--warning-bg);
-    color: var(--warning-text);
-  }
-
-  .availability.none {
-    background: var(--danger-bg);
-    color: var(--danger);
-  }
-
-  .detail-desc {
-    margin: 0;
-    color: var(--muted);
-    font-size: 14px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-
-  .detail-metrics {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: var(--space-3);
-  }
-
-  .metric {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: var(--space-3);
-    border: 1px solid var(--border-secondary);
-    border-radius: var(--radius-md);
-    background: var(--fill-tertiary);
-  }
-
-  .metric-label {
-    font-size: 12px;
-    color: var(--text-description);
-  }
-
-  .metric-value {
-    font-size: 18px;
-    font-weight: 600;
-    line-height: 1.3;
-    overflow-wrap: anywhere;
-  }
-
-  .metric-value.on-order {
-    color: var(--warning-text);
-  }
-
-  .metric-note {
-    font-size: 12px;
-    color: var(--muted);
-  }
-
-  .detail-cart {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--space-2);
-  }
-
-  @media (max-width: 640px) {
-    .detail {
-      grid-template-columns: minmax(0, 1fr);
-    }
-  }
-
   .levels.tiles {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2615,15 +2402,9 @@
     overflow: visible;
   }
 
-  @media (min-width: 640px) {
+  @media (min-width: 560px) {
     .levels.tiles {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-  }
-
-  @media (min-width: 1024px) {
-    .levels.tiles {
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
     }
   }
 
@@ -2684,35 +2465,43 @@
     line-height: 1.3;
   }
 
+  .levels.tiles .col-meta {
+    padding: 4px var(--space-3) 0;
+  }
+
   .levels.tiles .meta {
-    flex-wrap: nowrap;
-    gap: var(--space-1);
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
     font-size: 12px;
   }
 
   .levels.tiles .meta .wh,
   .levels.tiles .meta .group {
     max-width: 100%;
-    padding: 0 7px;
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    background: var(--fill-tertiary);
     color: var(--text-description);
-    line-height: 20px;
+    font-size: 12px;
+    line-height: 1.3;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
   .levels.tiles .stat-label {
+    font-size: 11px;
+    line-height: 1.2;
+    color: var(--muted);
+  }
+
+  .levels.tiles .col-price .stat-label {
     display: none;
   }
 
   .levels.tiles .level-bottom {
     display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px var(--space-3);
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-2);
     margin-top: auto;
     padding: var(--space-3);
   }
@@ -2723,6 +2512,11 @@
 
   .levels.tiles .col-stock {
     order: 2;
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 2px var(--space-2);
     color: var(--text-description);
   }
 
@@ -2732,19 +2526,31 @@
   }
 
   .levels.tiles .col-stock .quantity {
-    font-size: 13px;
-    font-weight: 400;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
   }
 
   .levels.tiles .cart-stat {
     order: 3;
-    flex: 1 0 100%;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
     min-width: 0;
-    margin: 0 calc(-1 * var(--space-3)) calc(-1 * var(--space-3));
+    margin: var(--space-2) calc(-1 * var(--space-3)) calc(-1 * var(--space-3));
     padding: var(--space-2) var(--space-3);
     border-top: 1px solid var(--border-secondary);
     background: var(--surface);
-    justify-content: center;
+  }
+
+  .levels.tiles .cart-stat .add {
+    width: auto;
+  }
+
+  .levels.tiles .cart-stat .add-empty {
+    width: 100%;
   }
 
   .name-col {
@@ -2886,32 +2692,6 @@
   .price-chip.active {
     border-color: var(--primary);
     background: var(--primary-bg);
-    color: var(--primary);
-  }
-
-  .zero-mark {
-    font-size: 12px;
-    color: var(--muted);
-    white-space: nowrap;
-  }
-
-  .icon-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    padding: 0;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    color: var(--muted);
-    cursor: pointer;
-    flex: 0 0 auto;
-  }
-
-  .icon-btn:hover {
-    border-color: var(--primary);
     color: var(--primary);
   }
 

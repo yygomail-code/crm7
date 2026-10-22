@@ -22,6 +22,7 @@
   import Warehouses from './views/Warehouses.svelte';
   import WarehouseCard from './views/WarehouseCard.svelte';
   import ItemEdit from './views/ItemEdit.svelte';
+  import ItemCard from './views/ItemCard.svelte';
   import Admin from './views/Admin.svelte';
   import Legal from './views/Legal.svelte';
   import ManagerProfile from './views/ManagerProfile.svelte';
@@ -65,6 +66,7 @@
   const userMatch = $derived(matchRoute('/users/:id', route));
   const itemNewMatch = $derived(matchRoute('/stocks/items/new', route));
   const itemEditMatch = $derived(matchRoute('/stocks/items/:id/edit', route));
+  const itemCardMatch = $derived(matchRoute('/stocks/items/:id', route));
   const warehouseMatch = $derived(matchRoute('/warehouses/:id', route));
 </script>
 
@@ -112,6 +114,8 @@
       <ItemEdit id={0} />
     {:else if itemEditMatch}
       <ItemEdit id={Number(itemEditMatch.id)} />
+    {:else if itemCardMatch}
+      <ItemCard id={Number(itemCardMatch.id)} />
     {:else if route === '/reports'}
       <Reports />
     {:else if route === '/substitutions'}

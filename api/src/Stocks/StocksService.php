@@ -281,6 +281,23 @@ final class StocksService
             $price = isset($map[$nameSid]) ? (float) $map[$nameSid] : null;
         }
 
+        $assignedTypes = $this->prices->enabled() ? $this->prices->assignedTypesForUser($user) : [];
+        $assignedTypeIds = array_map(static fn (array $type): int => (int) $type['id'], $assignedTypes);
+        $typePrices = $assignedTypeIds !== []
+            ? $this->prices->pricesForStockItemsByTypes($stockSid, [$nameSid], $assignedTypeIds)
+            : [];
+        $priceList = array_map(static function (array $type) use ($typePrices, $stockSid, $nameSid): array {
+            $typeId = (int) $type['id'];
+            $value = $typePrices[$stockSid][$nameSid][$typeId] ?? null;
+
+            return [
+                'id' => $typeId,
+                'title' => (string) $type['title'],
+                'is_default' => (bool) $type['is_default'],
+                'price' => $value !== null ? (float) $value : null,
+            ];
+        }, $assignedTypes);
+
         $groupId = $level['group_id'] !== null ? (int) $level['group_id'] : null;
 
         $existing = [];
@@ -302,6 +319,7 @@ final class StocksService
             $levels[] = [
                 'id' => $row !== null ? (int) $row['id'] : 0,
                 'warehouse_sid' => $whSid,
+                'warehouse_id' => (int) $wh['ID'],
                 'warehouse_name' => (string) $wh['NAME'],
                 'quantity' => $row !== null ? (float) $row['quantity'] : 0.0,
                 'unit' => $row !== null ? (string) ($row['unit'] ?? '') : (string) ($level['unit'] ?? ''),
@@ -355,6 +373,7 @@ final class StocksService
                 'description' => (string) ($level['description'] ?? ''),
                 'actual_date' => $level['actual_date'] !== null ? (string) $level['actual_date'] : null,
                 'price' => $price,
+                'price_list' => $priceList,
                 'prices' => $canEdit ? $this->prices->pricesForStockItem($stockSid, $nameSid) : [],
                 'group_id' => $groupId,
                 'group_title' => $this->groupTitle($groupId),

@@ -72,7 +72,6 @@
   const isNew = $derived(id <= 0);
   const photoAspect = $derived(appSettings.photoAspect);
   const photoFit = $derived(appSettings.photoFit);
-  const warehousesEnabled = $derived(appSettings.warehousesEnabled);
 
   let loading = $state(true);
   let saving = $state(false);
@@ -80,7 +79,7 @@
   let message = $state('');
 
   let name = $state('');
-  let unit = $state('');
+  let unit = $state('шт');
   let article = $state('');
   let quantity = $state('0');
   let description = $state('');
@@ -89,7 +88,6 @@
 
   let warehouses = $state<StockWarehouse[]>([]);
   let warehouseId = $state(0);
-  let warehouseName = $state('');
   let groups = $state<ItemGroup[]>([]);
   let priceTypes = $state<PriceType[]>([]);
 
@@ -184,6 +182,42 @@
   let photoBusy = $state(false);
   let photoError = $state('');
 
+  let lightboxOpen = $state(false);
+  let photoIndex = $state(0);
+  let maxUrls = $state<Record<number, string | null>>({});
+
+  const lightboxUrl = $derived.by(() => {
+    const photo = photos[photoIndex];
+
+    return photo === undefined ? null : (maxUrls[photo.id] ?? photoUrls[photo.id] ?? null);
+  });
+
+  $effect(() => {
+    if (!lightboxOpen) {
+      return;
+    }
+
+    for (const photo of photos) {
+      if (maxUrls[photo.id] === undefined) {
+        void loadItemPhotoUrl(photo.id, 'max').then((url) => {
+          maxUrls[photo.id] = url;
+        });
+      }
+    }
+  });
+
+  function prevPhoto(): void {
+    if (photos.length > 1) {
+      photoIndex = (photoIndex - 1 + photos.length) % photos.length;
+    }
+  }
+
+  function nextPhoto(): void {
+    if (photos.length > 1) {
+      photoIndex = (photoIndex + 1) % photos.length;
+    }
+  }
+
   const deactivateBlockReason = $derived(
     deactivateBlocked === 'in_sets'
       ? 'Позиция входит в состав наборов — сначала уберите её из состава.'
@@ -200,6 +234,10 @@
   onMount(() => {
     void load();
   });
+
+  function goBack(): void {
+    router.navigate(isNew ? '/stocks' : `/stocks/items/${id}`);
+  }
 
   async function load(): Promise<void> {
     loading = true;
@@ -227,7 +265,6 @@
         description = item.description ?? '';
         groupId = item.group_id ?? 0;
         warehouseId = item.warehouse_id;
-        warehouseName = item.warehouse_name;
         canEdit = data.can_edit;
         canManagePhotos = data.can_manage_photos;
         canDeactivate = data.can_deactivate;
@@ -547,9 +584,9 @@
     <button
       type="button"
       class="back"
-      title="Назад к номенклатуре"
-      aria-label="Назад к номенклатуре"
-      onclick={() => router.navigate('/stocks')}
+      title="Назад"
+      aria-label="Назад"
+      onclick={goBack}
     >
       <Icon name="arrow-left" size={16} />
     </button>
@@ -560,9 +597,6 @@
           <span class="status off">деактивирована</span>
         {/if}
       </h1>
-      {#if warehousesEnabled && !isNew && warehouseName}
-        <p class="head-subtitle">Склад: {warehouseName}</p>
-      {/if}
     </div>
 
     {#if !isNew && (canDeactivate || canDelete)}
@@ -615,16 +649,31 @@
 
         {#if photos.length > 0}
           <div class="viewer">
-            <PhotoGallery photos={photos} variant="tile" />
+            <PhotoGallery
+              photos={photos}
+              variant="tile"
+              bind:index={photoIndex}
+              onopen={() => (lightboxOpen = true)}
+            />
           </div>
         {/if}
 
         <div class="photo-grid" style="--photo-ratio: {photoAspect}; --photo-fit: {photoFit};">
-          {#each photos as photo (photo.id)}
+          {#each photos as photo, index (photo.id)}
             <div class="photo-item">
-              {#if photoUrls[photo.id]}
-                <img src={photoUrls[photo.id]} alt="" />
-              {/if}
+              <button
+                type="button"
+                class="photo-thumb"
+                aria-label={`Открыть фото ${index + 1}`}
+                onclick={() => {
+                  photoIndex = index;
+                  lightboxOpen = true;
+                }}
+              >
+                {#if photoUrls[photo.id]}
+                  <img src={photoUrls[photo.id]} alt="" />
+                {/if}
+              </button>
               {#if canManagePhotos}
                 <button
                   type="button"
@@ -669,36 +718,34 @@
       </div>
 
       <div class="card">
-        {#if !isNew && levels.length > 0}
-          <div class="tabs">
-            <button type="button" class:active={tab === 'main'} onclick={() => (tab = 'main')}>
-              Основное
-            </button>
+        <div class="tabs">
+          <button type="button" class:active={tab === 'main'} onclick={() => (tab = 'main')}>
+            Основное
+          </button>
+          {#if !isNew || warehouses.length > 0}
             <button type="button" class:active={tab === 'levels'} onclick={() => (tab = 'levels')}>
-              Количество
+              Остатки
             </button>
-            {#if pricesEnabled && priceColumns.length > 0}
-              <button
-                type="button"
-                class:active={tab === 'prices'}
-                onclick={() => (tab = 'prices')}
-              >
-                Цены
-              </button>
-            {/if}
-            {#if isSet}
-              <button
-                type="button"
-                class:active={tab === 'composition'}
-                onclick={() => (tab = 'composition')}
-              >
-                Состав
-              </button>
-            {/if}
-          </div>
-        {:else}
-          <h2>Параметры</h2>
-        {/if}
+          {/if}
+          {#if !isNew && pricesEnabled && priceColumns.length > 0}
+            <button
+              type="button"
+              class:active={tab === 'prices'}
+              onclick={() => (tab = 'prices')}
+            >
+              Цены
+            </button>
+          {/if}
+          {#if isSet}
+            <button
+              type="button"
+              class:active={tab === 'composition'}
+              onclick={() => (tab = 'composition')}
+            >
+              Состав
+            </button>
+          {/if}
+        </div>
 
         {#if isNew}
           <p class="hint">Позиция создаётся деактивированной — после сохранения активируйте её.</p>
@@ -716,7 +763,7 @@
           {#if itemTypes.length > 0}
             <label class="field">
               <span class="label">Тип позиции</span>
-              <select bind:value={itemType}>
+              <select bind:value={itemType} disabled={!canEdit}>
                 {#if itemType && !itemTypes.some((type) => type.code === itemType)}
                   <option value={itemType}>{typeTitleOf(itemType)}</option>
                 {/if}
@@ -727,13 +774,13 @@
             </label>
           {/if}
 
-          <Input label="Название" bind:value={name} placeholder="Например: Смартфон Pixel 9" />
+          <Input label="Название" bind:value={name} placeholder="Например: Смартфон Pixel 9" disabled={!canEdit} />
 
           <div class="row">
-            <Input label="Артикул" bind:value={article} placeholder="Код / SKU" />
+            <Input label="Артикул" bind:value={article} placeholder="Код / SKU" disabled={!canEdit} />
             <label class="field">
               <span class="label">Единица измерения</span>
-              <select bind:value={unit}>
+              <select bind:value={unit} disabled={!canEdit}>
                 {#if unit && !UNITS.includes(unit)}
                   <option value={unit}>{unit}</option>
                 {/if}
@@ -747,7 +794,7 @@
           {#if groupsEnabled && groups.length > 0}
             <label class="field">
               <span class="label">Группа</span>
-              <select bind:value={groupId}>
+              <select bind:value={groupId} disabled={!canEdit}>
                 <option value={0}>Без группы</option>
                 {#each groups as group (group.id)}
                   <option value={group.id}>{group.title}</option>
@@ -761,34 +808,48 @@
             <textarea
               bind:value={description}
               rows="3"
+              disabled={!canEdit}
               placeholder="Характеристики, цвет, память — покажется в подсказке при наведении"
             ></textarea>
           </label>
 
         </div>
         {:else if tab === 'levels'}
-          <div class="levels">
-            <div class="levels-total">
-              <span class="label">Общий остаток</span>
-              <span class="total-value">{stockQuantityText(totalQuantity, unit)}</span>
-            </div>
-
-            <p class="hint">Позиция одна для всех складов — меняется только количество.</p>
-
-            {#each levels as level (level.warehouse_sid)}
-              <div class="level-row" class:current={level.current}>
-                <span class="level-name">
-                  {level.warehouse_name}
-                  {#if level.current}<span class="tag">текущий</span>{/if}
-                </span>
+          {#if isNew}
+            <div class="levels">
+              <div class="level-row">
+                <span class="level-name">{warehouses[0]?.name ?? 'Склад'}</span>
                 <div class="level-qty">
-                  <Input type="number" bind:value={levelEdits[level.warehouse_sid]} disabled={!canEdit} />
+                  <Input type="number" bind:value={quantity} disabled={!canEdit} />
                 </div>
-                {#if level.unit}<span class="level-unit">{level.unit}</span>{/if}
-                <span class="level-date">{level.actual_date ? formatDate(level.actual_date) : '—'}</span>
+                {#if unit}<span class="level-unit">{unit}</span>{/if}
               </div>
-            {/each}
-          </div>
+              <p class="hint">Позиция создаётся на этом складе. Остальные склады — после сохранения.</p>
+            </div>
+          {:else}
+            <div class="levels">
+              <div class="levels-total">
+                <span class="label">Общий остаток</span>
+                <span class="total-value">{stockQuantityText(totalQuantity, unit)}</span>
+              </div>
+
+              <p class="hint">Позиция одна для всех складов — меняется только количество.</p>
+
+              {#each levels as level (level.warehouse_sid)}
+                <div class="level-row" class:current={level.current}>
+                  <span class="level-name">
+                    {level.warehouse_name}
+                    {#if level.current}<span class="tag">текущий</span>{/if}
+                  </span>
+                  <div class="level-qty">
+                    <Input type="number" bind:value={levelEdits[level.warehouse_sid]} disabled={!canEdit} />
+                  </div>
+                  {#if level.unit}<span class="level-unit">{level.unit}</span>{/if}
+                  <span class="level-date">{level.actual_date ? formatDate(level.actual_date) : '—'}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
         {:else if tab === 'prices'}
           <div class="price-table">
             <p class="hint">
@@ -877,7 +938,7 @@
         {/if}
 
         <div class="actions">
-          <Button variant="ghost" onclick={() => router.navigate('/stocks')}>Отмена</Button>
+          <Button variant="ghost" onclick={goBack}>Отмена</Button>
           <Button loading={saving} disabled={!canEdit} onclick={() => void save()}>
             {isNew ? 'Создать позицию' : 'Сохранить'}
           </Button>
@@ -886,6 +947,32 @@
     </div>
   {/if}
 </section>
+
+<Modal
+  open={lightboxOpen}
+  label="Фото"
+  wide
+  closeButton={false}
+  onclose={() => (lightboxOpen = false)}
+>
+  <div class="lightbox">
+    {#if lightboxUrl}
+      <img src={lightboxUrl} alt="" />
+    {:else}
+      <div class="lb-placeholder"><Icon name="picture" size={40} /></div>
+    {/if}
+
+    {#if photos.length > 1}
+      <button type="button" class="lb-nav prev" aria-label="Предыдущее фото" onclick={prevPhoto}>
+        <Icon name="arrow-left" size={18} />
+      </button>
+      <button type="button" class="lb-nav next" aria-label="Следующее фото" onclick={nextPhoto}>
+        <Icon name="arrow-right" size={18} />
+      </button>
+      <span class="lb-counter">{photoIndex + 1}/{photos.length}</span>
+    {/if}
+  </div>
+</Modal>
 
 <Modal open={pickerOpen} title="Добавить позицию в состав" wide onclose={() => (pickerOpen = false)}>
   <div class="cand-toolbar">
@@ -1016,12 +1103,6 @@
     overflow-wrap: anywhere;
   }
 
-  .head-subtitle {
-    margin: 0;
-    font-size: 14px;
-    color: var(--text-description);
-  }
-
   .layout {
     display: grid;
     grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
@@ -1071,6 +1152,16 @@
     border-radius: var(--radius-sm);
     overflow: hidden;
     background: var(--fill-tertiary);
+  }
+
+  .photo-thumb {
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: none;
+    background: none;
+    cursor: zoom-in;
   }
 
   .photo-item img {
@@ -1178,6 +1269,13 @@
   .field textarea:focus {
     border-color: var(--primary);
     box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
+  }
+
+  .field select:disabled,
+  .field textarea:disabled {
+    background: var(--fill-tertiary);
+    color: var(--text-description);
+    cursor: not-allowed;
   }
 
   .price-table {
@@ -1572,5 +1670,71 @@
     flex: 0 0 auto;
     margin-top: 2px;
     color: var(--success);
+  }
+
+  .lightbox {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 200px;
+  }
+
+  .lightbox img {
+    display: block;
+    max-width: 100%;
+    max-height: 70vh;
+    object-fit: contain;
+  }
+
+  .lb-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 320px;
+    color: var(--text-description);
+  }
+
+  .lb-nav {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.5);
+    color: #fff;
+    cursor: pointer;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    transition: background-color 0.15s ease;
+  }
+
+  .lb-nav:hover {
+    background: rgba(0, 0, 0, 0.72);
+  }
+
+  .lb-nav.prev {
+    left: 12px;
+  }
+
+  .lb-nav.next {
+    right: 12px;
+  }
+
+  .lb-counter {
+    position: absolute;
+    right: 12px;
+    bottom: 10px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.55);
+    color: #fff;
+    font-size: 12px;
   }
 </style>

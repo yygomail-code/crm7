@@ -9,13 +9,13 @@
     variant?: 'list' | 'tile';
     onopen?: () => void;
     flush?: boolean;
+    index?: number;
   }
 
-  let { photos, variant = 'list', onopen, flush = false }: Props = $props();
+  let { photos, variant = 'list', onopen, flush = false, index = $bindable(0) }: Props = $props();
 
   const photoSize = $derived<'preview' | 'card'>(variant === 'tile' ? 'card' : 'preview');
 
-  let index = $state(0);
   let urls = $state<Record<number, string | null>>({});
   let touchX = 0;
 
