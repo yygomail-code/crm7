@@ -37,6 +37,7 @@
   import { appSettings } from '../lib/stores/app-settings.svelte';
   import StatusBadge from '../lib/components/StatusBadge.svelte';
   import Button from '../lib/components/ui/Button.svelte';
+  import Icon from '../lib/components/ui/Icon.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
   import { formatDateTime, formatPrice, formatSize, priorityLabel } from '../lib/format';
@@ -282,9 +283,9 @@
   let activityOccurredAt = $state(localNow());
 
   const priorityOptions: { value: number; label: string }[] = [
-    { value: 1, label: 'Высокий' },
+    { value: 1, label: 'Низкий' },
     { value: 2, label: 'Обычный' },
-    { value: 3, label: 'Низкий' }
+    { value: 3, label: 'Высокий' }
   ];
   let itemsSort = $state<ItemsSortKey>('natural');
 
@@ -838,7 +839,10 @@
   {#if loading}
     <div class="center"><Spinner size={26} /></div>
   {:else if error}
-    <div class="alert">{error}</div>
+    <div class="alert" role="alert">
+      <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+      <span>{error}</span>
+    </div>
   {:else if detail}
     <div class="card">
       <div class="card-head">
@@ -880,11 +884,17 @@
       </div>
 
       {#if actionError}
-        <div class="alert">{actionError}</div>
+        <div class="alert" role="alert">
+          <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+          <span>{actionError}</span>
+        </div>
       {/if}
 
       {#if actionNotice}
-        <div class="notice">{actionNotice}</div>
+        <div class="notice">
+          <span class="notice-icon"><Icon name="check-circle" size={16} /></span>
+          <span>{actionNotice}</span>
+        </div>
       {/if}
     </div>
 
@@ -1647,6 +1657,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    width: 100%;
+    max-width: 1280px;
+    margin-inline: auto;
   }
 
   .topbar {
@@ -1667,13 +1680,42 @@
     border-bottom-color: var(--primary);
   }
 
-  .notice {
+  .notice,
+  .alert {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
     margin-top: var(--space-3);
     padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: #e7f5ec;
-    color: #1e6b3a;
-    font-size: 13px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .notice {
+    border-color: var(--success-border);
+    background: var(--success-bg);
+  }
+
+  .alert {
+    border-color: var(--error-border);
+    background: var(--danger-bg);
+  }
+
+  .notice-icon,
+  .alert-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 2px;
+  }
+
+  .notice-icon {
+    color: var(--success);
+  }
+
+  .alert-icon {
+    color: var(--danger);
   }
 
   .t-pos {
@@ -1768,7 +1810,7 @@
   }
 
   .it-row:not(.it-head):hover {
-    background: var(--bg);
+    background: var(--fill-tertiary);
   }
 
   .it-row:last-child {
@@ -1993,32 +2035,37 @@
 
   .search-badge {
     font-size: 12px;
-    color: #b45309;
-    background: #fef3c7;
-    border: 1px solid #fde68a;
+    color: var(--warning-text);
+    background: var(--warning-bg);
+    border: 1px solid var(--warning);
     border-radius: 999px;
     padding: 2px 10px;
   }
 
   .card-tabs {
     display: flex;
-    gap: var(--space-2);
+    gap: var(--space-6);
     flex-wrap: wrap;
+    border-bottom: 1px solid var(--border-secondary);
   }
 
   .card-tab {
-    padding: 7px 16px;
-    border: 1px solid var(--border);
-    border-radius: 999px;
-    background: var(--surface);
-    color: var(--muted);
+    padding: 12px 0;
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: none;
+    color: var(--text);
     cursor: pointer;
     font: inherit;
-    font-size: 13px;
+    font-size: 14px;
+    transition: color 0.2s ease;
+  }
+
+  .card-tab:hover {
+    color: var(--primary);
   }
 
   .card-tab.unread {
-    border-color: var(--primary);
     color: var(--primary);
     font-weight: 500;
   }
@@ -2034,9 +2081,8 @@
   }
 
   .card-tab.active {
-    border-color: var(--primary);
     color: var(--primary);
-    background: color-mix(in srgb, var(--primary) 8%, white);
+    border-bottom-color: var(--primary);
   }
 
   .tabs {
@@ -2316,7 +2362,7 @@
   }
 
   .t-activity {
-    color: #047857;
+    color: var(--success-text);
     font-size: 13px;
   }
 
@@ -2472,14 +2518,6 @@
 
   .muted {
     color: var(--muted);
-  }
-
-  .alert {
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: var(--danger-bg);
-    color: var(--danger);
-    font-size: 13px;
   }
 
   .center {

@@ -599,8 +599,11 @@
     {:else}
       {#if !appSettings.salesEnabled}
         <div class="alert sales-off">
-          Продажи отключены: оформление заявок недоступно. Остатки складов можно смотреть в разделе
-          «Номенклатура».
+          <span class="alert-icon"><Icon name="info" size={16} /></span>
+          <span>
+            Продажи отключены: оформление заявок недоступно. Остатки складов можно смотреть в разделе
+            «Номенклатура».
+          </span>
         </div>
       {/if}
 
@@ -786,13 +789,19 @@
 
         {#if hasStockErrors}
           <div class="alert">
-            Позиции, отмеченные красным, отсутствуют на складе. Удалите их из состава заявки или
-            обратитесь к администратору, чтобы разрешить работу с отрицательными остатками.
+            <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+            <span>
+              Позиции, отмеченные красным, отсутствуют на складе. Удалите их из состава заявки или
+              обратитесь к администратору, чтобы разрешить работу с отрицательными остатками.
+            </span>
           </div>
         {/if}
 
         {#if error}
-          <div class="alert">{error}</div>
+          <div class="alert" role="alert">
+            <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+            <span>{error}</span>
+          </div>
         {/if}
 
         <div class="modal-actions">
@@ -1045,7 +1054,7 @@
   }
 
   .req {
-    color: var(--danger, #d64545);
+    color: var(--danger);
     font-size: 12px;
   }
 
@@ -1240,17 +1249,32 @@
   }
 
   .alert {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
     padding: 8px 12px;
-    border-radius: var(--radius-sm);
+    border: 1px solid var(--error-border);
+    border-radius: var(--radius-md);
     background: var(--danger-bg);
-    color: var(--danger);
-    font-size: 13px;
+    color: var(--text);
+    font-size: 14px;
   }
 
   .alert.sales-off {
-    background: #fdf3e3;
-    color: #8a5a11;
+    border-color: var(--warning);
+    background: var(--warning-bg);
     margin-bottom: var(--space-3);
+  }
+
+  .alert-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 2px;
+    color: var(--danger);
+  }
+
+  .alert.sales-off .alert-icon {
+    color: var(--warning-text);
   }
 
   @media (max-width: 560px) {

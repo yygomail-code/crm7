@@ -14,6 +14,7 @@
   import { addHistory } from '../lib/search-history';
   import StatusBadge from '../lib/components/StatusBadge.svelte';
   import Button from '../lib/components/ui/Button.svelte';
+  import Icon from '../lib/components/ui/Icon.svelte';
   import FiltersModal from '../lib/components/ui/FiltersModal.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
   import Pagination from '../lib/components/ui/Pagination.svelte';
@@ -53,8 +54,6 @@
   let searchInput = $state('');
   let warehouses = $state<{ id: number; name: string }[]>([]);
   let sorts = $state<{ code: string; title: string }[]>([]);
-
-  let notice = $state('');
 
   let draftsOpen = $state(false);
   let drafts = $state<RequestDraftSummary[]>([]);
@@ -238,8 +237,11 @@
 
   {#if !appSettings.salesEnabled}
     <div class="notice sales-off">
-      Продажи отключены: оформление новых заявок и черновиков недоступно, остатки складов доступны
-      для просмотра.
+      <span class="notice-icon"><Icon name="info" size={16} /></span>
+      <span>
+        Продажи отключены: оформление новых заявок и черновиков недоступно, остатки складов доступны
+        для просмотра.
+      </span>
     </div>
   {/if}
 
@@ -316,10 +318,10 @@
   </div>
 
   {#if error}
-    <div class="alert">{error}</div>
-  {/if}
-  {#if notice}
-    <div class="notice">{notice}</div>
+    <div class="alert" role="alert">
+      <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+      <span>{error}</span>
+    </div>
   {/if}
 
   {#if loading && items.length === 0}
@@ -380,6 +382,7 @@
       total={total}
       loading={loading}
       perPageOptions={[20, 50, 100]}
+      always
       onchange={goToPage}
       onperpage={changePerPage}
     />
@@ -526,6 +529,9 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-4);
+    width: 100%;
+    max-width: 1280px;
+    margin-inline: auto;
   }
 
   .head {
@@ -553,7 +559,10 @@
 
   h1 {
     margin: 0;
-    font-size: 22px;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.4;
+    color: var(--text);
   }
 
   .head-actions {
@@ -624,12 +633,46 @@
     gap: var(--space-2);
   }
 
-  .notice {
+  .notice,
+  .alert {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
     padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: #e7f5ec;
-    color: #1e6b3a;
-    font-size: 13px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .notice {
+    border-color: var(--success-border);
+    background: var(--success-bg);
+  }
+
+  .notice.sales-off {
+    border-color: var(--warning);
+    background: var(--warning-bg);
+  }
+
+  .alert {
+    border-color: var(--error-border);
+    background: var(--danger-bg);
+  }
+
+  .notice-icon,
+  .alert-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    margin-top: 2px;
+  }
+
+  .notice-icon {
+    color: var(--warning-text);
+  }
+
+  .alert-icon {
+    color: var(--danger);
   }
 
   .list {
@@ -655,7 +698,7 @@
 
   .card:hover {
     border-color: var(--primary);
-    background: var(--bg);
+    background: var(--fill-tertiary);
   }
 
   .card-head {
@@ -699,16 +742,8 @@
   }
 
   .search-badge {
-    color: #b45309;
+    color: var(--warning-text);
     font-weight: 500;
-  }
-
-  .alert {
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: var(--danger-bg);
-    color: var(--danger);
-    font-size: 13px;
   }
 
   .empty {
