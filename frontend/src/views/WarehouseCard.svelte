@@ -351,7 +351,11 @@
 
 <section class="page">
   <div class="head">
-    <a class="back" href="#/warehouses" title="К списку складов">
+    <a
+      class="back"
+      href={isNew ? '#/warehouses' : `#/warehouses/${id}`}
+      title={isNew ? 'К списку складов' : 'К карточке склада'}
+    >
       <Icon name="arrow-left" size={16} />
     </a>
     <div>
