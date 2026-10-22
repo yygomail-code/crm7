@@ -202,6 +202,15 @@ final class AdminController extends ApiController
         return Response::ok(['items' => $this->groups->list()]);
     }
 
+    public function itemGroupItems(Request $request, array $params): Response
+    {
+        $this->requireSettings($request);
+
+        $id = (int) ($params['id'] ?? 0);
+
+        return Response::ok(['items' => $this->groups->items($id)]);
+    }
+
     public function searchLog(Request $request): Response
     {
         [, $capabilities] = $this->context($request);

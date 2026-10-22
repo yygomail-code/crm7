@@ -38,6 +38,15 @@ final class ItemGroupService
         return $this->groups->find($id);
     }
 
+    public function items(int $id): array
+    {
+        if ($this->groups->find($id) === null) {
+            throw new HttpException(404, 'not_found', 'Группа не найдена');
+        }
+
+        return $this->groups->items($id);
+    }
+
     public function create(string $title, string $description = ''): array
     {
         $title = $this->normalizeTitle($title);

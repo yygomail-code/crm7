@@ -180,6 +180,7 @@ $router->post('/admin/price-types', [$admin, 'createPriceType']);
 $router->patch('/admin/price-types/{id}', [$admin, 'updatePriceType']);
 $router->delete('/admin/price-types/{id}', [$admin, 'deletePriceType']);
 $router->get('/admin/item-groups', [$admin, 'itemGroups']);
+$router->get('/admin/item-groups/{id}/items', [$admin, 'itemGroupItems']);
 $router->get('/admin/search-log', [$admin, 'searchLog']);
 $router->post('/admin/item-groups', [$admin, 'createItemGroup']);
 $router->patch('/admin/item-groups/{id}', [$admin, 'updateItemGroup']);

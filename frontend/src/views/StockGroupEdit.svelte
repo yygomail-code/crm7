@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
   import {
     createItemGroup,
     deleteItemGroup,
     listAdminItemGroups,
+    listGroupItems,
     updateItemGroup
   } from '../lib/api/groups';
-  import type { ItemGroup } from '../lib/api/types';
+  import type { ItemGroup, ItemGroupItem } from '../lib/api/types';
   import { appSettings } from '../lib/stores/app-settings.svelte';
   import { router } from '../lib/router.svelte';
   import Button from '../lib/components/ui/Button.svelte';
@@ -19,22 +19,32 @@
 
   const isNew = $derived(id <= 0);
   const groupsEnabled = $derived(appSettings.groupsEnabled);
+  const TYPE_TITLES: Record<string, string> = { product: 'Товар', service: 'Услуга', set: 'Набор' };
 
   let group = $state<ItemGroup | null>(null);
+  let items = $state<ItemGroupItem[]>([]);
   let title = $state('');
   let description = $state('');
   let loading = $state(true);
   let saving = $state(false);
   let deleting = $state(false);
   let error = $state('');
+  let itemsError = $state('');
   let message = $state('');
 
-  onMount(() => {
+  function typeTitle(code: string): string {
+    return TYPE_TITLES[code] ?? code;
+  }
+
+  $effect(() => {
+    void id;
     void load();
   });
 
   async function load(): Promise<void> {
     error = '';
+    itemsError = '';
+    items = [];
 
     if (isNew) {
       loading = false;
@@ -54,6 +64,13 @@
       group = found;
       title = found.title;
       description = found.description ?? '';
+
+      try {
+        items = (await listGroupItems(id)).items;
+      } catch (cause) {
+        itemsError =
+          cause instanceof ApiError ? cause.message : 'Не удалось загрузить состав группы';
+      }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить группу';
     } finally {
@@ -206,6 +223,50 @@
         </div>
       </div>
     </div>
+
+    {#if !isNew && group !== null}
+      <div class="card">
+        <div class="card-head">
+          <h2>Состав группы</h2>
+          <span class="count">{items.length} поз.</span>
+        </div>
+
+        {#if itemsError}
+          <div class="alert" role="alert">
+            <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
+            <span>{itemsError}</span>
+          </div>
+        {:else if items.length === 0}
+          <div class="empty">В группе пока нет позиций. Назначьте группу в карточке позиции.</div>
+        {:else}
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Название</th>
+                  <th>Артикул</th>
+                  <th>Тип</th>
+                  <th>Ед.</th>
+                </tr>
+              </thead>
+              <tbody>
+                {#each items as item (item.sid)}
+                  <tr>
+                    <td class="item-name">
+                      {item.name}
+                      {#if !item.active}<span class="tag">деактивирована</span>{/if}
+                    </td>
+                    <td>{item.article || '—'}</td>
+                    <td>{typeTitle(item.type)}</td>
+                    <td>{item.unit || '—'}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {/if}
+      </div>
+    {/if}
   {/if}
 </section>
 
@@ -281,6 +342,79 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--surface);
+  }
+
+  .card-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-2);
+    margin-bottom: var(--space-3);
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+  }
+
+  .count {
+    color: var(--text-description);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  table {
+    width: 100%;
+    min-width: 520px;
+    border-collapse: collapse;
+  }
+
+  th {
+    padding: 8px 12px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-description);
+    font-size: 12px;
+    font-weight: 500;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+    vertical-align: middle;
+  }
+
+  tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  tbody tr:hover {
+    background: var(--fill-tertiary);
+  }
+
+  .item-name {
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+
+  .tag {
+    margin-left: var(--space-2);
+    padding: 0 7px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--fill-tertiary);
+    color: var(--text-description);
+    font-size: 12px;
+    font-weight: 400;
+    line-height: 20px;
   }
 
   .form {

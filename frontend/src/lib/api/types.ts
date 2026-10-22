@@ -449,6 +449,15 @@ export interface ItemGroup {
   positions_count?: number;
 }
 
+export interface ItemGroupItem {
+  sid: string;
+  name: string;
+  unit: string;
+  type: string;
+  article: string;
+  active: boolean;
+}
+
 export interface PricePreview {
   enabled: boolean;
   type: { id: number; title: string } | null;

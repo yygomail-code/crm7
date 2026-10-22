@@ -27,6 +27,30 @@ final class ItemGroupRepository
     }
 
     /**
+     * Позиции (номенклатура), назначенные группе.
+     */
+    public function items(int $id): array
+    {
+        $stmt = Database::pdo()->prepare(
+            'SELECT SID AS sid, NAME AS name, UNIT AS unit, TYPE AS type, ARTICLE AS article, ACTIVE AS active
+             FROM nomenclature
+             WHERE group_id = ?
+             ORDER BY NAME ASC'
+        );
+        $stmt->execute([$id]);
+        $rows = $stmt->fetchAll() ?: [];
+
+        return array_map(static fn (array $row): array => [
+            'sid' => (string) $row['sid'],
+            'name' => (string) $row['name'],
+            'unit' => (string) ($row['unit'] ?? ''),
+            'type' => (string) ($row['type'] ?? 'product'),
+            'article' => (string) ($row['article'] ?? ''),
+            'active' => (string) ($row['active'] ?? 'Y') === 'Y',
+        ], $rows);
+    }
+
+    /**
      * Есть ли позиции без группы (номенклатура без группы, присутствующая на складах).
      */
     public function hasUngrouped(): bool
