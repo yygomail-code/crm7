@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onDestroy, onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
   import {
     activateStockItem,
@@ -42,6 +42,18 @@
 
   interface Props {
     id: number;
+  }
+
+  interface PendingPhoto {
+    file: File;
+    url: string;
+  }
+
+  interface GalleryPhoto {
+    key: string;
+    url: string | null;
+    serverId: number | null;
+    pendingIndex: number | null;
   }
 
   let { id }: Props = $props();
@@ -178,6 +190,7 @@
   let groupsEnabled = $state(false);
 
   let photos = $state<StockPhoto[]>([]);
+  let pendingPhotos = $state<PendingPhoto[]>([]);
   let photoUrls = $state<Record<number, string | null>>({});
   let photoBusy = $state(false);
   let photoError = $state('');
@@ -186,10 +199,33 @@
   let photoIndex = $state(0);
   let maxUrls = $state<Record<number, string | null>>({});
 
-  const lightboxUrl = $derived.by(() => {
-    const photo = photos[photoIndex];
+  const galleryPhotos = $derived<GalleryPhoto[]>([
+    ...photos.map((photo) => ({
+      key: `s${photo.id}`,
+      url: photoUrls[photo.id] ?? null,
+      serverId: photo.id,
+      pendingIndex: null
+    })),
+    ...pendingPhotos.map((photo, index) => ({
+      key: `p${index}`,
+      url: photo.url,
+      serverId: null,
+      pendingIndex: index
+    }))
+  ]);
 
-    return photo === undefined ? null : (maxUrls[photo.id] ?? photoUrls[photo.id] ?? null);
+  const lightboxUrl = $derived.by(() => {
+    const photo = galleryPhotos[photoIndex];
+
+    if (photo === undefined) {
+      return null;
+    }
+
+    if (photo.serverId !== null) {
+      return maxUrls[photo.serverId] ?? photoUrls[photo.serverId] ?? null;
+    }
+
+    return photo.url;
   });
 
   $effect(() => {
@@ -206,15 +242,39 @@
     }
   });
 
+  $effect(() => {
+    if (photoIndex >= galleryPhotos.length) {
+      photoIndex = 0;
+    }
+  });
+
   function prevPhoto(): void {
-    if (photos.length > 1) {
-      photoIndex = (photoIndex - 1 + photos.length) % photos.length;
+    if (galleryPhotos.length > 1) {
+      photoIndex = (photoIndex - 1 + galleryPhotos.length) % galleryPhotos.length;
     }
   }
 
   function nextPhoto(): void {
-    if (photos.length > 1) {
-      photoIndex = (photoIndex + 1) % photos.length;
+    if (galleryPhotos.length > 1) {
+      photoIndex = (photoIndex + 1) % galleryPhotos.length;
+    }
+  }
+
+  function removePendingPhoto(index: number): void {
+    const pending = pendingPhotos[index];
+
+    if (pending !== undefined) {
+      URL.revokeObjectURL(pending.url);
+    }
+
+    pendingPhotos = pendingPhotos.filter((_, position) => position !== index);
+  }
+
+  function removeGalleryPhoto(photo: GalleryPhoto): void {
+    if (photo.serverId !== null) {
+      void removePhoto(photo.serverId);
+    } else if (photo.pendingIndex !== null) {
+      removePendingPhoto(photo.pendingIndex);
     }
   }
 
@@ -235,6 +295,12 @@
     void load();
   });
 
+  onDestroy(() => {
+    for (const pending of pendingPhotos) {
+      URL.revokeObjectURL(pending.url);
+    }
+  });
+
   function goBack(): void {
     router.navigate(isNew ? '/stocks' : `/stocks/items/${id}`);
   }
@@ -250,7 +316,7 @@
         warehouses = data.items;
         warehouseId = data.items[0]?.id ?? 0;
         canEdit = data.can_edit;
-        canManagePhotos = data.can_edit || data.can_import;
+        canManagePhotos = data.can_edit;
         pricesEnabled = appSettings.pricesEnabled;
         groupsEnabled = appSettings.groupsEnabled;
         itemTypes = (await listItemTypes().catch(() => ({ items: [] }))).items;
@@ -318,7 +384,20 @@
     const file = input.files?.[0] ?? null;
     input.value = '';
 
-    if (file === null || id <= 0) {
+    if (file === null) {
+      return;
+    }
+
+    if (isNew) {
+      if (photos.length + pendingPhotos.length >= MAX_PHOTOS) {
+        return;
+      }
+
+      pendingPhotos = [...pendingPhotos, { file, url: URL.createObjectURL(file) }];
+      return;
+    }
+
+    if (id <= 0) {
       return;
     }
 
@@ -555,7 +634,22 @@
 
       if (isNew) {
         const result = await createStockItem(warehouseId, payload);
-        router.navigate(`/stocks/items/${result.item.id}/edit`);
+        const newId = result.item.id;
+
+        for (const pending of pendingPhotos) {
+          try {
+            await uploadItemPhoto(newId, pending.file);
+          } catch {
+            // фото можно добавить позже в карточке позиции
+          }
+        }
+
+        for (const pending of pendingPhotos) {
+          URL.revokeObjectURL(pending.url);
+        }
+
+        pendingPhotos = [];
+        router.navigate(`/stocks/items/${newId}/edit`);
         return;
       }
 
@@ -659,7 +753,7 @@
         {/if}
 
         <div class="photo-grid" style="--photo-ratio: {photoAspect}; --photo-fit: {photoFit};">
-          {#each photos as photo, index (photo.id)}
+          {#each galleryPhotos as photo, index (photo.key)}
             <div class="photo-item">
               <button
                 type="button"
@@ -670,8 +764,8 @@
                   lightboxOpen = true;
                 }}
               >
-                {#if photoUrls[photo.id]}
-                  <img src={photoUrls[photo.id]} alt="" />
+                {#if photo.url}
+                  <img src={photo.url} alt="" />
                 {/if}
               </button>
               {#if canManagePhotos}
@@ -681,7 +775,7 @@
                   title="Удалить фото"
                   aria-label="Удалить фото"
                   disabled={photoBusy}
-                  onclick={() => void removePhoto(photo.id)}
+                  onclick={() => removeGalleryPhoto(photo)}
                 >
                   ×
                 </button>
@@ -689,7 +783,7 @@
             </div>
           {/each}
 
-          {#if canManagePhotos && !isNew && photos.length < MAX_PHOTOS}
+          {#if canManagePhotos && galleryPhotos.length < MAX_PHOTOS}
             <label class="photo-add" class:busy={photoBusy}>
               <input
                 type="file"
@@ -704,7 +798,7 @@
         </div>
 
         {#if isNew}
-          <p class="hint">Фото можно добавить после сохранения позиции.</p>
+          <p class="hint">Фото можно добавить сейчас — они загрузятся после создания позиции.</p>
         {:else}
           <p class="hint">До {MAX_PHOTOS} фото. Форматы: jpg, png, webp. Размер до 5 МБ.</p>
         {/if}
@@ -722,7 +816,7 @@
           <button type="button" class:active={tab === 'main'} onclick={() => (tab = 'main')}>
             Основное
           </button>
-          {#if !isNew || warehouses.length > 0}
+          {#if !isNew}
             <button type="button" class:active={tab === 'levels'} onclick={() => (tab = 'levels')}>
               Остатки
             </button>
@@ -748,7 +842,9 @@
         </div>
 
         {#if isNew}
-          <p class="hint">Позиция создаётся деактивированной — после сохранения активируйте её.</p>
+          <p class="hint">
+            Позиция создаётся деактивированной. Остатки и цены задаются после сохранения.
+          </p>
         {/if}
 
         {#if !canEdit}
@@ -815,41 +911,28 @@
 
         </div>
         {:else if tab === 'levels'}
-          {#if isNew}
-            <div class="levels">
-              <div class="level-row">
-                <span class="level-name">{warehouses[0]?.name ?? 'Склад'}</span>
+          <div class="levels">
+            <div class="levels-total">
+              <span class="label">Общий остаток</span>
+              <span class="total-value">{stockQuantityText(totalQuantity, unit)}</span>
+            </div>
+
+            <p class="hint">Позиция одна для всех складов — меняется только количество.</p>
+
+            {#each levels as level (level.warehouse_sid)}
+              <div class="level-row" class:current={level.current}>
+                <span class="level-name">
+                  {level.warehouse_name}
+                  {#if level.current}<span class="tag">текущий</span>{/if}
+                </span>
                 <div class="level-qty">
-                  <Input type="number" bind:value={quantity} disabled={!canEdit} />
+                  <Input type="number" bind:value={levelEdits[level.warehouse_sid]} disabled={!canEdit} />
                 </div>
-                {#if unit}<span class="level-unit">{unit}</span>{/if}
+                {#if level.unit}<span class="level-unit">{level.unit}</span>{/if}
+                <span class="level-date">{level.actual_date ? formatDate(level.actual_date) : '—'}</span>
               </div>
-              <p class="hint">Позиция создаётся на этом складе. Остальные склады — после сохранения.</p>
-            </div>
-          {:else}
-            <div class="levels">
-              <div class="levels-total">
-                <span class="label">Общий остаток</span>
-                <span class="total-value">{stockQuantityText(totalQuantity, unit)}</span>
-              </div>
-
-              <p class="hint">Позиция одна для всех складов — меняется только количество.</p>
-
-              {#each levels as level (level.warehouse_sid)}
-                <div class="level-row" class:current={level.current}>
-                  <span class="level-name">
-                    {level.warehouse_name}
-                    {#if level.current}<span class="tag">текущий</span>{/if}
-                  </span>
-                  <div class="level-qty">
-                    <Input type="number" bind:value={levelEdits[level.warehouse_sid]} disabled={!canEdit} />
-                  </div>
-                  {#if level.unit}<span class="level-unit">{level.unit}</span>{/if}
-                  <span class="level-date">{level.actual_date ? formatDate(level.actual_date) : '—'}</span>
-                </div>
-              {/each}
-            </div>
-          {/if}
+            {/each}
+          </div>
         {:else if tab === 'prices'}
           <div class="price-table">
             <p class="hint">
@@ -962,14 +1045,14 @@
       <div class="lb-placeholder"><Icon name="picture" size={40} /></div>
     {/if}
 
-    {#if photos.length > 1}
+    {#if galleryPhotos.length > 1}
       <button type="button" class="lb-nav prev" aria-label="Предыдущее фото" onclick={prevPhoto}>
         <Icon name="arrow-left" size={18} />
       </button>
       <button type="button" class="lb-nav next" aria-label="Следующее фото" onclick={nextPhoto}>
         <Icon name="arrow-right" size={18} />
       </button>
-      <span class="lb-counter">{photoIndex + 1}/{photos.length}</span>
+      <span class="lb-counter">{photoIndex + 1}/{galleryPhotos.length}</span>
     {/if}
   </div>
 </Modal>
