@@ -1,12 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
-  import {
-    createItemGroup,
-    deleteItemGroup,
-    listAdminItemGroups,
-    updateItemGroup
-  } from '../lib/api/groups';
+  import { listAdminItemGroups } from '../lib/api/groups';
   import type { ItemGroup } from '../lib/api/types';
   import { appSettings } from '../lib/stores/app-settings.svelte';
   import { router } from '../lib/router.svelte';
@@ -15,12 +10,8 @@
   import Spinner from '../lib/components/ui/Spinner.svelte';
 
   let groups = $state<ItemGroup[]>([]);
-  let drafts = $state<Record<number, string>>({});
-  let newTitle = $state('');
   let loading = $state(true);
-  let busy = $state(false);
   let error = $state('');
-  let message = $state('');
 
   const groupsEnabled = $derived(appSettings.groupsEnabled);
 
@@ -33,79 +24,11 @@
     error = '';
 
     try {
-      const data = await listAdminItemGroups();
-      groups = data.items;
-      drafts = Object.fromEntries(data.items.map((group) => [group.id, group.title]));
+      groups = (await listAdminItemGroups()).items;
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить группы';
     } finally {
       loading = false;
-    }
-  }
-
-  async function addGroup(): Promise<void> {
-    const title = newTitle.trim();
-
-    if (title === '') {
-      return;
-    }
-
-    busy = true;
-    error = '';
-    message = '';
-
-    try {
-      await createItemGroup(title);
-      newTitle = '';
-      await load();
-      message = 'Группа добавлена';
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось добавить группу';
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function saveGroup(group: ItemGroup): Promise<void> {
-    const title = (drafts[group.id] ?? '').trim();
-
-    if (title === '') {
-      error = 'Укажите название группы';
-      return;
-    }
-
-    busy = true;
-    error = '';
-    message = '';
-
-    try {
-      await updateItemGroup(group.id, title);
-      await load();
-      message = 'Группа сохранена';
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось сохранить группу';
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function removeGroup(group: ItemGroup): Promise<void> {
-    if (!confirm(`Удалить группу «${group.title}»? Позиции останутся без группы.`)) {
-      return;
-    }
-
-    busy = true;
-    error = '';
-    message = '';
-
-    try {
-      await deleteItemGroup(group.id);
-      await load();
-      message = 'Группа удалена';
-    } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось удалить группу';
-    } finally {
-      busy = false;
     }
   }
 </script>
@@ -128,18 +51,15 @@
         позиций в заявке.
       </p>
     </div>
+    <div class="head-actions">
+      <Button onclick={() => router.navigate('/stocks/groups/new')}>Добавить группу</Button>
+    </div>
   </div>
 
   {#if error}
     <div class="alert" role="alert">
       <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
       <span>{error}</span>
-    </div>
-  {/if}
-  {#if message}
-    <div class="notice">
-      <span class="notice-icon"><Icon name="check-circle" size={16} /></span>
-      <span>{message}</span>
     </div>
   {/if}
 
@@ -157,46 +77,46 @@
     <div class="center"><Spinner size={26} /></div>
   {:else}
     <div class="card">
-      <h2>Группы позиций</h2>
-
       {#if groups.length === 0}
-        <p class="hint">Групп пока нет — добавьте первую.</p>
+        <div class="empty">Групп пока нет — добавьте первую.</div>
       {:else}
-        <div class="groups">
-          {#each groups as group (group.id)}
-            <div class="group-row">
-              <input class="group-title" bind:value={drafts[group.id]} maxlength="255" />
-              <span class="group-meta">{group.positions_count ?? 0} поз.</span>
-              <Button variant="ghost" disabled={busy} onclick={() => void saveGroup(group)}>
-                Сохранить
-              </Button>
-              <button
-                type="button"
-                class="group-del"
-                disabled={busy}
-                onclick={() => void removeGroup(group)}
-              >
-                Удалить
-              </button>
-            </div>
-          {/each}
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Название</th>
+                <th class="count-head">Позиций</th>
+                <th class="actions-head">Действия</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each groups as group (group.id)}
+                <tr>
+                  <td>
+                    <div class="name">
+                      <span class="title">{group.title}</span>
+                      {#if group.description}
+                        <span class="desc">{group.description}</span>
+                      {/if}
+                    </div>
+                  </td>
+                  <td class="count">{group.positions_count ?? 0}</td>
+                  <td>
+                    <div class="actions">
+                      <Button
+                        variant="ghost"
+                        onclick={() => router.navigate(`/stocks/groups/${group.id}`)}
+                      >
+                        Редактировать
+                      </Button>
+                    </div>
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         </div>
       {/if}
-
-      <div class="group-add">
-        <label>
-          <span>Новая группа</span>
-          <input bind:value={newTitle} placeholder="Например: Смартфоны" maxlength="255" />
-        </label>
-        <Button
-          variant="ghost"
-          loading={busy}
-          disabled={!newTitle.trim()}
-          onclick={() => void addGroup()}
-        >
-          Добавить группу
-        </Button>
-      </div>
     </div>
   {/if}
 </section>
@@ -213,6 +133,7 @@
 
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: var(--space-3);
   }
@@ -258,126 +179,108 @@
     color: var(--text-description);
   }
 
-  .card {
+  .head-actions {
     display: flex;
-    flex-direction: column;
-    gap: var(--space-3);
-    padding: var(--space-4);
+    align-items: center;
+    gap: var(--space-2);
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  .card {
+    padding: var(--space-2) var(--space-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--surface);
   }
 
-  h2 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text);
+  .table-wrap {
+    overflow-x: auto;
   }
 
-  .hint {
-    margin: 0;
-    font-size: 13px;
+  table {
+    width: 100%;
+    min-width: 520px;
+    border-collapse: collapse;
+  }
+
+  th {
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--border);
     color: var(--text-description);
-  }
-
-  .groups {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2);
-  }
-
-  .group-row {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-2);
-    padding: var(--space-2) var(--space-3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-  }
-
-  .group-title {
-    flex: 1;
-    min-width: 180px;
-    padding: 8px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    outline: none;
-  }
-
-  .group-title:focus {
-    border-color: var(--primary);
-  }
-
-  .group-meta {
-    color: var(--muted);
     font-size: 12px;
+    font-weight: 500;
+    text-align: left;
     white-space: nowrap;
   }
 
-  .group-del {
-    padding: 9px 16px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--danger);
-    cursor: pointer;
+  th.count-head {
+    width: 120px;
+  }
+
+  th.actions-head {
+    text-align: right;
+  }
+
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
     font-size: 14px;
-    font-weight: 500;
+    vertical-align: middle;
   }
 
-  .group-del:hover:not(:disabled) {
-    border-color: var(--danger);
-    background: var(--danger-bg);
+  tbody tr:last-child td {
+    border-bottom: none;
   }
 
-  .group-del:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
+  tbody tr:hover {
+    background: var(--fill-tertiary);
   }
 
-  .group-add {
+  .name {
     display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    gap: var(--space-2);
-    padding-top: var(--space-3);
-    border-top: 1px solid var(--border-secondary);
-  }
-
-  .group-add label {
-    display: flex;
-    flex: 1;
     flex-direction: column;
-    gap: var(--space-1);
-    min-width: 200px;
-    font-size: 14px;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .title {
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+
+  .desc {
     color: var(--text-description);
+    font-size: 13px;
+    overflow-wrap: anywhere;
   }
 
-  .group-add input {
-    padding: 9px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    outline: none;
+  .count {
+    color: var(--text-description);
+    white-space: nowrap;
   }
 
-  .group-add input:focus {
-    border-color: var(--primary);
+  .actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    white-space: nowrap;
+  }
+
+  .empty {
+    padding: var(--space-5);
+    border: 1px dashed var(--border-secondary);
+    border-radius: var(--radius-md);
+    color: var(--text-description);
+    font-size: 14px;
+    text-align: center;
   }
 
   .notice,
   .alert {
     display: flex;
-    align-items: flex-start;
     flex-wrap: wrap;
+    align-items: flex-start;
     gap: var(--space-2);
     padding: 8px 12px;
     border: 1px solid var(--border);

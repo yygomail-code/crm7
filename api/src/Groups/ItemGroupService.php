@@ -38,32 +38,34 @@ final class ItemGroupService
         return $this->groups->find($id);
     }
 
-    public function create(string $title): array
+    public function create(string $title, string $description = ''): array
     {
         $title = $this->normalizeTitle($title);
+        $description = $this->normalizeDescription($description);
 
         if ($this->groups->titleTaken($title)) {
             throw new HttpException(422, 'duplicate_group', 'Группа с таким названием уже есть');
         }
 
-        $id = $this->groups->create($title, $this->groups->nextSort());
+        $id = $this->groups->create($title, $description, $this->groups->nextSort());
 
         return $this->groups->find($id) ?? [];
     }
 
-    public function update(int $id, string $title): array
+    public function update(int $id, string $title, string $description = ''): array
     {
         if ($this->groups->find($id) === null) {
             throw new HttpException(404, 'not_found', 'Группа не найдена');
         }
 
         $title = $this->normalizeTitle($title);
+        $description = $this->normalizeDescription($description);
 
         if ($this->groups->titleTaken($title, $id)) {
             throw new HttpException(422, 'duplicate_group', 'Группа с таким названием уже есть');
         }
 
-        $this->groups->update($id, $title);
+        $this->groups->update($id, $title, $description);
 
         return $this->groups->find($id) ?? [];
     }
@@ -100,5 +102,16 @@ final class ItemGroupService
         }
 
         return $title;
+    }
+
+    private function normalizeDescription(string $description): string
+    {
+        $description = trim($description);
+
+        if (mb_strlen($description) > 1000) {
+            throw new HttpException(422, 'validation_error', 'Описание слишком длинное (до 1000 символов)');
+        }
+
+        return $description;
     }
 }

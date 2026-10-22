@@ -221,7 +221,10 @@ final class AdminController extends ApiController
     {
         $user = $this->requireSettings($request);
 
-        $group = $this->groups->create((string) $request->input('title', ''));
+        $group = $this->groups->create(
+            (string) $request->input('title', ''),
+            (string) $request->input('description', '')
+        );
         $this->audit($request, $user, 'groups.create', 'item_group', $group['id'] ?? null, [
             'title' => $group['title'] ?? '',
         ]);
@@ -234,7 +237,11 @@ final class AdminController extends ApiController
         $user = $this->requireSettings($request);
 
         $id = (int) ($params['id'] ?? 0);
-        $group = $this->groups->update($id, (string) $request->input('title', ''));
+        $group = $this->groups->update(
+            $id,
+            (string) $request->input('title', ''),
+            (string) $request->input('description', '')
+        );
         $this->audit($request, $user, 'groups.update', 'item_group', $id, [
             'title' => $group['title'] ?? '',
         ]);

@@ -444,6 +444,7 @@ export interface AssignedPriceType {
 export interface ItemGroup {
   id: number;
   title: string;
+  description: string;
   sort: number;
   positions_count?: number;
 }

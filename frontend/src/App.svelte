@@ -20,6 +20,7 @@
   import Chat from './views/Chat.svelte';
   import Stocks from './views/Stocks.svelte';
   import StockGroups from './views/StockGroups.svelte';
+  import StockGroupEdit from './views/StockGroupEdit.svelte';
   import Warehouses from './views/Warehouses.svelte';
   import WarehouseCard from './views/WarehouseCard.svelte';
   import WarehouseView from './views/WarehouseView.svelte';
@@ -69,6 +70,7 @@
   const itemNewMatch = $derived(matchRoute('/stocks/items/new', route));
   const itemEditMatch = $derived(matchRoute('/stocks/items/:id/edit', route));
   const itemCardMatch = $derived(matchRoute('/stocks/items/:id', route));
+  const groupEditMatch = $derived(matchRoute('/stocks/groups/:id', route));
   const warehouseMatch = $derived(matchRoute('/warehouses/:id', route));
   const warehouseEditMatch = $derived(matchRoute('/warehouses/:id/edit', route));
 </script>
@@ -109,6 +111,10 @@
       <Stocks />
     {:else if route === '/stocks/groups'}
       <StockGroups />
+    {:else if route === '/stocks/groups/new'}
+      <StockGroupEdit id={0} />
+    {:else if groupEditMatch}
+      <StockGroupEdit id={Number(groupEditMatch.id)} />
     {:else if route === '/warehouses'}
       <Warehouses />
     {:else if route === '/warehouses/new'}

@@ -9,19 +9,26 @@ export function listAdminItemGroups(): Promise<{ items: ItemGroup[] }> {
   return apiRequest<{ items: ItemGroup[] }>('/admin/item-groups', { auth: true });
 }
 
-export function createItemGroup(title: string): Promise<{ group: ItemGroup }> {
+export function createItemGroup(
+  title: string,
+  description = ''
+): Promise<{ group: ItemGroup }> {
   return apiRequest<{ group: ItemGroup }>('/admin/item-groups', {
     method: 'POST',
     auth: true,
-    body: { title }
+    body: { title, description }
   });
 }
 
-export function updateItemGroup(id: number, title: string): Promise<{ group: ItemGroup }> {
+export function updateItemGroup(
+  id: number,
+  title: string,
+  description = ''
+): Promise<{ group: ItemGroup }> {
   return apiRequest<{ group: ItemGroup }>(`/admin/item-groups/${id}`, {
     method: 'PATCH',
     auth: true,
-    body: { title }
+    body: { title, description }
   });
 }
 

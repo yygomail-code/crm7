@@ -87,6 +87,7 @@ final class AppSettingsController extends ApiController
         $items = array_map(static fn (array $group): array => [
             'id' => (int) $group['id'],
             'title' => (string) $group['title'],
+            'description' => (string) ($group['description'] ?? ''),
             'sort' => (int) $group['sort'],
         ], $this->groups->list());
 
