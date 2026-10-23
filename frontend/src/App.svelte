@@ -7,6 +7,8 @@
   import Spinner from './lib/components/ui/Spinner.svelte';
   import CookieNotice from './lib/components/CookieNotice.svelte';
   import AppShell from './lib/components/layout/AppShell.svelte';
+  import PageBadge from './lib/components/dev/PageBadge.svelte';
+  import { badgeForRoute } from './lib/dev/page-badges';
   import Login from './views/Login.svelte';
   import Register from './views/Register.svelte';
   import ForgotPassword from './views/ForgotPassword.svelte';
@@ -63,6 +65,7 @@
   });
 
   const route = $derived(router.current.path);
+  const devBadge = $derived(import.meta.env.DEV ? badgeForRoute(route) : null);
   const requestMatch = $derived(matchRoute('/requests/:id', route));
   const clientMatch = $derived(matchRoute('/clients/:id', route));
   const legalMatch = $derived(matchRoute('/legal/:code', route));
@@ -156,6 +159,10 @@
 {/if}
 
 <CookieNotice />
+
+{#if devBadge}
+  <PageBadge id={devBadge.id} task={devBadge.task} />
+{/if}
 
 <style>
   .boot {
