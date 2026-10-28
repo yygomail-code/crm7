@@ -36,6 +36,9 @@ cd frontend; npm install; npm run dev
 #   -> http://localhost:5173  (Vite проксирует /api -> 127.0.0.1:8080)
 ```
 
+Быстрый запуск на свободных портах (Windows): `run-dev.cmd` — подберёт свободные порты,
+запустит API и Vite, откроет браузер. `--dry-run` — показать команды, `--no-browser` — без браузера.
+
 БД: скопировать `api/config/.env.example` → `api/config/.env`, задать `DB_*` и `APP_KEY` (64 hex), затем:
 
 ```bash
@@ -76,3 +79,4 @@ CI (GitHub Actions) гоняет `php -l`, `svelte-check`, `vitest`, `vite build
 - [`docs/ui.md`](docs/ui.md) — дизайн-система (Ant), токены, компоненты.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — процесс, ветки, PR, правила.
 - [`docs/deploy.md`](docs/deploy.md), [`docs/images.md`](docs/images.md), [`docs/migrations.md`](docs/migrations.md).
+- [`docs/manual-update.md`](docs/manual-update.md) — ручное обновление Git и Docker через консоль.

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte';
+  import { onDestroy, onMount, tick } from 'svelte';
   import { ApiError } from '../lib/api/client';
   import {
     activateStockItem,
@@ -33,6 +33,8 @@
   import Icon from '../lib/components/ui/Icon.svelte';
   import Input from '../lib/components/ui/Input.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
+  import Select from '../lib/components/ui/Select.svelte';
+  import Textarea from '../lib/components/ui/Textarea.svelte';
   import PhotoGallery from '../lib/components/stocks/PhotoGallery.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
@@ -55,6 +57,8 @@
     serverId: number | null;
     pendingIndex: number | null;
   }
+
+  type TabId = 'main' | 'levels' | 'prices' | 'composition';
 
   let { id }: Props = $props();
 
@@ -89,6 +93,11 @@
   let saving = $state(false);
   let error = $state('');
   let message = $state('');
+  let baseline = $state('');
+  let nameError = $state('');
+  let levelErrors = $state<Record<string, string>>({});
+  let priceErrors = $state<Record<string, string>>({});
+  let compositionErrors = $state<Record<string, string>>({});
 
   let name = $state('');
   let unit = $state('шт');
@@ -103,7 +112,7 @@
   let groups = $state<ItemGroup[]>([]);
   let priceTypes = $state<PriceType[]>([]);
 
-  let tab = $state<'main' | 'levels' | 'prices' | 'composition'>('main');
+  let tab = $state<TabId>('main');
   let levels = $state<StockLevelEntry[]>([]);
   let levelEdits = $state<Record<string, string>>({});
 
@@ -124,6 +133,49 @@
 
   function typeTitleOf(code: string): string {
     return itemTypes.find((type) => type.code === code)?.title ?? TYPE_TITLES[code] ?? code;
+  }
+
+  function selectTab(next: TabId): void {
+    tab = next;
+  }
+
+  async function handleTabKeydown(event: KeyboardEvent, current: TabId): Promise<void> {
+    const ids = tabs.map((item) => item.id);
+    const index = ids.indexOf(current);
+
+    if (index < 0) {
+      return;
+    }
+
+    let nextIndex = index;
+
+    switch (event.key) {
+      case 'ArrowRight':
+        nextIndex = (index + 1) % ids.length;
+        break;
+      case 'ArrowLeft':
+        nextIndex = (index - 1 + ids.length) % ids.length;
+        break;
+      case 'Home':
+        nextIndex = 0;
+        break;
+      case 'End':
+        nextIndex = ids.length - 1;
+        break;
+      default:
+        return;
+    }
+
+    const next = ids[nextIndex];
+
+    if (next === undefined) {
+      return;
+    }
+
+    event.preventDefault();
+    tab = next;
+    await tick();
+    document.getElementById(`item-tab-${next}`)?.focus();
   }
 
   function buildWarehousePrices(item: StockLevel): Record<string, Record<string, string>> {
@@ -150,13 +202,58 @@
     return result;
   }
 
+  function editSnapshot(): string {
+    return JSON.stringify({
+      name,
+      unit,
+      article,
+      description,
+      groupId,
+      itemType,
+      levels: levels.map((level) => [
+        level.warehouse_sid,
+        levelEdits[level.warehouse_sid] ?? ''
+      ]),
+      prices: levels.flatMap((level) =>
+        priceTypes.map((type) => [
+          level.warehouse_sid,
+          type.id,
+          warehousePrices[level.warehouse_sid]?.[String(type.id)] ?? ''
+        ])
+      ),
+      composition: composition.map((row) => [
+        row.item_sid,
+        compositionEdits[row.item_sid] ?? ''
+      ])
+    });
+  }
+
   const priceColumns = $derived(
     priceTypes.filter((type) =>
       levels.some((level) => (level.price_type_ids ?? []).includes(type.id))
     )
   );
 
+  const tabs = $derived.by((): { id: TabId; label: string }[] => {
+    const result: { id: TabId; label: string }[] = [{ id: 'main', label: 'Основное' }];
+
+    if (!isNew) {
+      result.push({ id: 'levels', label: 'Остатки' });
+    }
+
+    if (!isNew && pricesEnabled && priceColumns.length > 0) {
+      result.push({ id: 'prices', label: 'Цены' });
+    }
+
+    if (isSet) {
+      result.push({ id: 'composition', label: 'Состав' });
+    }
+
+    return result;
+  });
+
   const currentLevel = $derived(levels.find((level) => level.current) ?? null);
+  const dirty = $derived(editSnapshot() !== baseline);
   const totalQuantity = $derived(
     levels.reduce((sum, level) => {
       const value = Number(String(levelEdits[level.warehouse_sid] ?? level.quantity).replace(',', '.'));
@@ -166,7 +263,7 @@
   );
 
   $effect(() => {
-    if (!isSet && tab === 'composition') {
+    if (!tabs.some((item) => item.id === tab)) {
       tab = 'main';
     }
   });
@@ -308,6 +405,10 @@
   async function load(): Promise<void> {
     loading = true;
     error = '';
+    nameError = '';
+    levelErrors = {};
+    priceErrors = {};
+    compositionErrors = {};
     let loadedItem: StockLevel | null = null;
 
     try {
@@ -364,6 +465,8 @@
       if (loadedItem !== null) {
         warehousePrices = buildWarehousePrices(loadedItem);
       }
+
+      baseline = editSnapshot();
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить позицию';
     } finally {
@@ -529,20 +632,29 @@
   async function save(): Promise<void> {
     error = '';
     message = '';
+    nameError = '';
+    levelErrors = {};
+    priceErrors = {};
+    compositionErrors = {};
 
     const trimmedName = name.trim();
+    const nextLevelErrors: Record<string, string> = {};
+    const nextPriceErrors: Record<string, string> = {};
+    const nextCompositionErrors: Record<string, string> = {};
 
     if (trimmedName === '') {
-      error = 'Укажите название позиции';
-      return;
+      nameError = 'Укажите название позиции';
     }
 
     const rawQuantity = currentLevel !== null ? levelEdits[currentLevel.warehouse_sid] : quantity;
     const qty = Number(String(rawQuantity ?? '').replace(',', '.'));
 
-    if (!Number.isFinite(qty) || qty < 0) {
-      error = 'Укажите корректный остаток (не меньше нуля)';
-      return;
+    if (!Number.isFinite(qty) || qty < 0 || qty > 1000000000) {
+      if (currentLevel !== null) {
+        nextLevelErrors[currentLevel.warehouse_sid] = 'Некорректный остаток';
+      } else {
+        error = 'Укажите корректный остаток (не меньше нуля)';
+      }
     }
 
     const pricePayload: Record<string, Record<string, number | null>> = {};
@@ -567,9 +679,9 @@
 
           const value = Number(raw.replace(',', '.'));
 
-          if (!Number.isFinite(value) || value < 0) {
-            error = `Некорректная цена «${type.title}» для склада «${level.warehouse_name}»`;
-            return;
+          if (!Number.isFinite(value) || value < 0 || value > 1000000000) {
+            nextPriceErrors[`${level.warehouse_sid}:${type.id}`] = 'Некорректная цена';
+            continue;
           }
 
           warehouseRow[String(type.id)] = value;
@@ -581,7 +693,6 @@
 
     if (isNew && warehouseId <= 0) {
       error = 'Нет доступных складов для создания позиции';
-      return;
     }
 
     const levelsPayload: { warehouse_sid: string; quantity: number }[] = [];
@@ -594,8 +705,8 @@
       const value = Number(String(levelEdits[level.warehouse_sid] ?? '').replace(',', '.'));
 
       if (!Number.isFinite(value) || value < 0) {
-        error = `Некорректный остаток на складе «${level.warehouse_name}»`;
-        return;
+        nextLevelErrors[level.warehouse_sid] = 'Некорректный остаток';
+        continue;
       }
 
       levelsPayload.push({ warehouse_sid: level.warehouse_sid, quantity: value });
@@ -608,12 +719,51 @@
         const value = Number(String(compositionEdits[row.item_sid] ?? row.quantity).replace(',', '.'));
 
         if (!Number.isFinite(value) || value <= 0) {
-          error = `Некорректное количество в составе: «${row.name}»`;
-          return;
+          nextCompositionErrors[row.item_sid] = 'Некорректное количество';
+          continue;
         }
 
         compositionPayload.push({ item_sid: row.item_sid, quantity: value });
       }
+    }
+
+    levelErrors = nextLevelErrors;
+    priceErrors = nextPriceErrors;
+    compositionErrors = nextCompositionErrors;
+
+    const hasFieldError =
+      nameError !== '' ||
+      Object.keys(nextLevelErrors).length > 0 ||
+      Object.keys(nextPriceErrors).length > 0 ||
+      Object.keys(nextCompositionErrors).length > 0;
+
+    if (hasFieldError || error !== '') {
+      let focusTarget = '';
+
+      if (nameError !== '') {
+        tab = 'main';
+        focusTarget = 'item-name';
+      } else if (Object.keys(nextLevelErrors).length > 0) {
+        tab = 'levels';
+        focusTarget = `item-level-${Object.keys(nextLevelErrors)[0]}`;
+      } else if (Object.keys(nextPriceErrors).length > 0) {
+        tab = 'prices';
+
+        const key = Object.keys(nextPriceErrors)[0];
+        const separator = key.lastIndexOf(':');
+        focusTarget = `item-price-${key.slice(0, separator)}-${key.slice(separator + 1)}`;
+      } else if (Object.keys(nextCompositionErrors).length > 0) {
+        tab = 'composition';
+        focusTarget = `item-composition-${Object.keys(nextCompositionErrors)[0]}`;
+      }
+
+      await tick();
+
+      if (focusTarget) {
+        document.getElementById(focusTarget)?.focus();
+      }
+
+      return;
     }
 
     saving = true;
@@ -697,7 +847,7 @@
       <div class="head-actions">
         {#if canDeactivate}
           <Button
-            variant="ghost"
+            variant={active ? 'ghost' : 'success'}
             loading={statusBusy}
             disabled={deactivateBlocked !== null}
             title={deactivateBlockReason}
@@ -705,6 +855,9 @@
           >
             {active ? 'Деактивировать' : 'Активировать'}
           </Button>
+        {/if}
+        {#if canDeactivate && canDelete}
+          <span class="head-divider" aria-hidden="true"></span>
         {/if}
         {#if canDelete}
           <Button
@@ -722,13 +875,13 @@
   </div>
 
   {#if error}
-    <div class="alert">
+    <div class="alert" role="alert">
       <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
       <span>{error}</span>
     </div>
   {/if}
   {#if message}
-    <div class="notice">
+    <div class="notice" role="status">
       <span class="notice-icon"><Icon name="check-circle" size={16} /></span>
       <span>{message}</span>
     </div>
@@ -788,6 +941,7 @@
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp"
+                aria-label="Добавить фото"
                 disabled={photoBusy}
                 onchange={uploadPhotoFile}
               />
@@ -804,41 +958,40 @@
         {/if}
 
         {#if photoError}
-          <div class="alert">
+          <div class="alert" role="alert">
             <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
             <span>{photoError}</span>
           </div>
         {/if}
       </div>
 
-      <div class="card">
-        <div class="tabs">
-          <button type="button" class:active={tab === 'main'} onclick={() => (tab = 'main')}>
-            Основное
-          </button>
-          {#if !isNew}
-            <button type="button" class:active={tab === 'levels'} onclick={() => (tab = 'levels')}>
-              Остатки
-            </button>
-          {/if}
-          {#if !isNew && pricesEnabled && priceColumns.length > 0}
+      <form
+        class="card"
+        novalidate
+        onsubmit={(event) => {
+          event.preventDefault();
+
+          if (canEdit && !saving && dirty) {
+            void save();
+          }
+        }}
+      >
+        <div class="tabs" role="tablist" aria-label="Разделы позиции">
+          {#each tabs as item (item.id)}
             <button
               type="button"
-              class:active={tab === 'prices'}
-              onclick={() => (tab = 'prices')}
+              role="tab"
+              id={`item-tab-${item.id}`}
+              class:active={tab === item.id}
+              aria-selected={tab === item.id}
+              aria-controls={`item-panel-${item.id}`}
+              tabindex={tab === item.id ? 0 : -1}
+              onclick={() => selectTab(item.id)}
+              onkeydown={(event) => void handleTabKeydown(event, item.id)}
             >
-              Цены
+              {item.label}
             </button>
-          {/if}
-          {#if isSet}
-            <button
-              type="button"
-              class:active={tab === 'composition'}
-              onclick={() => (tab = 'composition')}
-            >
-              Состав
-            </button>
-          {/if}
+          {/each}
         </div>
 
         {#if isNew}
@@ -855,63 +1008,65 @@
         {/if}
 
         {#if tab === 'main'}
-        <div class="form">
+        <div class="form" role="tabpanel" id="item-panel-main" aria-labelledby="item-tab-main">
           {#if itemTypes.length > 0}
-            <label class="field">
-              <span class="label">Тип позиции</span>
-              <select bind:value={itemType} disabled={!canEdit}>
-                {#if itemType && !itemTypes.some((type) => type.code === itemType)}
-                  <option value={itemType}>{typeTitleOf(itemType)}</option>
-                {/if}
-                {#each itemTypes as type (type.code)}
-                  <option value={type.code}>{type.title}</option>
-                {/each}
-              </select>
-            </label>
+            <Select label="Тип позиции" bind:value={itemType} disabled={!canEdit}>
+              {#if itemType && !itemTypes.some((type) => type.code === itemType)}
+                <option value={itemType}>{typeTitleOf(itemType)}</option>
+              {/if}
+              {#each itemTypes as type (type.code)}
+                <option value={type.code}>{type.title}</option>
+              {/each}
+            </Select>
           {/if}
 
-          <Input label="Название" bind:value={name} placeholder="Например: Смартфон Pixel 9" disabled={!canEdit} />
+          <div class="field-block">
+            <Input
+              label="Название"
+              bind:value={name}
+              placeholder="Например: Смартфон Pixel 9"
+              maxlength={255}
+              disabled={!canEdit}
+              id="item-name"
+              ariaInvalid={Boolean(nameError)}
+              ariaDescribedby={nameError ? 'item-name-error' : undefined}
+            />
+            {#if nameError}<span class="field-error" id="item-name-error">{nameError}</span>{/if}
+          </div>
 
           <div class="row">
-            <Input label="Артикул" bind:value={article} placeholder="Код / SKU" disabled={!canEdit} />
-            <label class="field">
-              <span class="label">Единица измерения</span>
-              <select bind:value={unit} disabled={!canEdit}>
-                {#if unit && !UNITS.includes(unit)}
-                  <option value={unit}>{unit}</option>
-                {/if}
-                {#each UNITS as option (option)}
-                  <option value={option}>{option}</option>
-                {/each}
-              </select>
-            </label>
+            <Input label="Артикул" bind:value={article} placeholder="Код / SKU" maxlength={128} disabled={!canEdit} />
+            <Select label="Единица измерения" bind:value={unit} disabled={!canEdit}>
+              {#if unit && !UNITS.includes(unit)}
+                <option value={unit}>{unit}</option>
+              {/if}
+              {#each UNITS as option (option)}
+                <option value={option}>{option}</option>
+              {/each}
+            </Select>
           </div>
 
           {#if groupsEnabled && groups.length > 0}
-            <label class="field">
-              <span class="label">Группа</span>
-              <select bind:value={groupId} disabled={!canEdit}>
-                <option value={0}>Без группы</option>
-                {#each groups as group (group.id)}
-                  <option value={group.id}>{group.title}</option>
-                {/each}
-              </select>
-            </label>
+            <Select label="Группа" bind:value={groupId} disabled={!canEdit}>
+              <option value={0}>Без группы</option>
+              {#each groups as group (group.id)}
+                <option value={group.id}>{group.title}</option>
+              {/each}
+            </Select>
           {/if}
 
-          <label class="field">
-            <span class="label">Описание</span>
-            <textarea
-              bind:value={description}
-              rows="3"
-              disabled={!canEdit}
-              placeholder="Характеристики, цвет, память — покажется в подсказке при наведении"
-            ></textarea>
-          </label>
+          <Textarea
+            label="Описание"
+            bind:value={description}
+            rows={3}
+            maxlength={500}
+            disabled={!canEdit}
+            placeholder="Характеристики, цвет, память — покажется в подсказке при наведении"
+          />
 
         </div>
         {:else if tab === 'levels'}
-          <div class="levels">
+          <div class="levels" role="tabpanel" id="item-panel-levels" aria-labelledby="item-tab-levels">
             <div class="levels-total">
               <span class="label">Общий остаток</span>
               <span class="total-value">{stockQuantityText(totalQuantity, unit)}</span>
@@ -926,7 +1081,20 @@
                   {#if level.current}<span class="tag">текущий</span>{/if}
                 </span>
                 <div class="level-qty">
-                  <Input type="number" bind:value={levelEdits[level.warehouse_sid]} disabled={!canEdit} />
+                  <Input
+                    type="number"
+                    bind:value={levelEdits[level.warehouse_sid]}
+                    min={0}
+                    step="any"
+                    ariaLabel={`Остаток для склада «${level.warehouse_name}»`}
+                    ariaInvalid={Boolean(levelErrors[level.warehouse_sid])}
+                    ariaDescribedby={levelErrors[level.warehouse_sid] ? `item-level-error-${level.warehouse_sid}` : undefined}
+                    id={`item-level-${level.warehouse_sid}`}
+                    disabled={!canEdit}
+                  />
+                  {#if levelErrors[level.warehouse_sid]}
+                    <span class="field-error" id={`item-level-error-${level.warehouse_sid}`}>{levelErrors[level.warehouse_sid]}</span>
+                  {/if}
                 </div>
                 {#if level.unit}<span class="level-unit">{level.unit}</span>{/if}
                 <span class="level-date">{level.actual_date ? formatDate(level.actual_date) : '—'}</span>
@@ -934,7 +1102,7 @@
             {/each}
           </div>
         {:else if tab === 'prices'}
-          <div class="price-table">
+          <div class="price-table" role="tabpanel" id="item-panel-prices" aria-labelledby="item-tab-prices">
             <p class="hint">
               Цены по складам. Для склада доступны только отмеченные в его настройках типы цен;
               для остальных — прочерк.
@@ -960,13 +1128,21 @@
                       {#each priceColumns as type (type.id)}
                         <td>
                           {#if (level.price_type_ids ?? []).includes(type.id)}
+                            {@const priceKey = `${level.warehouse_sid}:${type.id}`}
                             <input
                               type="text"
                               inputmode="decimal"
                               placeholder="0,00"
+                              id={`item-price-${level.warehouse_sid}-${type.id}`}
+                              aria-label={`Цена «${type.title}» для склада «${level.warehouse_name}»`}
+                              aria-invalid={Boolean(priceErrors[priceKey])}
+                              aria-describedby={priceErrors[priceKey] ? `item-price-error-${level.warehouse_sid}-${type.id}` : undefined}
                               disabled={!canEdit}
                               bind:value={warehousePrices[level.warehouse_sid][String(type.id)]}
                             />
+                            {#if priceErrors[priceKey]}
+                              <span class="price-error" id={`item-price-error-${level.warehouse_sid}-${type.id}`}>{priceErrors[priceKey]}</span>
+                            {/if}
                           {:else}
                             <span class="pt-dash">—</span>
                           {/if}
@@ -979,7 +1155,7 @@
             </div>
           </div>
         {:else}
-          <div class="levels">
+          <div class="levels" role="tabpanel" id="item-panel-composition" aria-labelledby="item-tab-composition">
             {#if composition.length === 0}
               <div class="empty">Состав пуст — добавьте позиции</div>
             {:else}
@@ -993,8 +1169,17 @@
                     <Input
                       type="number"
                       bind:value={compositionEdits[row.item_sid]}
+                      min={0}
+                      step="any"
+                      ariaLabel={`Количество в составе «${row.name}»`}
+                      ariaInvalid={Boolean(compositionErrors[row.item_sid])}
+                      ariaDescribedby={compositionErrors[row.item_sid] ? `item-composition-error-${row.item_sid}` : undefined}
+                      id={`item-composition-${row.item_sid}`}
                       disabled={!canEdit}
                     />
+                    {#if compositionErrors[row.item_sid]}
+                      <span class="field-error" id={`item-composition-error-${row.item_sid}`}>{compositionErrors[row.item_sid]}</span>
+                    {/if}
                   </div>
                   {#if row.unit}<span class="level-unit">{row.unit}</span>{/if}
                   {#if canEdit}
@@ -1021,12 +1206,12 @@
         {/if}
 
         <div class="actions">
-          <Button variant="ghost" onclick={goBack}>Отмена</Button>
-          <Button loading={saving} disabled={!canEdit} onclick={() => void save()}>
+          <Button variant="ghost" disabled={!dirty || saving} onclick={goBack}>Отмена</Button>
+          <Button type="submit" loading={saving} disabled={!canEdit || !dirty}>
             {isNew ? 'Создать позицию' : 'Сохранить'}
           </Button>
         </div>
-      </div>
+      </form>
     </div>
   {/if}
 </section>
@@ -1070,7 +1255,7 @@
   </div>
 
   {#if pickerError}
-    <div class="alert">
+    <div class="alert" role="alert">
       <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
       <span>{pickerError}</span>
     </div>
@@ -1121,6 +1306,7 @@
 
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
     gap: var(--space-3);
   }
@@ -1158,6 +1344,20 @@
     gap: var(--space-2);
     flex: 0 0 auto;
     margin-left: auto;
+  }
+
+  .head-divider {
+    width: 1px;
+    height: 20px;
+    background: var(--border);
+  }
+
+  @media (max-width: 640px) {
+    .head-actions {
+      width: 100%;
+      margin-left: 0;
+      padding-left: calc(32px + var(--space-3));
+    }
   }
 
   .status {
@@ -1276,6 +1476,7 @@
   }
 
   .photo-add {
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1294,13 +1495,27 @@
     color: var(--primary);
   }
 
+  .photo-add:focus-within {
+    border-color: var(--primary);
+    box-shadow: 0 0 0 2px var(--focus-ring);
+    color: var(--primary);
+  }
+
   .photo-add.busy {
     opacity: 0.6;
     pointer-events: none;
   }
 
   .photo-add input {
-    display: none;
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .form {
@@ -1315,50 +1530,21 @@
     gap: var(--space-3);
   }
 
-  .field {
+  .field-block {
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
   }
 
+  .field-error {
+    color: var(--danger);
+    font-size: 12px;
+    line-height: 1.4;
+  }
+
   .label {
     font-size: 14px;
     color: var(--text-description);
-  }
-
-  .field select,
-  .field textarea {
-    width: 100%;
-    padding: 0 11px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-    font: inherit;
-    font-size: 14px;
-    color: var(--text);
-    outline: none;
-  }
-
-  .field select {
-    height: 32px;
-  }
-
-  .field textarea {
-    padding: 6px 11px;
-    resize: vertical;
-  }
-
-  .field select:focus,
-  .field textarea:focus {
-    border-color: var(--primary);
-    box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
-  }
-
-  .field select:disabled,
-  .field textarea:disabled {
-    background: var(--fill-tertiary);
-    color: var(--text-description);
-    cursor: not-allowed;
   }
 
   .price-table {
@@ -1446,12 +1632,21 @@
 
   .price-table td input:focus {
     border-color: var(--primary);
-    box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
+    box-shadow: 0 0 0 2px var(--focus-ring);
   }
 
   .price-table td input:disabled {
     background: var(--fill-tertiary);
     color: var(--text-description);
+  }
+
+  .price-error {
+    display: block;
+    margin-top: 2px;
+    color: var(--danger);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: normal;
   }
 
   .pt-dash {
@@ -1461,10 +1656,13 @@
   .tabs {
     display: flex;
     gap: var(--space-6);
+    overflow-x: auto;
     border-bottom: 1px solid var(--border-secondary);
+    scrollbar-width: thin;
   }
 
   .tabs button {
+    flex: 0 0 auto;
     padding: 12px 0;
     border: none;
     border-bottom: 2px solid transparent;
@@ -1521,6 +1719,20 @@
     background: var(--focus-ring);
   }
 
+  @media (max-width: 640px) {
+    .level-row {
+      flex-wrap: wrap;
+    }
+
+    .level-name {
+      flex-basis: 100%;
+    }
+
+    .level-date {
+      margin-left: auto;
+    }
+  }
+
   .level-name {
     display: inline-flex;
     align-items: center;
@@ -1535,7 +1747,10 @@
   }
 
   .level-qty {
-    flex: 0 0 120px;
+    display: flex;
+    flex: 0 0 140px;
+    flex-direction: column;
+    gap: var(--space-1);
   }
 
   .level-unit {

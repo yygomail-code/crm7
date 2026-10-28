@@ -38,11 +38,16 @@
 
 ## Компоненты (`frontend/src/lib/components/ui/`)
 
-- **`Button.svelte`** — `variant: 'primary' | 'ghost' | 'text' | 'danger'` (по умолч. `primary`),
-  `size: 'md' | 'sm'` (32px), `loading`, `disabled`, `title`, `ariaLabel`, `onclick`.
+- **`Button.svelte`** — `variant: 'primary' | 'success' | 'ghost' | 'text' | 'danger'` (по умолч. `primary`;
+  `success` — мягкое позитивное действие), `size: 'md' | 'sm'` (32px), `loading`, `disabled`, `title`, `ariaLabel`, `onclick`.
 - **`Modal.svelte`** — общий шелл: `open`, `title`, `label`, `wide`, `closeButton`, `bodyMinHeight`, `onclose`.
   Рендерится только при `open`; Escape и клик по маске закрывают.
-- **`Input.svelte`** — `label`, `type`, `value` (bindable), `placeholder`, `error`, `name`. Высота 32.
+- **`Input.svelte`** — `label`, `type`, `value` (bindable), `placeholder`, `error`, `name`, `inputmode`,
+  `min`, `max`, `step`, `maxlength`, `id`, `ariaLabel`, `ariaInvalid`, `ariaDescribedby`. Высота 32.
+- **`Select.svelte`** — `label`, `value` (bindable), `disabled`, `id`, `ariaLabel`, `ariaInvalid`,
+  `ariaDescribedby`; опции передаются слотами. Высота 32.
+- **`Textarea.svelte`** — `label`, `value` (bindable), `rows`, `maxlength`, `disabled`, `id`, `ariaLabel`,
+  `ariaInvalid`, `ariaDescribedby`.
 - **`SearchInput.svelte`** — поиск с историей (`historyKey`), `onclear`, `onpick`.
 - **`Spinner.svelte`** — `size` (по умолч. 18).
 - **`Pagination.svelte`** — `page`, `perPage`, `total`, `onchange`, `onperpage`, `perPageOptions`, `always`, `loading`.

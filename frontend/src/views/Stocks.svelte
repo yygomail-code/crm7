@@ -1250,7 +1250,7 @@
         {#each groups as group (group.id)}
           <label class="sort-option">
             <input type="checkbox" value={group.id} bind:group={groupDraft} />
-            <span>{group.title}</span>
+            <span title={group.description || undefined}>{group.title}</span>
           </label>
         {/each}
       </div>

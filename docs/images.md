@@ -43,6 +43,20 @@ python deploy/release_crm7.py --env test --tag 1.4.0
 → миграции (`migrate.php`) → `docker compose up -d` → проверка health. Тома с
 данными не трогаются.
 
+## Ручной запуск без агента
+
+Windows: двойной клик `docker-update.cmd` — меню «собрать / опубликовать /
+выпустить / полный цикл». Или из терминала:
+
+```bash
+python deploy/update_images.py --mode full --env test --tag 1.4.0
+python deploy/update_images.py --mode full --env test --tag 1.4.0 --dry-run
+```
+
+По умолчанию предлагается `test`; для `k` и `all` подтверждение по умолчанию —
+«нет». `--dry-run` показывает команды без запуска. Подробный разбор команд,
+ожидаемых ответов и откат — в [`manual-update.md`](manual-update.md).
+
 **Откат** — релиз предыдущего тега:
 ```bash
 python deploy/release_crm7.py --env k --tag sha-<old-sha>

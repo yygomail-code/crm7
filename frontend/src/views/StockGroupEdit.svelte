@@ -144,7 +144,7 @@
       <Icon name="arrow-left" size={16} />
     </button>
     <div class="head-text">
-      <h1>{isNew ? 'Новая группа' : (group?.title ?? 'Группа')}</h1>
+      <h1>{isNew ? 'Новая группа номенклатуры' : 'Редактирование группы номенклатуры'}</h1>
       <p class="sub">
         {isNew
           ? 'Заполните название и описание группы.'
@@ -276,7 +276,7 @@
     flex-direction: column;
     gap: var(--space-4);
     width: 100%;
-    max-width: 720px;
+    max-width: 1280px;
     margin-inline: auto;
   }
 

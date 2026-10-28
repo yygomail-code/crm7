@@ -4,7 +4,7 @@
 
   interface Props {
     type?: 'button' | 'submit';
-    variant?: 'primary' | 'ghost' | 'text' | 'danger';
+    variant?: 'primary' | 'success' | 'ghost' | 'text' | 'danger';
     size?: 'sm' | 'md';
     disabled?: boolean;
     loading?: boolean;
@@ -76,6 +76,17 @@
 
   .primary:hover:not(:disabled) {
     background: var(--primary-hover);
+  }
+
+  .success {
+    background: var(--success-bg);
+    border-color: var(--success-border);
+    color: var(--success-text);
+  }
+
+  .success:hover:not(:disabled) {
+    border-color: var(--success);
+    color: var(--success-text);
   }
 
   .ghost {

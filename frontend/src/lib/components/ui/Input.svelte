@@ -10,6 +10,15 @@
     autocomplete?: FullAutoFill;
     name?: string;
     disabled?: boolean;
+    inputmode?: 'none' | 'text' | 'decimal' | 'numeric' | 'tel' | 'search' | 'email' | 'url';
+    min?: string | number;
+    max?: string | number;
+    step?: string | number;
+    maxlength?: number;
+    ariaLabel?: string;
+    ariaInvalid?: boolean;
+    ariaDescribedby?: string;
+    id?: string;
   }
 
   let {
@@ -20,7 +29,16 @@
     error = '',
     autocomplete,
     name = '',
-    disabled = false
+    disabled = false,
+    inputmode,
+    min,
+    max,
+    step,
+    maxlength,
+    ariaLabel,
+    ariaInvalid,
+    ariaDescribedby,
+    id
   }: Props = $props();
 </script>
 
@@ -28,7 +46,24 @@
   {#if label}
     <span class="label">{label}</span>
   {/if}
-  <input {type} bind:value {placeholder} {autocomplete} {name} {disabled} class:invalid={Boolean(error)} />
+  <input
+    {type}
+    bind:value
+    {placeholder}
+    {autocomplete}
+    {name}
+    {disabled}
+    {inputmode}
+    {min}
+    {max}
+    {step}
+    {maxlength}
+    {id}
+    aria-label={ariaLabel}
+    aria-invalid={ariaInvalid ? 'true' : undefined}
+    aria-describedby={ariaDescribedby}
+    class:invalid={Boolean(error)}
+  />
   {#if error}
     <span class="error">{error}</span>
   {/if}

@@ -89,6 +89,9 @@ npm run dev        # http://localhost:5173
 Адрес API по умолчанию — относительный `./api/v2`; переопределяется через
 `VITE_API_V2_BASE` при сборке или `window.CRM_CONFIG` в `config.js` (см. `docs/deploy.md`).
 
+Windows: `run-dev.cmd` подберёт свободные порты, запустит API и Vite и откроет браузер.
+`--dry-run` показывает команды, `--no-browser` запускает без браузера.
+
 ### 3. Планировщик
 
 ```bash
@@ -114,6 +117,7 @@ npm run e2e        # e2e-сценарии (нужен запущенный фр�
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — процесс, ветки, PR, правила
 - [`docs/deploy.md`](docs/deploy.md) — развёртывание (в т.ч. несколько проектов на одном хостинге)
 - [`docs/images.md`](docs/images.md) — образы, версии, GHCR
+- [`docs/manual-update.md`](docs/manual-update.md) — ручное обновление Git и Docker через консоль
 - [`docs/migrations.md`](docs/migrations.md) — миграции БД
 - [`docs/data-import.md`](docs/data-import.md) — импорт реальных данных в K
 - [`docs/e2e.md`](docs/e2e.md) — e2e-сценарии и переменные окружения
