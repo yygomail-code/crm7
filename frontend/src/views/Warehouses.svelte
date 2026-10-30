@@ -10,6 +10,7 @@
   } from '../lib/api/stocks';
   import { config } from '../lib/config';
   import { loadFilters, saveFilters } from '../lib/filters';
+  import { buildPageItems } from '../lib/pagination';
   import { addHistory } from '../lib/search-history';
   import { router } from '../lib/router.svelte';
   import Button from '../lib/components/ui/Button.svelte';
@@ -36,8 +37,7 @@
   const sortFields = [
     { field: 'name', label: 'Название' },
     { field: 'address', label: 'Адрес' },
-    { field: 'positions', label: 'Позиций' },
-    { field: 'users', label: 'Доступ' },
+    { field: 'positions', label: 'Остаток' },
     { field: 'active', label: 'Статус' }
   ];
 
@@ -46,6 +46,7 @@
   let busy = $state(false);
   let error = $state('');
   let message = $state('');
+  let loadSeq = 0;
   const warehouseFilterDefaults = {
     sort: 'name_asc',
     view: 'list',
@@ -88,6 +89,7 @@
   let viewDraft = $state<'list' | 'tiles'>('list');
   let helpOpen = $state(false);
   let exportOpen = $state(false);
+  let jumpPage = $state<number | null>(null);
 
   const emailAllowed = $derived(appSettings.emailExportEnabled && appSettings.mailConfigured);
 
@@ -140,7 +142,14 @@
   );
   const rangeFrom = $derived(perPage <= 0 ? (sorted.length === 0 ? 0 : 1) : Math.min((page - 1) * perPage + 1, sorted.length));
   const rangeTo = $derived(perPage <= 0 ? sorted.length : Math.min(page * perPage, sorted.length));
-  const pageItems = $derived(buildPageItems(page, pages));
+  const pageItems = $derived(buildPageItems(Math.min(page, pages), pages));
+
+  $effect(() => {
+    if (page > pages) {
+      page = pages;
+      persist();
+    }
+  });
 
   onMount(() => {
     void load();
@@ -151,20 +160,27 @@
   });
 
   async function load(silent = false): Promise<void> {
+    const seq = ++loadSeq;
+
     if (!silent) {
       loading = true;
+      error = '';
     }
 
-    error = '';
-
     try {
-      items = (await listWarehouseDirectory()).items;
+      const data = (await listWarehouseDirectory()).items;
+
+      if (seq !== loadSeq) {
+        return;
+      }
+
+      items = data;
     } catch (cause) {
-      if (!silent) {
+      if (seq === loadSeq && !silent) {
         error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить склады';
       }
     } finally {
-      if (!silent) {
+      if (seq === loadSeq && !silent) {
         loading = false;
       }
     }
@@ -178,34 +194,6 @@
       query,
       page
     });
-  }
-
-  function buildPageItems(current: number, count: number): (number | '...')[] {
-    if (count <= 7) {
-      return Array.from({ length: count }, (_, index) => index + 1);
-    }
-
-    const result: (number | '...')[] = [];
-
-    if (current <= 3) {
-      for (let index = 1; index <= 5; index += 1) {
-        result.push(index);
-      }
-      result.push('...', count);
-      return result;
-    }
-
-    if (current >= count - 2) {
-      result.push(1, '...');
-      for (let index = count - 4; index <= count; index += 1) {
-        result.push(index);
-      }
-      return result;
-    }
-
-    result.push(1, '...', current - 1, current, current + 1, '...', count);
-
-    return result;
   }
 
   function sortTerm(field: string): 'asc' | 'desc' | null {
@@ -277,8 +265,23 @@
   }
 
   function goToPage(next: number): void {
-    page = Math.min(Math.max(1, next), pages);
+    if (!Number.isFinite(next)) {
+      return;
+    }
+
+    page = Math.min(Math.max(1, Math.trunc(next)), pages);
     persist();
+  }
+
+  function submitJump(event: Event): void {
+    event.preventDefault();
+
+    if (typeof jumpPage !== 'number' || !Number.isFinite(jumpPage)) {
+      return;
+    }
+
+    goToPage(jumpPage);
+    jumpPage = null;
   }
 
   function changePerPage(): void {
@@ -315,10 +318,6 @@
 </script>
 
 <section class="page">
-  <div class="head">
-    <h1>Склады</h1>
-  </div>
-
   {#if error}
     <div class="alert">
       <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
@@ -332,10 +331,12 @@
     </div>
   {/if}
 
-  {#if loading}
-    <div class="center"><Spinner size={26} /></div>
-  {:else}
-    <div class="filters">
+  <div class="filters">
+    <div class="head">
+      <h1>Склады</h1>
+    </div>
+
+    {#if !loading}
       <form
         class="search"
         onsubmit={(event) => {
@@ -410,8 +411,12 @@
           <Icon name="help" size={16} />
         </button>
       </div>
-    </div>
+    {/if}
+  </div>
 
+  {#if loading}
+    <div class="center"><Spinner size={26} /></div>
+  {:else}
     {#if sorted.length === 0}
       <div class="empty">Склады не найдены</div>
     {:else}
@@ -467,10 +472,6 @@
                 <div class="stat col-positions">
                   <span class="stat-label">Позиций</span>
                   <span class="value">{item.positions}</span>
-                </div>
-                <div class="stat col-users">
-                  <span class="stat-label">Доступ</span>
-                  <span class="value">{item.users}</span>
                 </div>
                 <div class="stat col-active">
                   <span class="stat-label">Статус</span>
@@ -536,6 +537,33 @@
                 <Icon name="arrow-right" size={14} />
               </button>
             </div>
+
+            <div class="pager-simple" aria-label="Постраничная навигация">
+              <button
+                type="button"
+                class="page-btn"
+                disabled={page <= 1}
+                aria-label="Предыдущая страница"
+                onclick={() => goToPage(page - 1)}
+              >
+                <Icon name="arrow-left" size={14} />
+              </button>
+              <span class="pager-simple-count">{page} / {pages}</span>
+              <button
+                type="button"
+                class="page-btn"
+                disabled={page >= pages}
+                aria-label="Следующая страница"
+                onclick={() => goToPage(page + 1)}
+              >
+                <Icon name="arrow-right" size={14} />
+              </button>
+            </div>
+
+            <form class="pager-jump" onsubmit={submitJump}>
+              <span>Перейти</span>
+              <input type="number" min="1" max={pages} bind:value={jumpPage} aria-label="Номер страницы" />
+            </form>
           </div>
         {/if}
       </div>
@@ -605,7 +633,8 @@
 <Modal open={helpOpen} title="Как пользоваться" onclose={() => (helpOpen = false)} wide>
   <div class="help">
     <p>
-      Здесь собраны склады системы. Пункт доступен ролям с правом импорта из 1С и правки номенклатуры.
+      Здесь собраны склады системы. Раздел доступен сотрудникам с правами на импорт из 1С и
+      редактирование номенклатуры.
     </p>
     <div class="help-block">
       <h3>Список и плитки</h3>
@@ -681,7 +710,7 @@
     flex-wrap: wrap;
     gap: var(--space-4);
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
   }
 
   .search {
@@ -695,8 +724,10 @@
 
   .filter-icons {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
+    margin-left: auto;
   }
 
   .sort-button {
@@ -825,6 +856,11 @@
     min-width: 0;
   }
 
+  .stat.col-positions {
+    align-items: flex-end;
+    text-align: right;
+  }
+
   .stat-label {
     font-size: 12px;
     color: var(--text-description);
@@ -875,9 +911,7 @@
 
   .levels-head-label {
     min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    line-height: 1.25;
   }
 
   .sort-badge {
@@ -905,7 +939,7 @@
       top: 0;
       z-index: 2;
       display: grid;
-      grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) 90px 90px 110px;
+      grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) 140px 110px;
       align-items: stretch;
       padding: 0;
       background: var(--fill-tertiary);
@@ -932,8 +966,7 @@
       transform: translateY(-50%);
     }
 
-    .levels-head .col-positions,
-    .levels-head .col-users {
+    .levels-head .col-positions {
       justify-content: flex-end;
     }
 
@@ -944,7 +977,7 @@
 
     .levels:not(.tiles) .level {
       display: grid;
-      grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) 90px 90px 110px;
+      grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) 140px 110px;
       align-items: center;
       padding: 0;
     }
@@ -966,8 +999,7 @@
       display: none;
     }
 
-    .levels:not(.tiles) .col-positions,
-    .levels:not(.tiles) .col-users {
+    .levels:not(.tiles) .col-positions {
       align-items: flex-end;
       text-align: right;
     }
@@ -1107,6 +1139,46 @@
     min-width: 32px;
     height: 32px;
     color: var(--text-description);
+  }
+
+  .pager-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    white-space: nowrap;
+  }
+
+  .pager-jump input {
+    width: 56px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    font-size: 13px;
+  }
+
+  .pager-simple {
+    display: none;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .pager-simple-count {
+    color: var(--text);
+  }
+
+  @media (max-width: 575.98px) {
+    .pager-pages,
+    .pager-jump,
+    .pager-total {
+      display: none;
+    }
+
+    .pager-simple {
+      display: inline-flex;
+    }
   }
 
   .sort-hint {

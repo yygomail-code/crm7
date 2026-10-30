@@ -12,16 +12,15 @@
   import { appSettings } from '../lib/stores/app-settings.svelte';
   import { router } from '../lib/router.svelte';
   import { addHistory } from '../lib/search-history';
-  import StatusBadge from '../lib/components/StatusBadge.svelte';
   import Button from '../lib/components/ui/Button.svelte';
   import Icon from '../lib/components/ui/Icon.svelte';
   import FiltersModal from '../lib/components/ui/FiltersModal.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
-  import Pagination from '../lib/components/ui/Pagination.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
   import { clearFilters, countActive, loadFilters, saveFilters } from '../lib/filters';
   import { formatDateTime } from '../lib/format';
+  import { buildPageItems } from '../lib/pagination';
   import { clampPeriod, defaultPeriod, todayIso } from '../lib/period';
 
   const filterDefaults = {
@@ -30,7 +29,10 @@
     warehouse: 0,
     from: defaultPeriod().from,
     to: defaultPeriod().to,
-    sort: 'created_desc'
+    sort: 'created_desc',
+    view: 'list',
+    q: '',
+    page: 1
   };
 
   const filterCountDefaults = {
@@ -41,19 +43,59 @@
     to: filterDefaults.to
   };
 
+  const perPageOptions = [20, 50, 100];
+
   let statuses = $state<RequestStatus[]>([]);
   let items = $state<RequestItem[]>([]);
   let total = $state(0);
-  let page = $state(1);
   let loading = $state(true);
   let error = $state('');
   const initialFilters = loadFilters('requests', filterDefaults);
   let filters = $state({ ...initialFilters });
   let draft = $state({ ...initialFilters });
-  let search = $state('');
-  let searchInput = $state('');
+  let page = $state(typeof initialFilters.page === 'number' && initialFilters.page > 0 ? initialFilters.page : 1);
+  let perPage = $state(20);
+  let jumpPage = $state<number | null>(null);
+  let search = $state(String(initialFilters.q ?? ''));
+  let searchInput = $state(String(initialFilters.q ?? ''));
+  let searchTimer: ReturnType<typeof setTimeout> | undefined;
+  let loadSeq = 0;
   let warehouses = $state<{ id: number; name: string }[]>([]);
-  let sorts = $state<{ code: string; title: string }[]>([]);
+
+  $effect(() => {
+    const term = searchInput.trim();
+    clearTimeout(searchTimer);
+
+    if (term === search) {
+      return;
+    }
+
+    searchTimer = setTimeout(() => {
+      search = term;
+      void load(true);
+      persist();
+    }, 400);
+
+    return () => clearTimeout(searchTimer);
+  });
+
+  let viewMode = $state<'list' | 'tiles'>(initialFilters.view === 'tiles' ? 'tiles' : 'list');
+  let viewOpen = $state(false);
+  let viewDraft = $state<'list' | 'tiles'>('list');
+  let sortOpen = $state(false);
+  let sortDraft = $state<string[]>(['created_desc']);
+
+  const sortFields = [
+    { field: 'number', label: 'Номер' },
+    { field: 'subject', label: 'Тема' },
+    { field: 'client', label: 'Клиент', staffOnly: true },
+    { field: 'manager', label: 'Менеджер' },
+    { field: 'positions', label: 'Позиций' },
+    { field: 'status', label: 'Статус' },
+    { field: 'due', label: 'Срок' },
+    { field: 'priority', label: 'Приоритет' },
+    { field: 'created', label: 'Дата создания' }
+  ];
 
   let draftsOpen = $state(false);
   let drafts = $state<RequestDraftSummary[]>([]);
@@ -65,6 +107,10 @@
   const isStaff = $derived(auth.level >= 10);
   const activeFilterCount = $derived(countActive(filters, filterCountDefaults));
   const searchActive = $derived(search.trim() !== '');
+  const pages = $derived(Math.max(1, Math.ceil(total / perPage)));
+  const rangeFrom = $derived(total === 0 ? 0 : Math.min((page - 1) * perPage + 1, total));
+  const rangeTo = $derived(Math.min(page * perPage, total));
+  const pageItems = $derived(buildPageItems(page, pages));
 
   onMount(() => {
     void listStatuses()
@@ -78,15 +124,13 @@
     void requestFilters()
       .then((data) => {
         warehouses = data.warehouses;
-        sorts = data.sorts;
       })
       .catch(() => {
         warehouses = [];
-        sorts = [];
       });
 
     void refreshDraftCount();
-    void load(true);
+    void load(false);
   });
 
   async function refreshDraftCount(): Promise<void> {
@@ -97,6 +141,10 @@
     }
   }
 
+  function persist(): void {
+    saveFilters('requests', { ...filters, view: viewMode, q: search, page });
+  }
+
   function resetFilters(): void {
     const period = defaultPeriod();
     const next = { ...filterDefaults, from: period.from, to: period.to };
@@ -104,6 +152,7 @@
     draft = { ...next };
     filters = { ...next };
     clearFilters('requests');
+    persist();
     void load(true);
   }
 
@@ -119,18 +168,99 @@
     draft.from = period.from;
     draft.to = period.to;
     filters = { ...draft };
-    saveFilters('requests', filters);
+    persist();
     void load(true);
+  }
+
+  function openSort(): void {
+    const terms = sortTerms();
+
+    sortDraft = terms.length > 0 ? [...terms] : [filterDefaults.sort];
+    sortOpen = true;
+  }
+
+  function sortTerms(): string[] {
+    return filters.sort.split(',').filter((term) => term !== '');
+  }
+
+  function sortIndex(field: string): number {
+    return sortTerms().findIndex((term) => term === field || term.startsWith(`${field}_`)) + 1;
+  }
+
+  function sortTerm(field: string): 'asc' | 'desc' | null {
+    const terms = sortTerms();
+
+    if (terms.includes(`${field}_asc`) || terms.includes(field)) {
+      return 'asc';
+    }
+
+    if (terms.includes(`${field}_desc`)) {
+      return 'desc';
+    }
+
+    return null;
+  }
+
+  function headerSort(field: string): void {
+    const terms = sortTerms();
+    const asc = `${field}_asc`;
+    const desc = `${field}_desc`;
+    const isAsc = (term: string): boolean => term === asc || term === field;
+    let next: string[];
+
+    if (terms.some(isAsc)) {
+      next = terms.map((term) => (isAsc(term) ? desc : term));
+    } else if (terms.includes(desc)) {
+      next = terms.filter((term) => term !== desc);
+    } else {
+      next = [...terms, asc];
+    }
+
+    applySortTerms(next);
+  }
+
+  function toggleSortDir(field: string, dir: 'asc' | 'desc'): void {
+    const term = `${field}_${dir}`;
+    const isField = (item: string): boolean => item === field || item.startsWith(`${field}_`);
+
+    sortDraft = sortDraft.includes(term)
+      ? sortDraft.filter((item) => item !== term)
+      : [...sortDraft.filter((item) => !isField(item)), term];
+  }
+
+  function toggleSortDirActive(field: string, dir: 'asc' | 'desc'): boolean {
+    return sortDraft.includes(`${field}_${dir}`);
+  }
+
+  function applySortTerms(terms: string[]): void {
+    filters.sort = terms.length > 0 ? terms.join(',') : filterDefaults.sort;
+    changeSort();
+  }
+
+  function applySort(): void {
+    sortOpen = false;
+    applySortTerms(sortDraft);
   }
 
   function changeSort(): void {
-    saveFilters('requests', filters);
+    persist();
     void load(true);
   }
 
-  let perPage = $state(20);
+  function openView(): void {
+    viewDraft = viewMode;
+    viewOpen = true;
+  }
+
+  function applyView(): void {
+    viewMode = viewDraft;
+    viewOpen = false;
+    persist();
+  }
 
   async function load(reset: boolean): Promise<void> {
+    const seq = ++loadSeq;
+
     if (reset) {
       page = 1;
     }
@@ -151,12 +281,31 @@
         per_page: perPage
       });
 
+      if (seq !== loadSeq) {
+        return;
+      }
+
       items = data.items;
       total = data.total;
+
+      const maxPage = Math.max(1, Math.ceil(data.total / perPage));
+
+      if (page > maxPage) {
+        page = maxPage;
+        persist();
+        void load(false);
+        return;
+      }
+
+      persist();
     } catch (cause) {
-      error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить заявки';
+      if (seq === loadSeq) {
+        error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить заявки';
+      }
     } finally {
-      loading = false;
+      if (seq === loadSeq) {
+        loading = false;
+      }
     }
   }
 
@@ -166,13 +315,34 @@
     void load(true);
   }
 
-  function goToPage(next: number): void {
+  async function goToPage(target: number): Promise<void> {
+    if (!Number.isFinite(target)) {
+      return;
+    }
+
+    const next = Math.min(Math.max(1, Math.trunc(target)), pages);
+
+    if (next === page) {
+      return;
+    }
+
     page = next;
-    void load(false);
+    await load(false);
   }
 
-  function changePerPage(value: number): void {
-    perPage = value;
+  async function submitJump(event: Event): Promise<void> {
+    event.preventDefault();
+
+    if (typeof jumpPage !== 'number' || !Number.isFinite(jumpPage)) {
+      return;
+    }
+
+    await goToPage(jumpPage);
+    jumpPage = null;
+  }
+
+  function changePerPage(): void {
+    page = 1;
     void load(true);
   }
 
@@ -212,28 +382,31 @@
     try {
       await deleteDraft(id);
       await loadDrafts();
-    } catch (cause) {      draftsError = cause instanceof ApiError ? cause.message : 'Не удалось удалить черновик';
+    } catch (cause) {
+      draftsError = cause instanceof ApiError ? cause.message : 'Не удалось удалить черновик';
     } finally {
       draftBusy = 0;
     }
   }
 </script>
 
-<section class="page page-wide">
-  <div class="head">
-    <h1>Заявки</h1>
-    <div class="head-actions">
-      <span class="drafts-wrap" class:has-drafts={draftCount > 0}>
-        <Button variant="ghost" onclick={() => void openDrafts()}>Черновики заявок</Button>
-      </span>
-      <Button
-        disabled={!appSettings.salesEnabled}
-        onclick={() => router.navigate('/requests/new')}
-      >
-        Новая заявка
-      </Button>
-    </div>
-  </div>
+<section class="page">
+  {#snippet headCell(className: string, label: string, field: string)}
+    <button
+      type="button"
+      class="head-cell {className}"
+      class:active={sortTerm(field) !== null}
+      onclick={() => headerSort(field)}
+    >
+      <span class="head-label">{label}</span>
+      {#if sortTerm(field)}
+        <span class="sort-ind" aria-hidden="true">
+          <Icon name={sortTerm(field) === 'desc' ? 'arrow-down' : 'arrow-up'} size={12} />
+          <span class="sort-num">{sortIndex(field)}</span>
+        </span>
+      {/if}
+    </button>
+  {/snippet}
 
   {#if !appSettings.salesEnabled}
     <div class="notice sales-off">
@@ -245,7 +418,11 @@
     </div>
   {/if}
 
-  <div class="search-row">
+  <div class="filters">
+    <div class="head">
+      <h1>Заявки</h1>
+    </div>
+
     <form class="search" onsubmit={(event) => { event.preventDefault(); applyFilters(); }}>
       <SearchInput
         bind:value={searchInput}
@@ -254,67 +431,108 @@
         onclear={applyFilters}
         onpick={applyFilters}
       />
-      <Button type="submit" variant="ghost">Найти</Button>
     </form>
 
-    <FiltersModal
-      count={countActive(filters, filterCountDefaults)}
-      onopen={() => (draft = { ...filters })}
-      onapply={applyFilterDraft}
-      onreset={resetFilters}
-    >
-      <label class="filter-field">
-        <span>Статус</span>
-        <select bind:value={draft.status}>
-          <option value="">Все статусы</option>
-          {#each statuses as status}
-            <option value={status.code}>{status.title}</option>
-          {/each}
-        </select>
-      </label>
+    <div class="filter-icons">
+      <button
+        type="button"
+        class="sort-button"
+        class:active={filters.sort !== filterDefaults.sort}
+        title="Сортировка"
+        aria-label="Сортировка"
+        onclick={openSort}
+      >
+        <Icon name="sort" size={16} />
+      </button>
 
-      {#if isStaff}
+      <FiltersModal
+        icon
+        count={countActive(filters, filterCountDefaults)}
+        onopen={() => (draft = { ...filters })}
+        onapply={applyFilterDraft}
+        onreset={resetFilters}
+      >
         <label class="filter-field">
-          <span>Менеджер</span>
-          <select bind:value={draft.scope}>
-            <option value="">Все заявки</option>
-            <option value="none">Без менеджера</option>
-            <option value="mine">В работе у меня</option>
-            <option value="others">В работе у других менеджеров</option>
-          </select>
-        </label>
-      {/if}
-
-      {#if warehouses.length > 0}
-        <label class="filter-field">
-          <span>Склад</span>
-          <select bind:value={draft.warehouse}>
-            <option value={0}>Все склады</option>
-            {#each warehouses as warehouse (`${warehouse.id}|${warehouse.name}`)}
-              <option value={warehouse.id}>{warehouse.name}</option>
+          <span>Статус</span>
+          <select bind:value={draft.status}>
+            <option value="">Все статусы</option>
+            {#each statuses as status}
+              <option value={status.code}>{status.title}</option>
             {/each}
           </select>
         </label>
-      {/if}
 
-      <label class="filter-field">
-        <span>Период с</span>
-        <input type="date" bind:value={draft.from} max={draft.to} />
-      </label>
-      <label class="filter-field">
-        <span>Период по</span>
-        <input type="date" bind:value={draft.to} min={draft.from} max={todayIso()} />
-      </label>
-    </FiltersModal>
+        {#if isStaff}
+          <label class="filter-field">
+            <span>Менеджер</span>
+            <select bind:value={draft.scope}>
+              <option value="">Все заявки</option>
+              <option value="none">Без менеджера</option>
+              <option value="mine">В работе у меня</option>
+              <option value="others">В работе у других менеджеров</option>
+            </select>
+          </label>
+        {/if}
 
-    <label class="sort-field">
-      <span>Сортировка</span>
-      <select bind:value={filters.sort} onchange={changeSort}>
-        {#each sorts as sort (sort.code)}
-          <option value={sort.code}>{sort.title}</option>
-        {/each}
-      </select>
-    </label>
+        {#if warehouses.length > 0}
+          <label class="filter-field">
+            <span>Склад</span>
+            <select bind:value={draft.warehouse}>
+              <option value={0}>Все склады</option>
+              {#each warehouses as warehouse (`${warehouse.id}|${warehouse.name}`)}
+                <option value={warehouse.id}>{warehouse.name}</option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+
+        <label class="filter-field">
+          <span>Период с</span>
+          <input type="date" bind:value={draft.from} max={draft.to} />
+        </label>
+        <label class="filter-field">
+          <span>Период по</span>
+          <input type="date" bind:value={draft.to} min={draft.from} max={todayIso()} />
+        </label>
+      </FiltersModal>
+
+      <button
+        type="button"
+        class="sort-button"
+        class:active={viewMode === 'tiles'}
+        title="Отображение"
+        aria-label="Отображение: списком или плитками"
+        onclick={openView}
+      >
+        <Icon name="view" size={16} />
+      </button>
+
+      <span class="toolbar-divider" aria-hidden="true"></span>
+
+      <button
+        type="button"
+        class="sort-button"
+        class:active={draftCount > 0}
+        class:has-badge={draftCount > 0}
+        title="Черновики заявок"
+        aria-label="Черновики заявок"
+        onclick={() => void openDrafts()}
+      >
+        <Icon name="requests" size={16} />
+        {#if draftCount > 0}<span class="icon-badge">{draftCount}</span>{/if}
+      </button>
+
+      <button
+        type="button"
+        class="sort-button"
+        title="Новая заявка"
+        aria-label="Новая заявка"
+        disabled={!appSettings.salesEnabled || !auth.can('requests.create')}
+        onclick={() => router.navigate('/requests/new')}
+      >
+        <Icon name="plus" size={16} />
+      </button>
+    </div>
   </div>
 
   {#if error}
@@ -331,7 +549,8 @@
       <div class="empty">
         <p class="empty-title">Заявки не найдены</p>
         <p class="empty-hint">
-          Включены фильтры — часть заявок может быть скрыта. Отключите фильтры, чтобы не пропустить их.
+          Включены фильтры — часть заявок может быть скрыта. Сбросьте фильтры, чтобы увидеть все
+          заявки.
         </p>
         <Button variant="ghost" onclick={resetFiltersAndSearch}>Сбросить фильтры</Button>
       </div>
@@ -345,48 +564,187 @@
       <div class="empty">Заявок пока нет</div>
     {/if}
   {:else}
-    <div class="list">
-      {#each items as item (item.id)}
-        <div class="row">
+    <div class="levels-wrap">
+      {#if viewMode === 'list'}
+        <div class="levels-head" class:compact={!isStaff}>
+          {@render headCell('col-number', 'Номер', 'number')}
+          {@render headCell('col-subject', 'Тема', 'subject')}
+          {#if isStaff}{@render headCell('col-client', 'Клиент', 'client')}{/if}
+          {@render headCell('col-manager', 'Менеджер', 'manager')}
+          {@render headCell('col-count', 'Позиций', 'positions')}
+          {@render headCell('col-status', 'Статус', 'status')}
+          {@render headCell('col-overdue', 'Просрочка', 'due')}
+          {@render headCell('col-date', 'Дата', 'created')}
+        </div>
+      {/if}
+
+      <div class="levels" class:tiles={viewMode === 'tiles'} class:compact={!isStaff}>
+        {#each items as item (item.id)}
           <a class="card" href={`#/requests/${item.id}`}>
-            <div class="card-head">
-              <span class="number">{item.number}</span>
-              <StatusBadge title={item.status.title} color={item.status.color} />
-              <span class="date">{formatDateTime(item.created_at)}</span>
-            </div>
-            <div class="subject">{item.subject}</div>
-            <div class="meta">
-              {#if isStaff}
-                <span>{item.client.name}</span>
-              {/if}
+            <span class="cell col-number number">{item.number}</span>
+            <span class="cell col-subject subject">{item.subject}</span>
+            {#if isStaff}
+              <span class="cell col-client">{item.client.name}</span>
+            {/if}
+            <span class="cell col-manager">
               {#if item.manager}
-                <span>менеджер: {item.manager.name}</span>
+                {item.manager.name}
               {:else}
                 <span class="search-badge">поиск менеджера</span>
               {/if}
-              {#if item.items_count > 0}
-                <span>позиций: {item.items_count}</span>
-              {/if}
-            </div>
-            {#if item.is_overdue}
-              <div class="overdue">Просрочена</div>
-            {/if}
+            </span>
+            <span class="cell col-count">
+              {#if viewMode === 'tiles' && item.items_count > 0}позиций: {/if}{item.items_count}
+            </span>
+            <span class="cell col-status">
+              <span class="status-text" style={`color: ${item.status.color}`}>{item.status.title}</span>
+            </span>
+            <span class="cell col-overdue">
+              {#if item.is_overdue}<span class="overdue">Просрочена</span>{:else}—{/if}
+            </span>
+            <span class="cell col-date date">{formatDateTime(item.created_at)}</span>
           </a>
-        </div>
-      {/each}
+        {/each}
+      </div>
     </div>
 
-    <Pagination
-      page={page}
-      perPage={perPage}
-      total={total}
-      loading={loading}
-      perPageOptions={[20, 50, 100]}
-      always
-      onchange={goToPage}
-      onperpage={changePerPage}
-    />
+    {#snippet pagerPrev()}
+      <button
+        type="button"
+        class="page-btn"
+        disabled={page <= 1}
+        aria-label="Предыдущая страница"
+        onclick={() => void goToPage(page - 1)}
+      >
+        <Icon name="arrow-left" size={14} />
+      </button>
+    {/snippet}
+    {#snippet pagerNext()}
+      <button
+        type="button"
+        class="page-btn"
+        disabled={page >= pages}
+        aria-label="Следующая страница"
+        onclick={() => void goToPage(page + 1)}
+      >
+        <Icon name="arrow-right" size={14} />
+      </button>
+    {/snippet}
+
+    <div class="pager">
+      <label class="per-page">
+        <span>Показывать</span>
+        <select bind:value={perPage} onchange={changePerPage}>
+          {#each perPageOptions as option (option)}
+            <option value={option}>{option}</option>
+          {/each}
+        </select>
+      </label>
+
+      {#if pages > 1}
+        <div class="pager-main">
+          <span class="pager-total">{rangeFrom}–{rangeTo} из {total}</span>
+
+          <div class="pager-pages" aria-label="Постраничная навигация">
+            {@render pagerPrev()}
+
+            {#each pageItems as item, index (`${item}-${index}`)}
+              {#if item === '...'}
+                <span class="page-ellipsis" aria-hidden="true">…</span>
+              {:else}
+                <button
+                  type="button"
+                  class="page-btn"
+                  class:active={item === page}
+                  aria-current={item === page ? 'page' : undefined}
+                  aria-label={`Страница ${item}`}
+                  onclick={() => void goToPage(Number(item))}
+                >
+                  {item}
+                </button>
+              {/if}
+            {/each}
+
+            {@render pagerNext()}
+          </div>
+
+          <div class="pager-simple" aria-label="Постраничная навигация">
+            {@render pagerPrev()}
+            <span class="pager-simple-count">{page} / {pages}</span>
+            {@render pagerNext()}
+          </div>
+
+          <form class="pager-jump" onsubmit={submitJump}>
+            <span>Перейти</span>
+            <input type="number" min="1" max={pages} bind:value={jumpPage} aria-label="Номер страницы" />
+          </form>
+        </div>
+      {/if}
+    </div>
   {/if}
+
+  <Modal open={sortOpen} title="Сортировка" onclose={() => (sortOpen = false)}>
+    <p class="sort-hint">
+      Можно задать несколько условий — они применяются сверху вниз. Нажмите стрелку, чтобы добавить
+      условие, и повторно — чтобы убрать.
+    </p>
+    <div class="sort-list">
+      {#each sortFields as column (column.field)}
+        {#if !column.staffOnly || isStaff}
+          <div class="sort-row" class:active={sortIndex(column.field) > 0}>
+            {#if sortIndex(column.field) > 0}
+              <span class="sort-order">{sortIndex(column.field)}</span>
+            {/if}
+            <span class="sort-row-label">{column.label}</span>
+            <button
+              type="button"
+              class="dir-btn"
+              class:on={toggleSortDirActive(column.field, 'asc')}
+              title="По возрастанию"
+              aria-label={`${column.label}: по возрастанию`}
+              onclick={() => toggleSortDir(column.field, 'asc')}
+            >
+              <Icon name="arrow-up" size={16} />
+            </button>
+            <button
+              type="button"
+              class="dir-btn"
+              class:on={toggleSortDirActive(column.field, 'desc')}
+              title="По убыванию"
+              aria-label={`${column.label}: по убыванию`}
+              onclick={() => toggleSortDir(column.field, 'desc')}
+            >
+              <Icon name="arrow-down" size={16} />
+            </button>
+          </div>
+        {/if}
+      {/each}
+    </div>
+    <div class="modal-actions">
+      <Button variant="ghost" onclick={() => (sortDraft = [filterDefaults.sort])}>Сбросить</Button>
+      <div class="modal-buttons">
+        <Button variant="ghost" onclick={() => (sortOpen = false)}>Отмена</Button>
+        <Button onclick={applySort}>Применить</Button>
+      </div>
+    </div>
+  </Modal>
+
+  <Modal open={viewOpen} title="Отображение" onclose={() => (viewOpen = false)}>
+    <div class="view-options">
+      <label class="radio">
+        <input type="radio" name="req-view" value="list" bind:group={viewDraft} />
+        <span>Списком (строками)</span>
+      </label>
+      <label class="radio">
+        <input type="radio" name="req-view" value="tiles" bind:group={viewDraft} />
+        <span>Плитками</span>
+      </label>
+    </div>
+    <div class="modal-actions">
+      <Button variant="ghost" onclick={() => (viewOpen = false)}>Отмена</Button>
+      <Button onclick={applyView}>Применить</Button>
+    </div>
+  </Modal>
 
   <Modal open={draftsOpen} title="Черновики заявок" onclose={() => (draftsOpen = false)}>
     {#if draftsLoading}
@@ -534,27 +892,15 @@
     margin-inline: auto;
   }
 
-  .head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    flex-wrap: wrap;
+  .page:has(.levels.tiles) {
+    max-width: 1600px;
   }
 
-  @media (max-width: 720px) {
-    .head {
-      flex-direction: column;
-      align-items: stretch;
-    }
-
-    .head-actions {
-      width: 100%;
-    }
-
-    .head-actions :global(button) {
-      flex: 1;
-    }
+  .head {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-1);
   }
 
   h1 {
@@ -565,72 +911,86 @@
     color: var(--text);
   }
 
-  .head-actions {
-    display: flex;
-    gap: var(--space-2);
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .drafts-wrap {
-    display: inline-flex;
-  }
-
-  .drafts-wrap.has-drafts :global(button) {
-    border-color: var(--primary);
-    color: var(--primary);
-    box-shadow: inset 0 0 0 1px var(--primary);
-  }
-
   .sales-off {
     margin-bottom: var(--space-3);
   }
 
-
-  select {
-    padding: 9px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--surface);
-  }
-
-  .search-row {
+  .filters {
     display: flex;
     flex-wrap: wrap;
-    gap: var(--space-2);
+    gap: var(--space-4);
     align-items: center;
+    justify-content: flex-start;
   }
 
   .search {
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-    flex: 1 1 260px;
+    flex: 1 1 220px;
+    max-width: 360px;
     min-width: 0;
   }
 
-  .sort-field {
-    display: inline-flex;
+  .filter-icons {
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
-    margin-left: var(--space-2);
-    padding-left: var(--space-4);
-    border-left: 1px solid var(--border);
-    font-size: 14px;
-    color: var(--muted);
-    white-space: nowrap;
+    margin-left: auto;
   }
 
-  @media (max-width: 720px) {
-    .search {
-      flex: 1 1 100%;
-    }
+  .sort-button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease;
   }
 
-  .row {
-    display: flex;
-    align-items: stretch;
-    gap: var(--space-2);
+  .sort-button:hover:not(:disabled) {
+    border-color: var(--primary-hover);
+    color: var(--primary-hover);
+  }
+
+  .sort-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .sort-button.active {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .icon-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+  }
+
+  .toolbar-divider {
+    width: 1px;
+    height: 24px;
+    margin: 0 var(--space-1);
+    background: var(--border-secondary);
   }
 
   .notice,
@@ -675,17 +1035,31 @@
     color: var(--danger);
   }
 
-  .list {
+  .levels-wrap {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .levels-head {
+    display: none;
+  }
+
+  .levels {
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
   }
 
+  .levels.tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: var(--space-3);
+  }
+
   .card {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
-    flex: 1;
+    gap: var(--space-1);
     min-width: 0;
     padding: var(--space-3) var(--space-4);
     background: var(--surface);
@@ -701,39 +1075,305 @@
     background: var(--fill-tertiary);
   }
 
-  .card-head {
+  .cell {
+    min-width: 0;
+    font-size: 14px;
+  }
+
+  .levels.tiles .card {
+    display: grid;
+    grid-template-columns: auto auto auto minmax(0, 1fr);
+    grid-template-areas:
+      'number status overdue date'
+      'subject subject subject subject'
+      'client manager count count';
+    align-items: center;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  .levels.tiles.compact .card {
+    grid-template-areas:
+      'number status overdue date'
+      'subject subject subject subject'
+      'manager count count count';
+  }
+
+  .levels.tiles .col-number {
+    grid-area: number;
+  }
+
+  .levels.tiles .col-status {
+    grid-area: status;
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-1);
+  }
+
+  .levels.tiles .col-date {
+    grid-area: date;
+    justify-self: end;
+    margin-left: auto;
+  }
+
+  .levels.tiles .col-overdue {
+    grid-area: overdue;
+    justify-self: end;
+  }
+
+  .levels.tiles .col-subject {
+    grid-area: subject;
+    margin-top: var(--space-1);
+  }
+
+  .levels.tiles .col-client {
+    grid-area: client;
+  }
+
+  .levels.tiles .col-manager {
+    grid-area: manager;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .levels.tiles .col-count {
+    grid-area: count;
+    justify-self: end;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  @media (min-width: 900px) {
+    .levels-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: 110px minmax(0, 1.6fr) minmax(0, 1fr) 150px 80px 180px 120px 150px;
+      align-items: stretch;
+      padding: 0;
+      background: var(--fill-tertiary);
+      border: 1px solid var(--border-secondary);
+      border-radius: var(--radius-md) var(--radius-md) 0 0;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+    }
+
+    .levels-head.compact {
+      grid-template-columns: 110px minmax(0, 1.6fr) 150px 80px 180px 120px 150px;
+    }
+
+    .head-cell {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 12px var(--space-4);
+      min-width: 0;
+      border: none;
+      background: none;
+      font: inherit;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .head-cell:hover {
+      color: var(--primary);
+    }
+
+    .head-cell.active {
+      color: var(--primary);
+    }
+
+    .head-label {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .sort-ind {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      flex: 0 0 auto;
+    }
+
+    .sort-num {
+      min-width: 15px;
+      height: 15px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--primary) 14%, white);
+      font-size: 10px;
+      line-height: 15px;
+      text-align: center;
+    }
+
+    .head-cell:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      top: 50%;
+      right: 0;
+      width: 1px;
+      height: 1.6em;
+      background: var(--border-secondary);
+      transform: translateY(-50%);
+    }
+
+    .levels-head .col-count,
+    .levels-head .col-overdue,
+    .levels-head .col-date {
+      justify-content: flex-end;
+      text-align: right;
+    }
+
+    .levels:not(.tiles) {
+      gap: 0;
+      background: var(--surface);
+      border: 1px solid var(--border-secondary);
+      border-radius: 0 0 var(--radius-md) var(--radius-md);
+      overflow: hidden;
+    }
+
+    .levels:not(.tiles) .card {
+      display: grid;
+      grid-template-columns: 110px minmax(0, 1.6fr) minmax(0, 1fr) 150px 80px 180px 120px 150px;
+      align-items: center;
+      gap: var(--space-3);
+      padding: 12px var(--space-4);
+      border: none;
+      border-bottom: 1px solid var(--border-secondary);
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .levels:not(.tiles).compact .card {
+      grid-template-columns: 110px minmax(0, 1.6fr) 150px 80px 180px 120px 150px;
+    }
+
+    .levels:not(.tiles) .card:last-child {
+      border-bottom: none;
+    }
+
+    .levels:not(.tiles) .col-count,
+    .levels:not(.tiles) .col-date,
+    .levels:not(.tiles) .col-overdue {
+      text-align: right;
+    }
+
+    .levels:not(.tiles) .col-status {
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+      overflow: hidden;
+    }
+
+    .levels:not(.tiles) .col-subject {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .levels:not(.tiles) .col-client,
+    .levels:not(.tiles) .col-manager {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+  }
+
+  @media (max-width: 899.98px) {
+    .levels:not(.tiles) .card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        'number date'
+        'subject subject'
+        'status overdue'
+        'manager count';
+      align-items: baseline;
+      gap: 4px var(--space-3);
+    }
+
+    .levels:not(.tiles) .col-number {
+      grid-area: number;
+    }
+
+    .levels:not(.tiles) .col-date {
+      grid-area: date;
+      justify-self: end;
+    }
+
+    .levels:not(.tiles) .col-subject {
+      grid-area: subject;
+      white-space: normal;
+    }
+
+    .levels:not(.tiles) .col-status {
+      grid-area: status;
+      display: flex;
+      align-items: center;
+      gap: var(--space-1);
+      flex-wrap: wrap;
+      min-width: 0;
+    }
+
+    .levels:not(.tiles) .col-overdue {
+      grid-area: overdue;
+      justify-self: end;
+    }
+
+    .levels:not(.tiles) .col-manager {
+      grid-area: manager;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .levels:not(.tiles) .col-count {
+      grid-area: count;
+      justify-self: end;
+      color: var(--muted);
+    }
+
+    .levels:not(.tiles) .col-client {
+      display: none;
+    }
+  }
+
+  .status-text {
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
   }
 
   .date {
-    margin-left: auto;
     font-size: 13px;
     color: var(--muted);
+    white-space: nowrap;
   }
 
   .number {
     font-size: 13px;
     color: var(--muted);
     font-weight: 600;
+    white-space: nowrap;
   }
 
   .subject {
     font-size: 15px;
     font-weight: 500;
-  }
-
-  .meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-2) var(--space-3);
-    font-size: 13px;
-    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .overdue {
-    align-self: flex-start;
     font-size: 12px;
     color: var(--danger);
     background: var(--danger-bg);
@@ -773,4 +1413,209 @@
     padding: var(--space-6);
   }
 
+  .sort-hint {
+    margin: 0 0 var(--space-2);
+    font-size: 13px;
+    color: var(--text-description);
+  }
+
+  .sort-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+    max-height: 340px;
+    overflow-y: auto;
+  }
+
+  .sort-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px 0;
+  }
+
+  .sort-row.active .sort-row-label {
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .sort-row-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    color: var(--text-description);
+  }
+
+  .sort-order {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 12px;
+  }
+
+  .dir-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-description);
+    cursor: pointer;
+  }
+
+  .dir-btn.on {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .view-options {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    max-height: 340px;
+    overflow-y: auto;
+  }
+
+  .radio {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text);
+    cursor: pointer;
+  }
+
+  .pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    font-size: 14px;
+    color: var(--text);
+  }
+
+  .per-page {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .per-page select {
+    padding: 4px 11px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    font-size: 14px;
+  }
+
+  .pager-main {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-left: auto;
+  }
+
+  .pager-total {
+    color: var(--text);
+    white-space: nowrap;
+  }
+
+  .pager-pages {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+  }
+
+  .page-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+    padding: 0 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .page-btn:hover:not(:disabled) {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .page-btn.active {
+    border-color: var(--primary);
+    color: var(--primary);
+  }
+
+  .page-btn:disabled {
+    color: rgba(0, 0, 0, 0.25);
+    cursor: not-allowed;
+  }
+
+  .page-ellipsis {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    height: 32px;
+    color: var(--text-description);
+  }
+
+  .pager-jump {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    white-space: nowrap;
+  }
+
+  .pager-jump input {
+    width: 56px;
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    font-size: 13px;
+  }
+
+  .pager-simple {
+    display: none;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .pager-simple-count {
+    color: var(--text);
+  }
+
+  @media (max-width: 575.98px) {
+    .pager-pages,
+    .pager-jump,
+    .pager-total {
+      display: none;
+    }
+
+    .pager-simple {
+      display: inline-flex;
+    }
+  }
 </style>

@@ -23,7 +23,7 @@
     onperpage
   }: Props = $props();
 
-  const pages = $derived(Math.max(1, Math.ceil(total / perPage)));
+  const pages = $derived(perPage > 0 ? Math.max(1, Math.ceil(total / perPage)) : 1);
   const showSelector = $derived(perPageOptions.length > 0 && onperpage !== undefined);
   const minOption = $derived(perPageOptions.length > 0 ? Math.min(...perPageOptions) : perPage);
   const visible = $derived(always || total > perPage || (showSelector && total > minOption));

@@ -489,13 +489,45 @@ final class RequestRepository
 
     private function sortSql(string $sort): string
     {
-        return match ($sort) {
-            'created_asc' => ' ORDER BY r.created_at ASC, r.ID ASC',
-            'due_asc' => ' ORDER BY (r.due_at IS NULL) ASC, r.due_at ASC, r.ID DESC',
-            'priority_desc' => ' ORDER BY r.priority DESC, r.created_at DESC, r.ID DESC',
-            'status' => ' ORDER BY s.sort ASC, r.created_at DESC, r.ID DESC',
-            default => ' ORDER BY r.created_at DESC, r.ID DESC',
-        };
+        $parts = [];
+
+        foreach (explode(',', $sort) as $code) {
+            $part = match (trim($code)) {
+                'created_asc' => 'r.created_at ASC',
+                'created_desc' => 'r.created_at DESC',
+                'number_asc' => 'r.ID ASC',
+                'number_desc' => 'r.ID DESC',
+                'subject_asc' => 'r.subject ASC',
+                'subject_desc' => 'r.subject DESC',
+                'client_asc' => 'c.FULL_NAME ASC',
+                'client_desc' => 'c.FULL_NAME DESC',
+                'manager_asc' => '(m.FULL_NAME IS NULL) ASC, m.FULL_NAME ASC',
+                'manager_desc' => '(m.FULL_NAME IS NULL) ASC, m.FULL_NAME DESC',
+                'positions_asc' => 'items_count ASC',
+                'positions_desc' => 'items_count DESC',
+                'due_asc' => '(r.due_at IS NULL) ASC, r.due_at ASC',
+                'due_desc' => '(r.due_at IS NULL) ASC, r.due_at DESC',
+                'priority_asc' => 'r.priority ASC',
+                'priority_desc' => 'r.priority DESC',
+                'status', 'status_asc' => 's.sort ASC',
+                'status_desc' => 's.sort DESC',
+                default => null,
+            };
+
+            if ($part !== null && !in_array($part, $parts, true)) {
+                $parts[] = $part;
+            }
+        }
+
+        if ($parts === []) {
+            $parts[] = 'r.created_at DESC';
+        }
+
+        if (!in_array('r.ID DESC', $parts, true) && !in_array('r.ID ASC', $parts, true)) {
+            $parts[] = 'r.ID DESC';
+        }
+
+        return ' ORDER BY ' . implode(', ', $parts);
     }
 
     private function scopeConditions(array $scope): array

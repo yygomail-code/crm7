@@ -14,6 +14,7 @@
   import DownloadOutlined from '@ant-design/icons-svg/es/asn/DownloadOutlined';
   import EditOutlined from '@ant-design/icons-svg/es/asn/EditOutlined';
   import FileTextOutlined from '@ant-design/icons-svg/es/asn/FileTextOutlined';
+  import FilterOutlined from '@ant-design/icons-svg/es/asn/FilterOutlined';
   import GroupOutlined from '@ant-design/icons-svg/es/asn/GroupOutlined';
   import ImportOutlined from '@ant-design/icons-svg/es/asn/ImportOutlined';
   import InfoCircleOutlined from '@ant-design/icons-svg/es/asn/InfoCircleOutlined';
@@ -57,6 +58,7 @@
     'close-circle': CloseCircleFilled,
     edit: EditOutlined,
     export: DownloadOutlined,
+    filter: FilterOutlined,
     group: GroupOutlined,
     help: QuestionCircleOutlined,
     import: ImportOutlined,

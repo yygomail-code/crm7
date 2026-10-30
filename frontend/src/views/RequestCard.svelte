@@ -272,13 +272,8 @@
   }
 
   async function cancelDelete(): Promise<void> {
-    const fromQty = deleteFromQty;
     deleteOpen = false;
-
-    if (fromQty) {
-      itemModalQty = 1;
-      await applyItems(itemPayload(new Map([[deleteItemId, 1]])));
-    }
+    deleteFromQty = false;
   }
   let activityOccurredAt = $state(localNow());
 

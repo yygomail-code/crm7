@@ -257,6 +257,20 @@ final class StocksRepository
             $terms[] = 'l.NAME ASC';
         }
 
+        $hasStableId = false;
+
+        foreach ($terms as $term) {
+            if (str_contains($term, 'l.ID') || str_contains($term, 'l.STOCK_SID')) {
+                $hasStableId = true;
+                break;
+            }
+        }
+
+        if (!$hasStableId) {
+            $terms[] = 'l.STOCK_SID ASC';
+            $terms[] = 'l.ID ASC';
+        }
+
         return 'ORDER BY ' . implode(', ', $terms);
     }
 

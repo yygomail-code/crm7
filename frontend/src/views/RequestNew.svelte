@@ -557,6 +557,9 @@
       body = '';
       priority = 2;
       clientId = 0;
+      selectedClient = null;
+      clientQuery = '';
+      clientResults = [];
       itemRows = [];
       lastSaved = '';
       draftSavedAt = null;
@@ -719,7 +722,7 @@
           </div>
 
           {#if itemRows.length === 0}
-            <p class="muted">Позиций пока нет — добавьте через раздел «Номенклатура»</p>
+            <p class="muted">Позиций пока нет — нажмите «Добавить позицию»</p>
           {:else}
             <div class="item-rows">
               {#each sortItems(itemRows, itemsSort) as row (itemRows.indexOf(row))}

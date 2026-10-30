@@ -81,7 +81,7 @@
         <span class="text">
           <span class="label">Отправить на почту</span>
           <span class="hint">
-            {canEmail ? 'Адрес можно посмотреть в профиле' : 'E-mail не указан в профиле'}
+            {canEmail ? `Отправим на ${email}` : 'E-mail не указан в профиле'}
           </span>
         </span>
       </label>

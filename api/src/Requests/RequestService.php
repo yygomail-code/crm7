@@ -81,9 +81,21 @@ final class RequestService
             'sorts' => [
                 ['code' => 'created_desc', 'title' => 'Сначала новые'],
                 ['code' => 'created_asc', 'title' => 'Сначала старые'],
-                ['code' => 'due_asc', 'title' => 'По сроку'],
+                ['code' => 'number_asc', 'title' => 'По номеру: возрастание'],
+                ['code' => 'number_desc', 'title' => 'По номеру: убывание'],
+                ['code' => 'subject_asc', 'title' => 'По теме: А–Я'],
+                ['code' => 'subject_desc', 'title' => 'По теме: Я–А'],
+                ['code' => 'client_asc', 'title' => 'По клиенту: А–Я'],
+                ['code' => 'client_desc', 'title' => 'По клиенту: Я–А'],
+                ['code' => 'manager_asc', 'title' => 'По менеджеру: А–Я'],
+                ['code' => 'manager_desc', 'title' => 'По менеджеру: Я–А'],
+                ['code' => 'positions_asc', 'title' => 'По позициям: возрастание'],
+                ['code' => 'positions_desc', 'title' => 'По позициям: убывание'],
+                ['code' => 'due_asc', 'title' => 'По сроку: раньше'],
+                ['code' => 'due_desc', 'title' => 'По сроку: позже'],
                 ['code' => 'priority_desc', 'title' => 'По приоритету'],
-                ['code' => 'status', 'title' => 'По статусу'],
+                ['code' => 'status', 'title' => 'По статусу: возрастание'],
+                ['code' => 'status_desc', 'title' => 'По статусу: убывание'],
             ],
         ];
     }

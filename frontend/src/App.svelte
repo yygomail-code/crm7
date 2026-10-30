@@ -78,7 +78,7 @@
   const warehouseEditMatch = $derived(matchRoute('/warehouses/:id/edit', route));
 </script>
 
-{#if !auth.ready || (auth.isAuthenticated && filterPrefs.loadedFor !== auth.user?.id)}
+{#if !auth.ready || (auth.isAuthenticated && (filterPrefs.loadedFor !== auth.user?.id || appSettings.loadedFor !== auth.user?.id))}
   <div class="boot">
     <Spinner size={28} />
   </div>
@@ -112,6 +112,8 @@
       <Chat />
     {:else if route === '/stocks'}
       <Stocks />
+    {:else if (route === '/stocks/groups' || route === '/stocks/groups/new' || groupEditMatch) && !auth.can('settings.manage')}
+      <NotFound />
     {:else if route === '/stocks/groups'}
       <StockGroups />
     {:else if route === '/stocks/groups/new'}

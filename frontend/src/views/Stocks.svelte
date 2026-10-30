@@ -37,6 +37,7 @@
   import { router } from '../lib/router.svelte';
   import { config } from '../lib/config';
   import { formatDate, formatDateTime, formatPrice, stockQuantityText } from '../lib/format';
+  import { buildPageItems } from '../lib/pagination';
 
   function todayLocal(): string {
     const now = new Date();
@@ -108,13 +109,13 @@
   const sortFields = $derived(
     warehousesEnabled
       ? [
-          { field: 'name', label: 'Наименование' },
+          { field: 'name', label: 'Название' },
           { field: 'qty', label: 'Остаток' },
           { field: 'warehouse', label: 'Склад' },
           { field: 'price', label: 'Цена' }
         ]
       : [
-          { field: 'name', label: 'Наименование' },
+          { field: 'name', label: 'Название' },
           { field: 'qty', label: 'Остаток' },
           { field: 'price', label: 'Цена' }
         ]
@@ -129,6 +130,7 @@
       : 'all'
   );
   const canDeactivate = $derived(auth.can('stocks.deactivate'));
+  let statusDraft = $state<string>('all');
   const initialView: 'list' | 'tiles' = initialStockFilters.view === 'tiles' ? 'tiles' : 'list';
   const initialPerPageList =
     typeof initialStockFilters.per_page_list === 'number' ? initialStockFilters.per_page_list : 20;
@@ -534,6 +536,7 @@
   function openView(): void {
     viewDraft = viewMode;
     photoDraft = showPhotos;
+    statusDraft = stockActive;
     priceTypesDraft =
       priceTypeFilter.length > 0
         ? [...priceTypeFilter]
@@ -549,10 +552,12 @@
       priceTypesDraft.length === 0 || priceTypesDraft.length === allIds.length
         ? []
         : [...priceTypesDraft];
+    const statusChanged = canDeactivate && statusDraft !== stockActive;
 
     if (
       viewDraft === viewMode &&
       photoDraft === showPhotos &&
+      !statusChanged &&
       nextFilter.length === priceTypeFilter.length &&
       nextFilter.every((id, index) => id === priceTypeFilter[index])
     ) {
@@ -565,11 +570,24 @@
     showPhotos = photoDraft;
     priceTypeFilter = nextFilter;
 
-    if (viewChanged) {
-      perPage = viewMode === 'tiles' ? perPageTiles : perPageList;
+    if (statusChanged) {
+      stockActive = statusDraft;
+    }
+
+    if (statusChanged || viewChanged) {
+      if (viewChanged) {
+        perPage = viewMode === 'tiles' ? perPageTiles : perPageList;
+      }
+
       page = 1;
       saveStockFilters();
-      void loadLevels();
+
+      if (statusChanged) {
+        void applyFilters();
+      } else {
+        void loadLevels();
+      }
+
       return;
     }
 
@@ -577,16 +595,6 @@
   }
 
   function changeSort(): void {
-    saveStockFilters();
-    void applyFilters();
-  }
-
-  function setStatus(value: string): void {
-    if (stockActive === value) {
-      return;
-    }
-
-    stockActive = value;
     saveStockFilters();
     void applyFilters();
   }
@@ -682,6 +690,15 @@
       levels = data.items;
       total = data.total;
       priceTypeTitle = data.prices?.type?.title ?? '';
+
+      const maxPage = perPage <= 0 ? 1 : Math.max(1, Math.ceil(data.total / perPage));
+
+      if (page > maxPage) {
+        page = maxPage;
+        saveStockFilters();
+        void loadLevels(silent);
+        return;
+      }
     } catch (cause) {
       if (seq === loadSeq && !silent) {
         error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить остатки';
@@ -709,50 +726,8 @@
     await runSearch(true);
   }
 
-  function buildPageItems(current: number, count: number): (number | '...')[] {
-    if (count <= 7) {
-      return Array.from({ length: count }, (_, index) => index + 1);
-    }
-
-    const items: (number | '...')[] = [];
-
-    if (current <= 3) {
-      for (let index = 1; index <= 5; index += 1) {
-        items.push(index);
-      }
-
-      items.push('...');
-      items.push(count);
-
-      return items;
-    }
-
-    if (current >= count - 2) {
-      items.push(1);
-      items.push('...');
-
-      for (let index = count - 4; index <= count; index += 1) {
-        items.push(index);
-      }
-
-      return items;
-    }
-
-    items.push(1);
-    items.push('...');
-
-    for (let index = current - 1; index <= current + 1; index += 1) {
-      items.push(index);
-    }
-
-    items.push('...');
-    items.push(count);
-
-    return items;
-  }
-
   async function goToPage(target: number): Promise<void> {
-    if (perPage <= 0) {
+    if (perPage <= 0 || !Number.isFinite(target)) {
       return;
     }
 
@@ -770,7 +745,7 @@
   async function submitJump(event: Event): Promise<void> {
     event.preventDefault();
 
-    if (jumpPage === null) {
+    if (typeof jumpPage !== 'number' || !Number.isFinite(jumpPage)) {
       return;
     }
 
@@ -948,11 +923,15 @@
           <button
             type="button"
             class="sort-button"
+            class:active={selectedIds.length !== warehouses.length}
             title="Склад"
             aria-label="Выбрать склад"
             onclick={openWarehouse}
           >
             <Icon name="stocks" size={16} />
+            {#if selectedIds.length !== warehouses.length}
+              <span class="icon-badge">{selectedIds.length}</span>
+            {/if}
           </button>
         {/if}
 
@@ -1176,24 +1155,6 @@
         чтобы добавить условие, и повторно — чтобы убрать.
       </p>
 
-      {#if canDeactivate}
-        <div class="sort-status">
-          <span class="sort-status-label">Показывать:</span>
-          <div class="status-opts">
-            {#each [['all', 'Все'], ['active', 'Активные'], ['inactive', 'Неактивные']] as [value, label] (value)}
-              <button
-                type="button"
-                class="status-opt"
-                class:on={stockActive === value}
-                onclick={() => setStatus(value)}
-              >
-                {label}
-              </button>
-            {/each}
-          </div>
-        </div>
-      {/if}
-
       <div class="sort-list">
         {#each sortFields as item (item.field)}
           {#if item.field !== 'price' || pricesEnabled}
@@ -1322,6 +1283,24 @@
         </div>
       </div>
 
+      {#if canDeactivate}
+        <div class="sort-status">
+          <span class="sort-status-label">Показывать:</span>
+          <div class="status-opts">
+            {#each [['all', 'Все'], ['active', 'Активные'], ['inactive', 'Неактивные']] as [value, label] (value)}
+              <button
+                type="button"
+                class="status-opt"
+                class:on={statusDraft === value}
+                onclick={() => (statusDraft = value)}
+              >
+                {label}
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       {#if pricesEnabled && availablePriceTypes.length > 1}
         <div class="view-prices">
           <p class="sort-hint">Цены</p>
@@ -1350,15 +1329,15 @@
     <Modal open={helpOpen} title="Как пользоваться" onclose={() => (helpOpen = false)} wide>
       <div class="help">
         <p class="help-intro">
-          Эта страница показывает, сколько товаров есть на складах. Ниже — что делает каждая
-          кнопка и как всё устроено. Всё просто, разберётся даже школьник.
+          Эта страница показывает, сколько товаров есть на складах. Ниже — краткая справка по
+          кнопкам и возможностям страницы.
         </p>
 
         <div class="help-block">
           <h3>Кнопки сверху</h3>
           <ul>
             <li>
-              <b>Значок склада</b> — выбрать склады. Отметь галочками один или сразу несколько:
+              <b>Значок склада</b> — выбрать склады. Отметьте галочками один или сразу несколько:
               тогда товары покажутся вместе, а у каждой строки будет написан склад. Если не
               выбрать ни одного — список будет пустым.
             </li>
@@ -1389,7 +1368,10 @@
               CSV, TXT или PDF. Можно отправить файл на почту, если почта настроена.
             </li>
             {#if canImport}
-              <li><b>История импорта</b> — посмотреть, когда и что загружали на склад.</li>
+              <li>
+                <b>Импорт из 1С</b> — загрузить свежие остатки из файла; вкладка «История» в этом
+                окне показывает, когда и что загружали.
+              </li>
             {/if}
           </ul>
         </div>
@@ -1397,7 +1379,7 @@
         <div class="help-block">
           <h3>Поиск</h3>
           <p>
-            Поле слева — это поиск. Напиши часть названия (например, <b>iPhone</b>) — список сам
+            Поле слева — это поиск. Напишите часть названия (например, <b>iPhone</b>) — список сам
             покажет подходящие товары, нажимать ничего не надо. Крестик в поле очищает поиск.
             Если щёлкнуть по пустому полю, покажутся прошлые запросы.
           </p>
@@ -1406,8 +1388,8 @@
         <div class="help-block">
           <h3>Сколько показывать</h3>
           <p>
-            Внизу списка есть «Показывать»: 10, 20, 50, 100 или «Все». Так ты решаешь, сколько
-            строк видно за раз. Твой выбор запоминается.
+            Внизу списка есть «Показывать»: 10, 20, 50, 100 или «Все». Так вы решаете, сколько
+            строк видно за раз. Выбор запоминается.
           </p>
         </div>
 
@@ -1415,17 +1397,17 @@
           <div class="help-block">
             <h3>Как заказать товар (сделать заявку)</h3>
             <ol>
-              <li>Найди нужный товар через поиск.</li>
-              <li>Нажми в строке товара <b>«Добавить в корзину»</b> — товар попадёт в заявку.</li>
-              <li>Нужно больше — нажми <b>«+»</b>; <b>«−»</b> — уменьшить количество.</li>
+              <li>Найдите нужный товар через поиск.</li>
+              <li>Нажмите в строке товара <b>«Добавить в корзину»</b> — товар попадёт в заявку.</li>
+              <li>Нужно больше — нажмите <b>«+»</b>; <b>«−»</b> — уменьшить количество.</li>
               <li>
-                Когда всё выбрано, открой <b>корзину</b> (значок корзины вверху, там видно число
-                товаров) и отправь заявку.
+                Когда всё выбрано, откройте <b>корзину</b> (значок корзины вверху, там видно число
+                товаров) и отправьте заявку.
               </li>
             </ol>
             <p class="help-note">
-              Чтобы убрать товар из заявки: нажми «−», пока количество не станет 0, либо удали
-              его на странице корзины.
+              Чтобы убрать товар из заявки: нажимайте «−», пока количество не станет 0, либо
+              удалите его на странице корзины.
             </p>
           </div>
         {/if}
@@ -1433,10 +1415,10 @@
         <div class="help-block">
           <h3>Что означают отметки</h3>
           <ul>
-            <li><b>«нет в наличии»</b> — на складе сейчас 0 штук.</li>
-            <li><b>«поз заказ»</b> — товар можно заказать даже в минус (если так разрешено).</li>
+            <li><b>«0 шт»</b> — товара на складе нет.</li>
+            <li><b>«под заказ»</b> — товар можно заказать даже в минус (если так разрешено).</li>
             {#if pricesEnabled}
-              <li><b>Цена</b> — сколько товар стоит для тебя.</li>
+              <li><b>Цена</b> — сколько товар стоит для вас.</li>
             {/if}
             {#if groupsEnabled}
               <li><b>Группа</b> — к какой группе относится товар.</li>
@@ -1448,8 +1430,11 @@
           <div class="help-block">
             <h3>Для администратора</h3>
             <ul>
-              <li><b>«+ Позиция»</b> — добавить новый товар на склад.</li>
-              <li><b>«Переименовать склад»</b> — поменять название склада.</li>
+              <li><b>Плюс</b> — добавить новую позицию номенклатуры.</li>
+              <li>
+                <b>Название склада</b> меняется в разделе «Склады»: карточка склада →
+                «Редактировать».
+              </li>
               <li><b>Карандаш</b> в карточке позиции — открыть редактирование позиции.</li>
             </ul>
           </div>
@@ -1523,6 +1508,10 @@
             aria-label={`Открыть позицию: ${level.name}`}
             onclick={() => openItem(level)}
             onkeydown={(event) => {
+              if (event.target !== event.currentTarget) {
+                return;
+              }
+
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
                 openItem(level);
@@ -1885,12 +1874,14 @@
 
   .filter-icons {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
     margin-left: auto;
   }
 
   .sort-button {
+    position: relative;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1903,6 +1894,21 @@
     color: var(--text);
     cursor: pointer;
     transition: color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .icon-badge {
+    position: absolute;
+    top: -6px;
+    right: -6px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--primary);
+    color: #fff;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
   }
 
   .sort-button:hover:not(:disabled) {
@@ -1966,9 +1972,9 @@
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    margin-bottom: var(--space-3);
-    padding-bottom: var(--space-3);
-    border-bottom: 1px solid var(--border-secondary);
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-secondary);
   }
 
   .sort-status-label {

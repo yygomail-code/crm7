@@ -119,6 +119,7 @@ class AppSettingsStore {
       this.loadedFor = userId;
     } catch {
       // служебная настройка: интерфейс не блокируем при сбое загрузки
+      this.loadedFor = userId;
     } finally {
       this.loading = false;
     }
