@@ -239,33 +239,39 @@
           </div>
         {/if}
       {:else}
-        <h2>Доступ по ролям</h2>
-        {#if warehouse.levels.length === 0}
-          <p class="hint">Роли не заданы.</p>
-        {:else}
-          <div class="tags">
-            {#each warehouse.levels as level (level)}
-              <span class="tag">{roleTitle(level)}</span>
-            {/each}
-          </div>
-        {/if}
-
-        <h2>Пользователи с доступом</h2>
-        {#if users.length === 0}
-          <div class="empty">Персональный доступ никому не выдан</div>
-        {:else}
-          <div class="users">
-            {#each users as user (user.id)}
-              <div class="user">
-                <div class="who">
-                  <strong>{user.full_name || user.login}</strong>
-                  <span class="login">{user.login}</span>
-                  {#if !user.active}<span class="tag">неактивен</span>{/if}
-                </div>
+        <div class="access-grid">
+          <section class="access-block">
+            <h2>Доступ по ролям</h2>
+            {#if warehouse.levels.length === 0}
+              <p class="hint">Роли не заданы.</p>
+            {:else}
+              <div class="tags">
+                {#each warehouse.levels as level (level)}
+                  <span class="tag">{roleTitle(level)}</span>
+                {/each}
               </div>
-            {/each}
-          </div>
-        {/if}
+            {/if}
+          </section>
+
+          <section class="access-block">
+            <h2>Пользователи с доступом</h2>
+            {#if users.length === 0}
+              <div class="empty">Персональный доступ никому не выдан</div>
+            {:else}
+              <div class="users">
+                {#each users as user (user.id)}
+                  <div class="user">
+                    <div class="who">
+                      <strong>{user.full_name || user.login}</strong>
+                      <span class="login">{user.login}</span>
+                      {#if !user.active}<span class="tag">неактивен</span>{/if}
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {/if}
+          </section>
+        </div>
       {/if}
     </div>
   {/if}
@@ -378,6 +384,27 @@
     font-size: 16px;
     font-weight: 600;
     color: var(--text);
+  }
+
+  .access-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: var(--space-4);
+  }
+
+  .access-block {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    min-width: 0;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border-secondary);
+    border-radius: var(--radius-md);
+    background: var(--fill-tertiary);
+  }
+
+  .access-block h2 {
+    font-size: 15px;
   }
 
   .grid {
