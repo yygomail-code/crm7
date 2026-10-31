@@ -390,7 +390,7 @@
 
     {#if loading}
       <div class="center"><Spinner size={22} /></div>
-    {:else if levels.length === 0}
+    {:else if levels.length === 0 && !error}
       <div class="picker-empty">
         <p class="muted">
           {query !== ''
