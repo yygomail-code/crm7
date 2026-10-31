@@ -1350,7 +1350,7 @@
 
       {#if pricesEnabled && availablePriceTypes.length > 1}
         <div class="view-prices">
-          <p class="sort-hint">Цены</p>
+          <span class="sort-status-label">Цены:</span>
           <div class="price-filter">
             {#each availablePriceTypes as type (type.id)}
               <button
@@ -2738,7 +2738,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: var(--space-2);
-    margin-top: 6px;
   }
 
   .view-columns {
@@ -2757,6 +2756,9 @@
   }
 
   .view-prices {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
     margin-top: var(--space-4);
     padding-top: var(--space-4);
     border-top: 1px solid var(--border-secondary);
