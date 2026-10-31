@@ -1051,8 +1051,8 @@
           type="button"
           class="sort-button"
           class:active={viewMode === 'tiles'}
-          title="Отображение"
-          aria-label="Отображение: списком или плитками"
+          title="Вид"
+          aria-label="Вид: списком или плитками"
           onclick={openView}
         >
           <Icon name="view" size={16} />
@@ -1373,7 +1373,7 @@
       </div>
     </Modal>
 
-    <Modal open={viewOpen} title="Отображение" onclose={() => (viewOpen = false)}>
+    <Modal open={viewOpen} title="Вид" onclose={() => (viewOpen = false)}>
       <div class="view-columns">
         <div class="view-column">
           <p class="sort-hint">Вид</p>
@@ -1485,7 +1485,7 @@
               </li>
             {/if}
             <li>
-              <b>Значок отображения</b> (квадратики) — показать товары списком или плитками, а
+              <b>Значок вида</b> (квадратики) — показать товары списком или плитками, а
               также включить или скрыть фото. На телефоне плитки идут в 2 столбика, на компьютере —
               в 3. Выбор запоминается.
             </li>

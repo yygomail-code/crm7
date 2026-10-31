@@ -85,6 +85,16 @@
 
   let sortOpen = $state(false);
   let sortDraft = $state<string[]>(['name_asc']);
+  let dragSortField = $state<string | null>(null);
+  let dragSortOver = $state<string | null>(null);
+  const sortRows = $derived.by(() => {
+    const activeRows = sortDraft
+      .map((term) => sortFields.find((item) => term.startsWith(`${item.field}_`)))
+      .filter((item): item is (typeof sortFields)[number] => item !== undefined);
+    const inactiveRows = sortFields.filter((item) => sortDraftIndex(item.field) === 0);
+
+    return [...activeRows, ...inactiveRows];
+  });
   let viewOpen = $state(false);
   let viewDraft = $state<'list' | 'tiles'>('list');
   let helpOpen = $state(false);
@@ -220,6 +230,55 @@
 
   function sortDraftIndex(field: string): number {
     return sortDraft.findIndex((term) => term.startsWith(`${field}_`)) + 1;
+  }
+
+  function moveSortDraft(fromField: string, toField: string): void {
+    const fromIndex = sortDraft.findIndex((term) => term.startsWith(`${fromField}_`));
+    const toIndex = sortDraft.findIndex((term) => term.startsWith(`${toField}_`));
+
+    if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+      return;
+    }
+
+    const next = [...sortDraft];
+    const [moved] = next.splice(fromIndex, 1);
+    const insertAt = fromIndex < toIndex ? toIndex - 1 : toIndex;
+    next.splice(insertAt, 0, moved);
+    sortDraft = next;
+  }
+
+  function startSortDrag(event: DragEvent, field: string): void {
+    dragSortField = field;
+
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', field);
+    }
+  }
+
+  function overSortRow(event: DragEvent, field: string): void {
+    if (dragSortField === null || sortDraftIndex(field) === 0) {
+      return;
+    }
+
+    event.preventDefault();
+    dragSortOver = field;
+  }
+
+  function dropSortRow(event: DragEvent, field: string): void {
+    event.preventDefault();
+
+    if (dragSortField !== null && sortDraftIndex(field) > 0) {
+      moveSortDraft(dragSortField, field);
+    }
+
+    dragSortField = null;
+    dragSortOver = null;
+  }
+
+  function endSortDrag(): void {
+    dragSortField = null;
+    dragSortOver = null;
   }
 
   function headerSort(field: string): void {
@@ -377,8 +436,8 @@
           type="button"
           class="sort-button"
           class:active={viewMode === 'tiles'}
-          title="Отображение"
-          aria-label="Отображение: списком или плитками"
+          title="Вид"
+          aria-label="Вид: списком или плитками"
           onclick={openView}
         >
           <Icon name="view" size={16} />
@@ -584,10 +643,34 @@
     Можно задать несколько условий — они применяются сверху вниз. Нажмите стрелку, чтобы добавить
     условие, и повторно — чтобы убрать.
   </p>
-  <div class="sort-list">
-    {#each sortFields as column (column.field)}
-      <div class="sort-row" class:active={sortDraftIndex(column.field) > 0}>
-        {#if sortDraftIndex(column.field) > 0}
+  <div class="sort-list" role="list">
+    {#each sortRows as column (column.field)}
+      {@const active = sortDraftIndex(column.field) > 0}
+      <div
+        class="sort-row"
+        class:active
+        class:drag-over={dragSortOver === column.field && dragSortField !== column.field}
+        role="listitem"
+        ondragover={(event) => overSortRow(event, column.field)}
+        ondragleave={() => {
+          if (dragSortOver === column.field) {
+            dragSortOver = null;
+          }
+        }}
+        ondrop={(event) => dropSortRow(event, column.field)}
+      >
+        <span
+          class="sort-drag"
+          class:off={!active}
+          draggable={active}
+          title={active ? 'Перетащите, чтобы изменить порядок' : undefined}
+          aria-hidden="true"
+          ondragstart={(event) => startSortDrag(event, column.field)}
+          ondragend={endSortDrag}
+        >
+          <Icon name="holder" size={14} />
+        </span>
+        {#if active}
           <span class="sort-order">{sortDraftIndex(column.field)}</span>
         {/if}
         <span class="sort-row-label">{column.label}</span>
@@ -621,7 +704,7 @@
   </div>
 </Modal>
 
-<Modal open={viewOpen} title="Отображение" onclose={() => (viewOpen = false)}>
+<Modal open={viewOpen} title="Вид" onclose={() => (viewOpen = false)}>
   <div class="view-options">
     <label class="radio">
       <input type="radio" name="wh-view" value="list" bind:group={viewDraft} />
@@ -647,7 +730,7 @@
     <div class="help-block">
       <h3>Список и плитки</h3>
       <p>
-        Кнопка «Отображение» переключает таблицу и плитки. В таблице клик по заголовку колонки
+        Кнопка «Вид» переключает таблицу и плитки. В таблице клик по заголовку колонки
         сортирует, повторный клик меняет направление; кнопка «Сортировка» задаёт несколько условий.
       </p>
     </div>
@@ -1211,6 +1294,30 @@
   .sort-row.active .sort-row-label {
     color: var(--text);
     font-weight: 600;
+  }
+
+  .sort-row.drag-over {
+    box-shadow: 0 -2px 0 var(--primary);
+  }
+
+  .sort-drag {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 18px;
+    height: 24px;
+    color: var(--text-description);
+    cursor: grab;
+  }
+
+  .sort-drag:active {
+    cursor: grabbing;
+  }
+
+  .sort-drag.off {
+    visibility: hidden;
+    cursor: default;
   }
 
   .sort-row-label {
