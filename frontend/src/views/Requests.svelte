@@ -644,17 +644,6 @@
         <Icon name="view" size={16} />
       </button>
 
-      <button
-        type="button"
-        class="sort-button"
-        title="Экспорт списка заявок"
-        aria-label="Экспорт списка заявок"
-        disabled={exporting || total === 0}
-        onclick={() => (exportOpen = true)}
-      >
-        <Icon name="export" size={16} />
-      </button>
-
       <span class="toolbar-divider" aria-hidden="true"></span>
 
       <button
@@ -679,6 +668,17 @@
         onclick={() => router.navigate('/requests/new')}
       >
         <Icon name="plus" size={16} />
+      </button>
+
+      <button
+        type="button"
+        class="sort-button"
+        title="Экспорт списка заявок"
+        aria-label="Экспорт списка заявок"
+        disabled={exporting || total === 0}
+        onclick={() => (exportOpen = true)}
+      >
+        <Icon name="export" size={16} />
       </button>
     </div>
   </div>

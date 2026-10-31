@@ -487,17 +487,6 @@
           <Icon name="view" size={16} />
         </button>
 
-        <button
-          type="button"
-          class="sort-button"
-          title="Экспорт списка складов"
-          aria-label="Экспорт списка складов"
-          disabled={busy || sorted.length === 0}
-          onclick={() => (exportOpen = true)}
-        >
-          <Icon name="export" size={16} />
-        </button>
-
         <span class="toolbar-divider" aria-hidden="true"></span>
 
         <button
@@ -508,6 +497,17 @@
           onclick={() => router.navigate('/warehouses/new')}
         >
           <Icon name="plus" size={16} />
+        </button>
+
+        <button
+          type="button"
+          class="sort-button"
+          title="Экспорт списка складов"
+          aria-label="Экспорт списка складов"
+          disabled={busy || sorted.length === 0}
+          onclick={() => (exportOpen = true)}
+        >
+          <Icon name="export" size={16} />
         </button>
 
         <span class="toolbar-divider" aria-hidden="true"></span>

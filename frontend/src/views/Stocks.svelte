@@ -1043,17 +1043,6 @@
           <Icon name="view" size={16} />
         </button>
 
-        <button
-          type="button"
-          class="sort-button"
-          title="Экспорт"
-          aria-label="Экспорт остатков"
-          disabled={busy || selectedIds.length === 0}
-          onclick={() => (exportOpen = true)}
-        >
-          <Icon name="export" size={16} />
-        </button>
-
         <span class="toolbar-divider" aria-hidden="true"></span>
 
         {#if auth.can('settings.manage')}
@@ -1091,6 +1080,17 @@
             <Icon name="import" size={16} />
           </button>
         {/if}
+
+        <button
+          type="button"
+          class="sort-button"
+          title="Экспорт"
+          aria-label="Экспорт остатков"
+          disabled={busy || selectedIds.length === 0}
+          onclick={() => (exportOpen = true)}
+        >
+          <Icon name="export" size={16} />
+        </button>
 
         <span class="toolbar-divider" aria-hidden="true"></span>
 
