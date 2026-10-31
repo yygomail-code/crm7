@@ -567,7 +567,6 @@
                   >
                     {item.name}
                   </a>
-                  {#if item.is_default}<span class="tag on">основной</span>{/if}
                 </div>
                 <div class="meta">
                   {#if item.type !== 'main'}<span>{typeTitle(item.type)}</span>{/if}
@@ -974,10 +973,6 @@
     align-items: center;
     gap: var(--space-2);
     min-width: 0;
-  }
-
-  .name-line .tag {
-    align-self: center;
   }
 
   .name {

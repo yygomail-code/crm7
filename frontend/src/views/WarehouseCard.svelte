@@ -445,10 +445,6 @@
         </div>
 
         <div class="flags">
-          <label class="checkbox">
-            <input type="checkbox" bind:checked={isDefault} />
-            Основной склад (по умолчанию для новых позиций)
-          </label>
           {#if appSettings.requestsEnabled}
             <label class="checkbox">
               <input type="checkbox" bind:checked={allowOrders} />

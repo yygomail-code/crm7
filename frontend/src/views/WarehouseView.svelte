@@ -168,12 +168,6 @@
 
         <h2>Флаги</h2>
         <div class="flags">
-          <div class="flag">
-            <span class="flag-label">Основной склад</span>
-            <span class="flag-value" class:on={warehouse.is_default}>
-              {warehouse.is_default ? 'Да' : 'Нет'}
-            </span>
-          </div>
           {#if appSettings.requestsEnabled}
             <div class="flag">
               <span class="flag-label">Доступен для заявок и самовывоза</span>
