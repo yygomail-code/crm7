@@ -147,26 +147,50 @@ export interface CreateRequestItem {
   quantity: number;
 }
 
+export interface NewClientPayload {
+  name: string;
+  inn: string;
+  phone: string;
+  email?: string;
+}
+
 export interface CreateRequestPayload {
   subject: string;
   body?: string;
   priority?: number;
   client_id?: number;
+  new_client?: NewClientPayload;
   items?: CreateRequestItem[];
 }
 
-export function createRequest(payload: CreateRequestPayload): Promise<RequestDetail> {
-  return apiRequest<RequestDetail>('/requests', { method: 'POST', auth: true, body: payload });
+export interface CreatedClientAccess {
+  id: number;
+  name: string;
+  login: string;
+  password: string;
+  email: string;
+  phone: string;
+}
+
+export type CreateRequestResult = RequestDetail & { client_access?: CreatedClientAccess };
+
+export function createRequest(payload: CreateRequestPayload): Promise<CreateRequestResult> {
+  return apiRequest<CreateRequestResult>('/requests', { method: 'POST', auth: true, body: payload });
 }
 
 export function previewRequestPrices(
   items: CreateRequestItem[],
-  clientId = 0
+  clientId = 0,
+  newClient = false
 ): Promise<PricePreview> {
   return apiRequest<PricePreview>('/requests/price-preview', {
     method: 'POST',
     auth: true,
-    body: { items, client_id: clientId > 0 ? clientId : undefined }
+    body: {
+      items,
+      client_id: clientId > 0 ? clientId : undefined,
+      new_client: newClient ? true : undefined
+    }
   });
 }
 

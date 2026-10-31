@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace App\Requests;
 
 use App\Clients\ClientManagerService;
+use App\Clients\ClientProvisioningService;
 use App\Chat\ChatService;
 use App\Core\Config;
 use App\Core\Database;
@@ -51,7 +52,8 @@ final class RequestService
         private readonly ChatService $chat = new ChatService(),
         private readonly StockReservationService $reservations = new StockReservationService(),
         private readonly PriceService $prices = new PriceService(),
-        private readonly StocksRepository $stocks = new StocksRepository()
+        private readonly StocksRepository $stocks = new StocksRepository(),
+        private readonly ClientProvisioningService $clientProvisioning = new ClientProvisioningService()
     ) {
     }
 
@@ -515,8 +517,23 @@ final class RequestService
 
         $clientId = (int) $user['ID'];
         $requestedClientId = (int) ($input['client_id'] ?? 0);
+        $newClient = is_array($input['new_client'] ?? null) ? $input['new_client'] : null;
 
-        if ($requestedClientId > 0 && $requestedClientId !== $clientId) {
+        if ($newClient !== null) {
+            if ((int) $user['LEVEL'] < 10) {
+                throw new HttpException(403, 'forbidden', 'Заводить новых клиентов могут только сотрудники');
+            }
+
+            if ($requestedClientId > 0) {
+                throw new HttpException(
+                    422,
+                    'client_conflict',
+                    'Выберите существующего клиента или заведите нового, но не оба сразу'
+                );
+            }
+
+            $clientId = 0;
+        } elseif ($requestedClientId > 0 && $requestedClientId !== $clientId) {
             if ((int) $user['LEVEL'] < 10) {
                 throw new HttpException(403, 'forbidden', 'Можно создавать заявки только от своего имени');
             }
@@ -554,15 +571,21 @@ final class RequestService
 
         $slaHours = max(1, (int) ($this->settings->get('sla.resolution_hours') ?? Config::int('REQUEST_SLA_HOURS', 24)));
 
-        $items = $this->prices->attachPrices(
-            $items,
-            $this->prices->effectiveTypeIdForUser($this->users->findById($clientId))
-        );
-
         $pdo = Database::pdo();
         $pdo->beginTransaction();
+        $createdClient = null;
 
         try {
+            if ($newClient !== null) {
+                $createdClient = $this->clientProvisioning->create($newClient, $user);
+                $clientId = (int) $createdClient['id'];
+            }
+
+            $items = $this->prices->attachPrices(
+                $items,
+                $this->prices->effectiveTypeIdForUser($this->users->findById($clientId))
+            );
+
             $id = $this->requests->create([
                 'subject' => $subject,
                 'body' => $body,
@@ -614,7 +637,20 @@ final class RequestService
             throw $exception;
         }
 
-        return $this->detail($user, $capabilities, $id);
+        $result = $this->detail($user, $capabilities, $id);
+
+        if ($createdClient !== null) {
+            $result['client_access'] = [
+                'id' => (int) $createdClient['id'],
+                'name' => (string) $createdClient['name'],
+                'login' => (string) $createdClient['login'],
+                'password' => (string) $createdClient['password'],
+                'email' => (string) $createdClient['email'],
+                'phone' => (string) $createdClient['phone'],
+            ];
+        }
+
+        return $result;
     }
 
     /**
@@ -627,7 +663,13 @@ final class RequestService
         $clientId = (int) ($input['client_id'] ?? 0);
         $target = $user;
 
-        if ($clientId > 0 && $clientId !== (int) $user['ID']) {
+        if (!empty($input['new_client'])) {
+            if ((int) $user['LEVEL'] < 10) {
+                throw new HttpException(403, 'forbidden', 'Новых клиентов заводят только сотрудники');
+            }
+
+            $target = ['ID' => 0, 'LEVEL' => 5, 'price_type_id' => null];
+        } elseif ($clientId > 0 && $clientId !== (int) $user['ID']) {
             if ((int) $user['LEVEL'] < 10) {
                 throw new HttpException(403, 'forbidden', 'Можно смотреть цены только для себя');
             }

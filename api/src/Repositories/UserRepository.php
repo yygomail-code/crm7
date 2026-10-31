@@ -37,6 +37,39 @@ final class UserRepository
         return $stmt->fetch() ?: null;
     }
 
+    public function findActiveClientByInn(string $inn): ?array
+    {
+        $stmt = Database::pdo()->prepare(
+            "SELECT ID, FULL_NAME, PHONE, EMAIL FROM users
+             WHERE INN = ? AND LEVEL = 5 AND reg_state IN ('active', 'pending')
+             LIMIT 1"
+        );
+        $stmt->execute([$inn]);
+
+        return $stmt->fetch() ?: null;
+    }
+
+    public function createActiveClient(array $data): int
+    {
+        $pdo = Database::pdo();
+
+        $stmt = $pdo->prepare(
+            "INSERT INTO users (ACTIVE, LOGIN, PASSWORD, LEVEL, FULL_NAME, STATUS, COMPANY, INN, PHONE, EMAIL, reg_state)
+             VALUES ('Y', ?, ?, 5, ?, 'Y', NULL, ?, ?, ?, 'active')"
+        );
+
+        $stmt->execute([
+            $data['login'],
+            password_hash($data['password'], PASSWORD_DEFAULT),
+            $data['name'],
+            ($data['inn'] ?? '') !== '' ? $data['inn'] : null,
+            ($data['phone'] ?? '') !== '' ? $data['phone'] : null,
+            ($data['email'] ?? '') !== '' ? $data['email'] : null,
+        ]);
+
+        return (int) $pdo->lastInsertId();
+    }
+
     public function createPendingClient(array $data): int
     {
         $pdo = Database::pdo();

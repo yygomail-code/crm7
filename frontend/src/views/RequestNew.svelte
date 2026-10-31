@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
-  import { createRequest, getRequest, listClients, previewRequestPrices, type CreateRequestItem } from '../lib/api/requests';
+  import { createRequest, getRequest, listClients, previewRequestPrices, type CreateRequestItem, type CreateRequestPayload, type CreatedClientAccess } from '../lib/api/requests';
   import { getClientCard } from '../lib/api/clients';
   import { listLevels } from '../lib/api/stocks';
   import { createDraft, deleteDraft, getDraft, updateDraft } from '../lib/api/drafts';
@@ -15,6 +15,7 @@
   import Button from '../lib/components/ui/Button.svelte';
   import Icon from '../lib/components/ui/Icon.svelte';
   import Input from '../lib/components/ui/Input.svelte';
+  import Modal from '../lib/components/ui/Modal.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
   import ItemsPicker from '../lib/components/requests/ItemsPicker.svelte';
 
@@ -62,9 +63,56 @@
   let selectedClient = $state<PickedClient | null>(null);
   let clientTimer: ReturnType<typeof setTimeout> | null = null;
 
+  type ClientMode = 'existing' | 'new';
+  type NewClientForm = { name: string; inn: string; phone: string; email: string };
+
+  let clientMode = $state<ClientMode>('existing');
+  let newClient = $state<NewClientForm>({ name: '', inn: '', phone: '', email: '' });
+  let errorCode = $state('');
+  let clientAccess = $state<CreatedClientAccess | null>(null);
+  let createdRequestId = $state(0);
+  let accessCopied = $state(false);
+
   const canPickClient = $derived(auth.can('clients.view.all') || auth.can('clients.view.own'));
+  const canCreateClient = $derived(canPickClient && auth.level >= 10);
   const clientRequired = $derived(auth.level >= 10);
   const hasStockErrors = $derived(itemRows.some((row) => stockError(row)));
+
+  const newClientErrors = $derived.by((): Partial<Record<keyof NewClientForm, string>> => {
+    if (clientMode !== 'new') {
+      return {};
+    }
+
+    const errors: Partial<Record<keyof NewClientForm, string>> = {};
+    const name = newClient.name.trim();
+    const inn = newClient.inn.replace(/\s+/g, '');
+    const phoneDigits = newClient.phone.replace(/\D+/g, '');
+    const email = newClient.email.trim();
+
+    if (name.length < 2) {
+      errors.name = 'Укажите название клиента';
+    }
+
+    if (inn === '') {
+      errors.inn = 'Укажите ИНН';
+    } else if (/^\d{10}(\d{2})?$/.test(inn) === false) {
+      errors.inn = 'ИНН — 10 или 12 цифр';
+    }
+
+    if (phoneDigits.length < 10 || phoneDigits.length > 15) {
+      errors.phone = 'Телефон — от 10 до 15 цифр';
+    }
+
+    if (email !== '' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) === false) {
+      errors.email = 'Неверный формат e-mail';
+    }
+
+    return errors;
+  });
+
+  const clientReady = $derived(
+    clientMode === 'new' ? Object.keys(newClientErrors).length === 0 : clientId > 0
+  );
 
   const PRISTINE_PAYLOAD = JSON.stringify({
     subject: '',
@@ -108,7 +156,7 @@
   $effect(() => {
     const payload = draftPayload;
 
-    if (!appSettings.salesEnabled) {
+    if (!appSettings.salesEnabled || clientMode === 'new') {
       return;
     }
 
@@ -126,6 +174,7 @@
   $effect(() => {
     const payload = itemsPayload;
     void clientId;
+    void clientMode;
     void pricesEnabled;
 
     if (previewTimer !== null) {
@@ -160,7 +209,7 @@
     }
 
     try {
-      const preview = await previewRequestPrices(rows, clientId);
+      const preview = await previewRequestPrices(rows, clientId, clientMode === 'new');
 
       if (!preview.enabled) {
         priceRows = [];
@@ -333,20 +382,90 @@
       : `остаток: ${available.toLocaleString('ru-RU', { maximumFractionDigits: 3 })}`;
   }
 
-  function payload(): {
-    subject: string;
-    body: string;
-    priority: number;
-    client_id: number | undefined;
-    items: CreateRequestItem[];
-  } {
-    return {
+  function payload(): CreateRequestPayload {
+    const base: CreateRequestPayload = {
       subject: subject.trim(),
       body: body.trim(),
       priority,
-      client_id: clientId > 0 ? clientId : undefined,
       items: itemRows
     };
+
+    if (clientMode === 'new' && canCreateClient) {
+      return {
+        ...base,
+        new_client: {
+          name: newClient.name.trim(),
+          inn: newClient.inn.replace(/\s+/g, ''),
+          phone: newClient.phone.trim(),
+          email: newClient.email.trim()
+        }
+      };
+    }
+
+    return { ...base, client_id: clientId > 0 ? clientId : undefined };
+  }
+
+  function setClientMode(mode: ClientMode): void {
+    if (clientMode === mode || submitting) {
+      return;
+    }
+
+    clientMode = mode;
+    error = '';
+    errorCode = '';
+
+    if (mode === 'new') {
+      selectedClient = null;
+      clientId = 0;
+      clientQuery = '';
+      clientResults = [];
+      clientOpen = false;
+
+      if (clientTimer !== null) {
+        clearTimeout(clientTimer);
+        clientTimer = null;
+      }
+    }
+  }
+
+  function findExistingClient(): void {
+    const query = (newClient.inn || newClient.phone || newClient.name).trim();
+
+    clientMode = 'existing';
+    error = '';
+    errorCode = '';
+    clientQuery = query;
+    selectedClient = null;
+    clientId = 0;
+    clientResults = [];
+    clientOpen = true;
+    void searchClients(query);
+  }
+
+  function finishCreated(): void {
+    const id = createdRequestId;
+    clientAccess = null;
+    createdRequestId = 0;
+
+    if (id > 0) {
+      router.navigate(`/requests/${id}`);
+    }
+  }
+
+  async function copyClientAccess(): Promise<void> {
+    if (clientAccess === null) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        `Логин: ${clientAccess.login}\nПароль: ${clientAccess.password}`
+      );
+      accessCopied = true;
+      setTimeout(() => (accessCopied = false), 2000);
+    } catch {
+      accessCopied = false;
+    }
   }
 
   function clientLabel(client: PickedClient): string {
@@ -439,6 +558,7 @@
       itemRows = draft.items;
       draftId = draft.id;
       draftDeleted = false;
+      clientMode = 'existing';
 
       if (clientId > 0) {
         void getClientCard(clientId)
@@ -468,6 +588,7 @@
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     error = '';
+    errorCode = '';
 
     if (!appSettings.salesEnabled) {
       error = 'Продажи отключены: оформление заявок недоступно';
@@ -476,6 +597,14 @@
 
     if (hasStockErrors) {
       error = 'Есть позиции без достаточного остатка — удалите их из состава заявки';
+      return;
+    }
+
+    if (clientRequired && !clientReady) {
+      error =
+        clientMode === 'new'
+          ? 'Заполните данные нового клиента'
+          : 'Выберите клиента, к которому привязать заявку';
       return;
     }
 
@@ -502,12 +631,19 @@
         cart.clear();
       }
 
+      if (data.client_access) {
+        clientAccess = data.client_access;
+        createdRequestId = data.request.id;
+        return;
+      }
+
       router.navigate(`/requests/${data.request.id}`);
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось создать заявку';
-      submitting = false;
+      errorCode = cause instanceof ApiError ? cause.code : '';
     } finally {
       loading = false;
+      submitting = false;
     }
   }
 
@@ -560,6 +696,8 @@
       selectedClient = null;
       clientQuery = '';
       clientResults = [];
+      clientMode = 'existing';
+      newClient = { name: '', inn: '', phone: '', email: '' };
       itemRows = [];
       lastSaved = '';
       draftSavedAt = null;
@@ -615,77 +753,154 @@
           <div class="field">
             <span class="label">Клиент{#if clientRequired} <span class="req">— обязательно</span>{/if}</span>
 
-            {#if selectedClient}
-              <div class="client-selected">
-                <div class="cs-main">
-                  <span class="cs-name">
-                    {selectedClient.name}{selectedClient.company ? ` — ${selectedClient.company}` : ''}
-                  </span>
-                  <span class="cs-meta">
-                    {#if selectedClient.inn}ИНН {selectedClient.inn}{/if}
-                    {#if selectedClient.inn && (selectedClient.phone || selectedClient.email)} · {/if}
-                    {selectedClient.phone || selectedClient.email || ''}
-                  </span>
-                </div>
+            {#if canCreateClient}
+              <div class="client-mode" role="tablist" aria-label="Как выбрать клиента">
                 <button
                   type="button"
-                  class="cs-clear"
-                  aria-label="Сменить клиента"
-                  title="Сменить клиента"
-                  onclick={clearClient}
+                  role="tab"
+                  aria-selected={clientMode === 'existing'}
+                  class:active={clientMode === 'existing'}
+                  disabled={submitting}
+                  onclick={() => setClientMode('existing')}
                 >
-                  ✕
+                  Существующий клиент
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={clientMode === 'new'}
+                  class:active={clientMode === 'new'}
+                  disabled={submitting}
+                  onclick={() => setClientMode('new')}
+                >
+                  Новый клиент
                 </button>
               </div>
-            {:else}
-              <div class="client-search">
-                <input
-                  class="text-input"
-                  type="text"
-                  bind:value={clientQuery}
-                  placeholder="Имя, компания, ИНН, телефон или e-mail"
-                  autocomplete="off"
-                  oninput={onClientInput}
-                  onfocus={onClientFocus}
-                  onkeydown={onClientKeydown}
-                />
+            {/if}
 
-                {#if clientOpen}
-                  <div class="client-list" role="listbox">
-                    {#if clientSearching}
-                      <div class="cl-empty">Поиск…</div>
-                    {:else if clientResults.length === 0}
-                      <div class="cl-empty">Ничего не найдено — уточните запрос</div>
-                    {:else}
-                      {#each clientResults as client (client.id)}
-                        <button
-                          type="button"
-                          class="cl-item"
-                          role="option"
-                          aria-selected="false"
-                          onmousedown={(event) => event.preventDefault()}
-                          onclick={() => selectClient(client)}
-                        >
-                          <span class="cl-name">
-                            {client.name}{client.company ? ` — ${client.company}` : ''}
-                          </span>
-                          <span class="cl-meta">
-                            {#if client.inn}ИНН {client.inn}{/if}
-                            {#if client.inn && client.phone} · {/if}
-                            {client.phone ?? ''}
-                            {#if (client.inn || client.phone) && client.email} · {/if}
-                            {client.email ?? ''}
-                          </span>
-                        </button>
-                      {/each}
-                    {/if}
+            {#if clientMode === 'existing'}
+              {#if selectedClient}
+                <div class="client-selected">
+                  <div class="cs-main">
+                    <span class="cs-name">
+                      {selectedClient.name}{selectedClient.company ? ` — ${selectedClient.company}` : ''}
+                    </span>
+                    <span class="cs-meta">
+                      {#if selectedClient.inn}ИНН {selectedClient.inn}{/if}
+                      {#if selectedClient.inn && (selectedClient.phone || selectedClient.email)} · {/if}
+                      {selectedClient.phone || selectedClient.email || ''}
+                    </span>
                   </div>
-                {/if}
-              </div>
+                  <button
+                    type="button"
+                    class="cs-clear"
+                    aria-label="Сменить клиента"
+                    title="Сменить клиента"
+                    onclick={clearClient}
+                  >
+                    ✕
+                  </button>
+                </div>
+              {:else}
+                <div class="client-search">
+                  <input
+                    class="text-input"
+                    type="text"
+                    bind:value={clientQuery}
+                    placeholder="Имя, компания, ИНН, телефон или e-mail"
+                    autocomplete="off"
+                    oninput={onClientInput}
+                    onfocus={onClientFocus}
+                    onkeydown={onClientKeydown}
+                  />
 
-              {#if clientRequired}
-                <span class="req">Выберите клиента из списка — ввод вручную не подойдёт</span>
+                  {#if clientOpen}
+                    <div class="client-list" role="listbox">
+                      {#if clientSearching}
+                        <div class="cl-empty">Поиск…</div>
+                      {:else if clientResults.length === 0}
+                        <div class="cl-empty">Ничего не найдено — уточните запрос</div>
+                      {:else}
+                        {#each clientResults as client (client.id)}
+                          <button
+                            type="button"
+                            class="cl-item"
+                            role="option"
+                            aria-selected="false"
+                            onmousedown={(event) => event.preventDefault()}
+                            onclick={() => selectClient(client)}
+                          >
+                            <span class="cl-name">
+                              {client.name}{client.company ? ` — ${client.company}` : ''}
+                            </span>
+                            <span class="cl-meta">
+                              {#if client.inn}ИНН {client.inn}{/if}
+                              {#if client.inn && client.phone} · {/if}
+                              {client.phone ?? ''}
+                              {#if (client.inn || client.phone) && client.email} · {/if}
+                              {client.email ?? ''}
+                            </span>
+                          </button>
+                        {/each}
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+
+                {#if clientRequired}
+                  <span class="req">
+                    {canCreateClient
+                      ? 'Выберите клиента из списка или переключитесь на «Новый клиент»'
+                      : 'Выберите клиента из списка'}
+                  </span>
+                {/if}
               {/if}
+            {:else}
+              <div class="new-client">
+                <Input
+                  label="Название клиента"
+                  bind:value={newClient.name}
+                  placeholder="ООО «Ромашка»"
+                  error={newClientErrors.name}
+                  disabled={submitting}
+                  maxlength={255}
+                  autocomplete="organization"
+                />
+                <Input
+                  label="ИНН"
+                  bind:value={newClient.inn}
+                  placeholder="10 или 12 цифр"
+                  error={newClientErrors.inn}
+                  disabled={submitting}
+                  inputmode="numeric"
+                  maxlength={12}
+                />
+                <Input
+                  label="Телефон"
+                  bind:value={newClient.phone}
+                  placeholder="+7 999 000-00-00"
+                  error={newClientErrors.phone}
+                  disabled={submitting}
+                  type="tel"
+                  inputmode="tel"
+                  autocomplete="tel"
+                />
+                <Input
+                  label="E-mail (необязательно)"
+                  bind:value={newClient.email}
+                  placeholder="client@example.ru"
+                  error={newClientErrors.email}
+                  disabled={submitting}
+                  type="email"
+                  inputmode="email"
+                  autocomplete="email"
+                />
+                <p class="new-client-hint">
+                  После создания для клиента будет заведена учётная запись. Логин и пароль покажем
+                  один раз — их нужно передать клиенту. Контакты нового клиента в черновик не
+                  сохраняются.
+                </p>
+              </div>
             {/if}
           </div>
         {/if}
@@ -824,6 +1039,11 @@
           <div class="alert" role="alert">
             <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
             <span>{error}</span>
+            {#if errorCode === 'client_exists' || errorCode === 'phone_taken' || errorCode === 'email_taken'}
+              <button type="button" class="alert-action" onclick={findExistingClient}>
+                Найти существующего клиента
+              </button>
+            {/if}
           </div>
         {/if}
 
@@ -835,7 +1055,7 @@
             <Button
               type="submit"
               loading={loading}
-              disabled={!appSettings.salesEnabled || (clientRequired && clientId === 0) || hasStockErrors}
+              disabled={!appSettings.salesEnabled || (clientRequired && !clientReady) || hasStockErrors}
             >
               Создать заявку
             </Button>
@@ -852,6 +1072,50 @@
     onclose={() => (pickerOpen = false)}
     onchange={(next) => (itemRows = next)}
   />
+
+  <Modal
+    open={clientAccess !== null}
+    title="Заявка создана"
+    closeButton={false}
+    onclose={finishCreated}
+  >
+    {#if clientAccess}
+      <div class="access">
+        <p class="access-lead">
+          Для клиента <strong>{clientAccess.name}</strong> создана учётная запись.
+        </p>
+
+        <div class="access-card">
+          <div class="access-row">
+            <span class="access-label">Логин</span>
+            <code>{clientAccess.login}</code>
+          </div>
+          <div class="access-row">
+            <span class="access-label">Пароль</span>
+            <code>{clientAccess.password}</code>
+          </div>
+          {#if clientAccess.email}
+            <div class="access-row">
+              <span class="access-label">E-mail</span>
+              <span>{clientAccess.email}</span>
+            </div>
+          {/if}
+        </div>
+
+        <p class="access-note">
+          Пароль показывается один раз — передайте его клиенту. Сменить пароль клиент сможет после
+          входа в личный кабинет.
+        </p>
+
+        <div class="access-actions">
+          <Button variant="ghost" onclick={() => void copyClientAccess()}>
+            {accessCopied ? 'Скопировано' : 'Скопировать доступ'}
+          </Button>
+          <Button onclick={finishCreated}>Перейти к заявке</Button>
+        </div>
+      </div>
+    {/if}
+  </Modal>
 </section>
 
 <style>
@@ -938,6 +1202,127 @@
 
   .client-search {
     position: relative;
+  }
+
+  .client-mode {
+    display: inline-flex;
+    align-self: flex-start;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+  }
+
+  .client-mode button {
+    padding: 5px 12px;
+    border: none;
+    border-radius: 3px;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  .client-mode button:hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .client-mode button.active {
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .client-mode button:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .new-client {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: var(--space-3);
+  }
+
+  .new-client > :global(.field:first-child) {
+    grid-column: 1 / -1;
+  }
+
+  .new-client-hint {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .alert-action {
+    margin-left: auto;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--primary);
+    font: inherit;
+    font-size: 13px;
+    text-decoration: underline;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .access {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+  }
+
+  .access-lead {
+    margin: 0;
+    font-size: 14px;
+  }
+
+  .access-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg);
+  }
+
+  .access-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-3);
+    font-size: 14px;
+  }
+
+  .access-label {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .access-row code {
+    font-family: var(--font-mono, monospace);
+    font-size: 14px;
+    word-break: break-all;
+    text-align: right;
+  }
+
+  .access-note {
+    margin: 0;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .access-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-2);
   }
 
   .client-search .text-input {
@@ -1318,6 +1703,26 @@
   }
 
   @media (max-width: 560px) {
+    .new-client {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .new-client > :global(.field:first-child) {
+      grid-column: auto;
+    }
+
+    .new-client-hint {
+      grid-column: auto;
+    }
+
+    .client-mode {
+      align-self: stretch;
+    }
+
+    .client-mode button {
+      flex: 1;
+    }
+
     .item-row {
       flex-wrap: wrap;
     }

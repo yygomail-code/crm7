@@ -74,6 +74,14 @@ final class RequestController extends ApiController
             'number' => $result['request']['number'] ?? '',
         ]);
 
+        if (!empty($result['client_access']['id'])) {
+            $this->audit($request, $user, 'client.create', 'user', (int) $result['client_access']['id'], [
+                'name' => (string) ($result['client_access']['name'] ?? ''),
+                'login' => (string) ($result['client_access']['login'] ?? ''),
+                'request_number' => (string) ($result['request']['number'] ?? ''),
+            ]);
+        }
+
         return Response::ok($result, 201);
     }
 
