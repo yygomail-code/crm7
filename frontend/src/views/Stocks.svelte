@@ -124,13 +124,19 @@
   let stockSort = $state(initialStockFilters.sort);
   let stockGroups = $state<number[]>(parseGroups(initialStockFilters.group_ids));
   let stockNoGroup = $state<boolean>(initialStockFilters.group_no_group !== false);
-  let stockActive = $state<string>(
-    ['active', 'inactive'].includes(String(initialStockFilters.active))
-      ? String(initialStockFilters.active)
-      : 'all'
+  const initialStatus = String(initialStockFilters.active ?? 'all');
+  let statusActive = $state(initialStatus !== 'inactive');
+  let statusInactive = $state(initialStatus !== 'active');
+  const stockActive = $derived(
+    statusActive && !statusInactive
+      ? 'active'
+      : statusInactive && !statusActive
+        ? 'inactive'
+        : 'all'
   );
   const canDeactivate = $derived(auth.can('stocks.deactivate'));
-  let statusDraft = $state<string>('all');
+  let statusActiveDraft = $state(true);
+  let statusInactiveDraft = $state(true);
   const initialView: 'list' | 'tiles' = initialStockFilters.view === 'tiles' ? 'tiles' : 'list';
   const initialPerPageList =
     typeof initialStockFilters.per_page_list === 'number' ? initialStockFilters.per_page_list : 20;
@@ -328,6 +334,23 @@
     } else {
       priceTypesDraft = [...priceTypesDraft, id];
     }
+  }
+
+  function toggleStatusDraft(kind: 'active' | 'inactive'): void {
+    if (kind === 'active') {
+      if (statusActiveDraft && !statusInactiveDraft) {
+        return;
+      }
+
+      statusActiveDraft = !statusActiveDraft;
+      return;
+    }
+
+    if (statusInactiveDraft && !statusActiveDraft) {
+      return;
+    }
+
+    statusInactiveDraft = !statusInactiveDraft;
   }
 
   function addToCart(level: StockLevel): void {
@@ -540,7 +563,8 @@
   function openView(): void {
     viewDraft = viewMode;
     photoDraft = showPhotos;
-    statusDraft = stockActive;
+    statusActiveDraft = statusActive;
+    statusInactiveDraft = statusInactive;
     priceTypesDraft =
       priceTypeFilter.length > 0
         ? [...priceTypeFilter]
@@ -556,7 +580,11 @@
       priceTypesDraft.length === 0 || priceTypesDraft.length === allIds.length
         ? []
         : [...priceTypesDraft];
-    const statusChanged = canDeactivate && statusDraft !== stockActive;
+    const nextStatusActive = statusActiveDraft;
+    const nextStatusInactive = statusInactiveDraft;
+    const statusChanged =
+      canDeactivate &&
+      (nextStatusActive !== statusActive || nextStatusInactive !== statusInactive);
 
     if (
       viewDraft === viewMode &&
@@ -575,7 +603,8 @@
     priceTypeFilter = nextFilter;
 
     if (statusChanged) {
-      stockActive = statusDraft;
+      statusActive = nextStatusActive;
+      statusInactive = nextStatusInactive;
     }
 
     if (statusChanged || viewChanged) {
@@ -1295,17 +1324,26 @@
         <div class="sort-status">
           <span class="sort-status-label">Показывать:</span>
           <div class="status-opts">
-            {#each [['all', 'Все'], ['active', 'Активные'], ['inactive', 'Неактивные']] as [value, label] (value)}
-              <button
-                type="button"
-                class="status-opt"
-                class:on={statusDraft === value}
-                aria-pressed={statusDraft === value}
-                onclick={() => (statusDraft = value)}
-              >
-                {label}
-              </button>
-            {/each}
+            <button
+              type="button"
+              class="status-opt"
+              class:on={statusActiveDraft}
+              aria-pressed={statusActiveDraft}
+              disabled={statusActiveDraft && !statusInactiveDraft}
+              onclick={() => toggleStatusDraft('active')}
+            >
+              Активные
+            </button>
+            <button
+              type="button"
+              class="status-opt"
+              class:on={statusInactiveDraft}
+              aria-pressed={statusInactiveDraft}
+              disabled={statusInactiveDraft && !statusActiveDraft}
+              onclick={() => toggleStatusDraft('inactive')}
+            >
+              Неактивные
+            </button>
           </div>
         </div>
       {/if}
@@ -1317,8 +1355,8 @@
             {#each availablePriceTypes as type (type.id)}
               <button
                 type="button"
-                class="price-chip"
-                class:active={priceTypesDraft.includes(type.id)}
+                class="status-opt"
+                class:on={priceTypesDraft.includes(type.id)}
                 aria-pressed={priceTypesDraft.includes(type.id)}
                 onclick={() => togglePriceTypesDraft(type.id)}
               >
@@ -2019,6 +2057,11 @@
     font-weight: 500;
   }
 
+  .status-opt:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
   .sort-list {
     display: flex;
     flex-direction: column;
@@ -2694,32 +2737,8 @@
   .price-filter {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: var(--space-2);
     margin-top: 6px;
-  }
-
-  .price-chip {
-    padding: 1px 8px;
-    border: 1px solid var(--border-secondary);
-    border-radius: 10px;
-    background: var(--surface);
-    font: inherit;
-    font-size: 12px;
-    line-height: 18px;
-    color: var(--muted);
-    cursor: pointer;
-    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
-  }
-
-  .price-chip:hover {
-    color: var(--text);
-    border-color: var(--border);
-  }
-
-  .price-chip.active {
-    border-color: var(--primary);
-    background: var(--primary-bg);
-    color: var(--primary);
   }
 
   .view-columns {
