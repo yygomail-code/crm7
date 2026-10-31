@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Controllers;
 
+use App\Export\ExportMailer;
+use App\Http\DownloadResponse;
 use App\Http\Request;
 use App\Http\Response;
 use App\Requests\RequestService;
@@ -23,9 +25,21 @@ final class RequestController extends ApiController
         return Response::ok($this->service->statuses());
     }
 
-    public function index(Request $request): Response
+    public function index(Request $request): Response|DownloadResponse
     {
         [$user, $capabilities] = $this->context($request);
+
+        $format = (string) $request->queryParam('export', '');
+
+        if ($format !== '') {
+            $result = $this->service->export($user, $capabilities, $request->queryAll(), $format);
+
+            if ($request->queryParam('email', '') === '1') {
+                return Response::ok(ExportMailer::send($user, $result));
+            }
+
+            return new DownloadResponse($result['content'], $result['file_name'], $result['mime']);
+        }
 
         return Response::ok($this->service->list($user, $capabilities, $request->queryAll()));
     }

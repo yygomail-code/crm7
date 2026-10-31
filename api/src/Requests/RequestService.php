@@ -9,6 +9,7 @@ use App\Chat\ChatService;
 use App\Core\Config;
 use App\Core\Database;
 use App\Core\RateLimiter;
+use App\Export\TableExport;
 use App\Http\HttpException;
 use App\Repositories\ActivityTypeRepository;
 use App\Repositories\RequestActivityRepository;
@@ -284,6 +285,69 @@ final class RequestService
         $page = max(1, (int) ($filters['page'] ?? 1));
         $perPage = min(100, max(5, (int) ($filters['per_page'] ?? 20)));
 
+        $result = $this->requests->list(
+            $this->listFilters($filters, $user),
+            $this->scopeFor($user, $capabilities),
+            $page,
+            $perPage
+        );
+
+        return [
+            'items' => array_map([$this, 'mapRequest'], $result['items']),
+            'total' => $result['total'],
+            'page' => $page,
+            'per_page' => $perPage,
+        ];
+    }
+
+    public function export(array $user, array $capabilities, array $filters, string $format): array
+    {
+        $format = TableExport::normalizeFormat($format);
+
+        $result = $this->requests->list(
+            $this->listFilters($filters, $user),
+            $this->scopeFor($user, $capabilities),
+            1,
+            100000
+        );
+
+        $rows = array_map(static fn (array $row): array => [
+            (string) ($row['number'] ?? ''),
+            (string) ($row['status_title'] ?? ''),
+            (string) ($row['subject'] ?? ''),
+            (string) ($row['client_name'] ?? ''),
+            $row['manager_name'] !== null ? (string) $row['manager_name'] : '',
+            (string) (int) ($row['items_count'] ?? 0),
+            $row['created_at'] !== null ? (string) $row['created_at'] : '',
+            $row['due_at'] !== null ? (string) $row['due_at'] : '',
+            (int) ($row['is_overdue'] ?? 0) === 1 ? 'Да' : 'Нет',
+        ], $result['items']);
+
+        $section = [
+            'headers' => [
+                'Номер',
+                'Статус',
+                'Тема',
+                'Клиент',
+                'Менеджер',
+                'Позиций',
+                'Создана',
+                'Срок',
+                'Просрочена',
+            ],
+            'rows' => $rows,
+        ];
+
+        $meta = [
+            'Заявок: ' . count($rows),
+            'Сформирован: ' . date('d.m.Y H:i'),
+        ];
+
+        return TableExport::build('Заявки ' . date('Y-m-d'), $format, [$section], $meta);
+    }
+
+    private function listFilters(array $filters, array $user): array
+    {
         $managerScope = (string) ($filters['manager_scope'] ?? '');
         $managerScopesRaw = $filters['manager_scopes'] ?? [];
         $managerScopesRaw = is_array($managerScopesRaw) ? $managerScopesRaw : explode(',', (string) $managerScopesRaw);
@@ -305,7 +369,7 @@ final class RequestService
             static fn (int $id): bool => $id > 0
         ));
 
-        $result = $this->requests->list([
+        return [
             'status' => trim((string) ($filters['status'] ?? '')),
             'statuses' => $statusCodes,
             'q' => trim((string) ($filters['q'] ?? '')),
@@ -320,13 +384,6 @@ final class RequestService
             'from' => trim((string) ($filters['from'] ?? '')),
             'to' => trim((string) ($filters['to'] ?? '')),
             'sort' => trim((string) ($filters['sort'] ?? '')),
-        ], $this->scopeFor($user, $capabilities), $page, $perPage);
-
-        return [
-            'items' => array_map([$this, 'mapRequest'], $result['items']),
-            'total' => $result['total'],
-            'page' => $page,
-            'per_page' => $perPage,
         ];
     }
 

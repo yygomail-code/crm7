@@ -2,9 +2,12 @@
   import { onMount } from 'svelte';
   import { ApiError } from '../lib/api/client';
   import {
+    emailRequests,
+    exportRequests,
     listRequests,
     listStatuses,
     requestFilters,
+    type RequestFilters,
     type RequestWarehouseOption
   } from '../lib/api/requests';
   import { listDrafts, deleteDraft, type RequestDraftSummary } from '../lib/api/drafts';
@@ -14,6 +17,7 @@
   import { router } from '../lib/router.svelte';
   import { addHistory } from '../lib/search-history';
   import Button from '../lib/components/ui/Button.svelte';
+  import ExportModal from '../lib/components/ui/ExportModal.svelte';
   import Icon from '../lib/components/ui/Icon.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
@@ -62,6 +66,9 @@
   let warehouses = $state<RequestWarehouseOption[]>([]);
   let warehouseOpen = $state(false);
   let warehouseDraft = $state<number[]>([]);
+  let exportOpen = $state(false);
+  let exporting = $state(false);
+  let message = $state('');
 
   $effect(() => {
     const term = searchInput.trim();
@@ -106,6 +113,7 @@
   let draftCount = $state(0);
 
   const isStaff = $derived(auth.level >= 10);
+  const emailAllowed = $derived(appSettings.emailExportEnabled && appSettings.mailConfigured);
   let dragSortField = $state<string | null>(null);
   let dragSortOver = $state<string | null>(null);
   const sortRows = $derived.by(() => {
@@ -471,6 +479,38 @@
     void load(true);
   }
 
+  async function doExport(format: string, byEmail: boolean): Promise<void> {
+    exportOpen = false;
+    exporting = true;
+    error = '';
+    message = '';
+
+    const payload: RequestFilters = {
+      statuses: filters.statusCodes.length > 0 ? filters.statusCodes : undefined,
+      manager_scopes: filters.scopes.length > 0 ? filters.scopes : undefined,
+      q: search,
+      warehouse_ids: filters.warehouses.length > 0 ? filters.warehouses : undefined,
+      from: filters.from,
+      to: filters.to,
+      sort: filters.sort
+    };
+
+    try {
+      if (byEmail) {
+        const result = await emailRequests(payload, format);
+        message = result.sent
+          ? `Файл отправлен на ${result.email}`
+          : 'Не удалось отправить файл';
+      } else {
+        await exportRequests(payload, format);
+      }
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : 'Не удалось выполнить экспорт';
+    } finally {
+      exporting = false;
+    }
+  }
+
   async function loadDrafts(): Promise<void> {
     draftsLoading = true;
     draftsError = '';
@@ -604,6 +644,17 @@
         <Icon name="view" size={16} />
       </button>
 
+      <button
+        type="button"
+        class="sort-button"
+        title="Экспорт списка заявок"
+        aria-label="Экспорт списка заявок"
+        disabled={exporting || total === 0}
+        onclick={() => (exportOpen = true)}
+      >
+        <Icon name="export" size={16} />
+      </button>
+
       <span class="toolbar-divider" aria-hidden="true"></span>
 
       <button
@@ -636,6 +687,13 @@
     <div class="alert" role="alert">
       <span class="alert-icon"><Icon name="close-circle" size={16} /></span>
       <span>{error}</span>
+    </div>
+  {/if}
+
+  {#if message}
+    <div class="notice" role="status">
+      <span class="notice-icon success-icon"><Icon name="check-circle" size={16} /></span>
+      <span>{message}</span>
     </div>
   {/if}
 
@@ -1020,6 +1078,15 @@
       </div>
     </div>
   </Modal>
+
+  <ExportModal
+    open={exportOpen}
+    title="Экспорт списка заявок"
+    email={auth.user?.email ?? ''}
+    emailAllowed={emailAllowed}
+    onclose={() => (exportOpen = false)}
+    onpick={(format, byEmail) => void doExport(format, byEmail)}
+  />
 </section>
 
 <style>
@@ -1260,6 +1327,10 @@
 
   .notice-icon {
     color: var(--warning-text);
+  }
+
+  .success-icon {
+    color: var(--success-text);
   }
 
   .alert-icon {

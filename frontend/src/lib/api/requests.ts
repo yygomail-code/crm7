@@ -1,4 +1,4 @@
-import { apiRequest } from './client';
+import { apiRequest, downloadFromApi } from './client';
 import type {
   ActivityType,
   ClientItem,
@@ -66,7 +66,7 @@ export function requestFilters(): Promise<{
   }>('/requests/filters', { auth: true });
 }
 
-export function listRequests(filters: RequestFilters = {}): Promise<RequestListResponse> {
+function requestParams(filters: RequestFilters): URLSearchParams {
   const query = new URLSearchParams();
 
   if (filters.status) query.set('status', filters.status);
@@ -87,12 +87,42 @@ export function listRequests(filters: RequestFilters = {}): Promise<RequestListR
   if (filters.from) query.set('from', filters.from);
   if (filters.to) query.set('to', filters.to);
   if (filters.sort) query.set('sort', filters.sort);
+
+  return query;
+}
+
+export function listRequests(filters: RequestFilters = {}): Promise<RequestListResponse> {
+  const query = requestParams(filters);
+
   if (filters.page && filters.page > 1) query.set('page', String(filters.page));
   if (filters.per_page) query.set('per_page', String(filters.per_page));
 
   const suffix = query.toString() ? `?${query.toString()}` : '';
 
   return apiRequest<RequestListResponse>(`/requests${suffix}`, { auth: true });
+}
+
+export function exportRequests(filters: RequestFilters, format: string): Promise<void> {
+  const query = requestParams(filters);
+  query.set('export', format);
+
+  return downloadFromApi(
+    `/requests?${query.toString()}`,
+    `Заявки ${new Date().toISOString().slice(0, 10)}.${format}`
+  );
+}
+
+export function emailRequests(
+  filters: RequestFilters,
+  format: string
+): Promise<{ sent: boolean; email: string }> {
+  const query = requestParams(filters);
+  query.set('export', format);
+  query.set('email', '1');
+
+  return apiRequest<{ sent: boolean; email: string }>(`/requests?${query.toString()}`, {
+    auth: true
+  });
 }
 
 export function requestSummary(): Promise<RequestSummary> {
