@@ -15,17 +15,16 @@
   import { addHistory } from '../lib/search-history';
   import Button from '../lib/components/ui/Button.svelte';
   import Icon from '../lib/components/ui/Icon.svelte';
-  import FiltersModal from '../lib/components/ui/FiltersModal.svelte';
   import Modal from '../lib/components/ui/Modal.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
-  import { countActive, loadFilters, saveFilters } from '../lib/filters';
+  import { loadFilters, saveFilters } from '../lib/filters';
   import { formatDateTime } from '../lib/format';
   import { buildPageItems } from '../lib/pagination';
   import { clampPeriod, defaultPeriod, todayIso } from '../lib/period';
 
   const filterDefaults = {
-    status: '',
+    statusCodes: [] as string[],
     scopes: [] as string[],
     warehouses: [] as number[],
     from: defaultPeriod().from,
@@ -35,10 +34,6 @@
     per_page: 20,
     q: '',
     page: 1
-  };
-
-  const filterCountDefaults = {
-    status: filterDefaults.status
   };
 
   const scopeOptions = [
@@ -122,7 +117,12 @@
 
     return [...activeRows, ...inactiveRows];
   });
-  const activeFilterCount = $derived(countActive(filters, filterCountDefaults));
+  const activeFilterCount = $derived(
+    (filters.statusCodes.length > 0 ? 1 : 0) +
+      (filters.scopes.length > 0 ? 1 : 0) +
+      (filters.warehouses.length > 0 ? 1 : 0) +
+      (filters.from !== filterDefaults.from || filters.to !== filterDefaults.to ? 1 : 0)
+  );
   const searchActive = $derived(search.trim() !== '');
   const pages = $derived(Math.max(1, Math.ceil(total / perPage)));
   const rangeFrom = $derived(total === 0 ? 0 : Math.min((page - 1) * perPage + 1, total));
@@ -165,32 +165,16 @@
   function resetFilters(): void {
     const period = defaultPeriod();
 
-    draft = { ...draft, status: '', scopes: [], warehouses: [], from: period.from, to: period.to };
-    filters = { ...filters, status: '', scopes: [], warehouses: [], from: period.from, to: period.to };
+    draft = { ...draft, statusCodes: [], scopes: [], warehouses: [], from: period.from, to: period.to };
+    filters = { ...filters, statusCodes: [], scopes: [], warehouses: [], from: period.from, to: period.to };
     persist();
     void load(true);
-  }
-
-  function resetFilterDraft(): void {
-    const period = defaultPeriod();
-
-    draft = { ...draft, status: '', scopes: [], warehouses: [], from: period.from, to: period.to };
   }
 
   function resetFiltersAndSearch(): void {
     search = '';
     searchInput = '';
     resetFilters();
-  }
-
-  function applyFilterDraft(): void {
-    const period = clampPeriod(draft.from, draft.to);
-
-    draft.from = period.from;
-    draft.to = period.to;
-    filters = { ...draft };
-    persist();
-    void load(true);
   }
 
   function openSort(): void {
@@ -362,17 +346,27 @@
       : [...draft.scopes, value];
   }
 
+  function toggleStatusDraft(code: string): void {
+    draft.statusCodes = draft.statusCodes.includes(code)
+      ? draft.statusCodes.filter((item) => item !== code)
+      : [...draft.statusCodes, code];
+  }
+
   function applyView(): void {
     viewOpen = false;
 
     const period = clampPeriod(draft.from, draft.to);
     const nextScopes = [...draft.scopes].sort();
     const currentScopes = [...filters.scopes].sort();
+    const nextStatuses = [...draft.statusCodes].sort();
+    const currentStatuses = [...filters.statusCodes].sort();
     const filtersChanged =
       period.from !== filters.from ||
       period.to !== filters.to ||
       nextScopes.length !== currentScopes.length ||
-      nextScopes.some((value, index) => value !== currentScopes[index]);
+      nextScopes.some((value, index) => value !== currentScopes[index]) ||
+      nextStatuses.length !== currentStatuses.length ||
+      nextStatuses.some((value, index) => value !== currentStatuses[index]);
 
     viewMode = viewDraft;
 
@@ -380,6 +374,7 @@
       filters.from = period.from;
       filters.to = period.to;
       filters.scopes = nextScopes;
+      filters.statusCodes = nextStatuses;
       persist();
       void load(true);
       return;
@@ -400,7 +395,7 @@
 
     try {
       const data = await listRequests({
-        status: filters.status,
+        statuses: filters.statusCodes.length > 0 ? filters.statusCodes : undefined,
         manager_scopes: filters.scopes.length > 0 ? filters.scopes : undefined,
         q: search,
         warehouse_ids: filters.warehouses.length > 0 ? filters.warehouses : undefined,
@@ -580,24 +575,6 @@
         <Icon name="sort" size={16} />
       </button>
 
-      <FiltersModal
-        icon
-        count={countActive(filters, filterCountDefaults)}
-        onopen={() => (draft = { ...filters })}
-        onapply={applyFilterDraft}
-        onreset={resetFilterDraft}
-      >
-        <label class="filter-field">
-          <span>Статус</span>
-          <select bind:value={draft.status}>
-            <option value="">Все статусы</option>
-            {#each statuses as status}
-              <option value={status.code}>{status.title}</option>
-            {/each}
-          </select>
-        </label>
-      </FiltersModal>
-
       {#if warehouses.length > 0}
         <button
           type="button"
@@ -685,7 +662,40 @@
     {/if}
   {:else}
     <div class="levels-wrap">
-      {#if viewMode === 'list'}
+      {#if viewMode === 'tiles'}
+        <div class="tiles">
+          {#each items as item (item.id)}
+            <a
+              class="tile"
+              class:overdue={item.is_overdue}
+              href={`#/requests/${item.id}`}
+            >
+              <div class="tile-head">
+                <span class="tile-number">{item.number}</span>
+                <span class="tile-date">{formatDateTime(item.created_at)}</span>
+              </div>
+              <div class="tile-subject">{item.subject}</div>
+              <div class="tile-status">
+                <span class="status-text" style={`color: ${item.status.color}`}>{item.status.title}</span>
+                {#if item.is_overdue}<span class="overdue">Просрочена</span>{/if}
+              </div>
+              <div class="tile-meta">
+                {#if isStaff}
+                  <span class="meta-item" title={item.client.name}>{item.client.name}</span>
+                {/if}
+                <span class="meta-item">
+                  {#if item.manager}
+                    {item.manager.name}
+                  {:else}
+                    <span class="search-badge">поиск менеджера</span>
+                  {/if}
+                </span>
+                <span class="meta-item meta-count">позиций: {item.items_count}</span>
+              </div>
+            </a>
+          {/each}
+        </div>
+      {:else}
         <div class="levels-head" class:compact={!isStaff}>
           {@render headCell('col-number', 'Номер', 'number')}
           {@render headCell('col-subject', 'Тема', 'subject')}
@@ -696,37 +706,37 @@
           {@render headCell('col-overdue', 'Просрочка', 'due')}
           {@render headCell('col-date', 'Дата', 'created')}
         </div>
-      {/if}
 
-      <div class="levels" class:tiles={viewMode === 'tiles'} class:compact={!isStaff}>
-        {#each items as item (item.id)}
-          <a class="card" href={`#/requests/${item.id}`}>
-            <span class="cell col-number number">{item.number}</span>
-            <span class="cell col-subject subject">{item.subject}</span>
-            {#if isStaff}
-              <span class="cell col-client">{item.client.name}</span>
-            {/if}
-            <span class="cell col-manager">
-              <span class="cell-label">менеджер: </span>
-              {#if item.manager}
-                {item.manager.name}
-              {:else}
-                <span class="search-badge">поиск менеджера</span>
+        <div class="levels" class:compact={!isStaff}>
+          {#each items as item (item.id)}
+            <a class="card" href={`#/requests/${item.id}`}>
+              <span class="cell col-number number">{item.number}</span>
+              <span class="cell col-subject subject">{item.subject}</span>
+              {#if isStaff}
+                <span class="cell col-client">{item.client.name}</span>
               {/if}
-            </span>
-            <span class="cell col-count">
-              <span class="cell-label">позиций: </span>{item.items_count}
-            </span>
-            <span class="cell col-status">
-              <span class="status-text" style={`color: ${item.status.color}`}>{item.status.title}</span>
-            </span>
-            <span class="cell col-overdue" class:empty={!item.is_overdue}>
-              {#if item.is_overdue}<span class="overdue">Просрочена</span>{:else}—{/if}
-            </span>
-            <span class="cell col-date date">{formatDateTime(item.created_at)}</span>
-          </a>
-        {/each}
-      </div>
+              <span class="cell col-manager">
+                <span class="cell-label">менеджер: </span>
+                {#if item.manager}
+                  {item.manager.name}
+                {:else}
+                  <span class="search-badge">поиск менеджера</span>
+                {/if}
+              </span>
+              <span class="cell col-count">
+                <span class="cell-label">позиций: </span>{item.items_count}
+              </span>
+              <span class="cell col-status">
+                <span class="status-text" style={`color: ${item.status.color}`}>{item.status.title}</span>
+              </span>
+              <span class="cell col-overdue" class:empty={!item.is_overdue}>
+                {#if item.is_overdue}<span class="overdue">Просрочена</span>{:else}—{/if}
+              </span>
+              <span class="cell col-date date">{formatDateTime(item.created_at)}</span>
+            </a>
+          {/each}
+        </div>
+      {/if}
     </div>
 
     {#snippet pagerPrev()}
@@ -912,6 +922,24 @@
       </label>
     </div>
 
+    <div class="sort-status">
+      <span class="sort-status-label">Статус:</span>
+      <div class="status-opts">
+        {#each statuses as status (status.code)}
+          <button
+            type="button"
+            class="status-opt"
+            class:on={draft.statusCodes.includes(status.code)}
+            aria-pressed={draft.statusCodes.includes(status.code)}
+            onclick={() => toggleStatusDraft(status.code)}
+          >
+            {status.title}
+          </button>
+        {/each}
+      </div>
+    </div>
+    <p class="filter-hint">Ничего не выбрано — все статусы.</p>
+
     {#if isStaff}
       <div class="sort-status">
         <span class="sort-status-label">Менеджер:</span>
@@ -929,6 +957,7 @@
           {/each}
         </div>
       </div>
+      <p class="filter-hint">Ничего не выбрано — все заявки.</p>
     {/if}
 
     <div class="view-period">
@@ -1252,10 +1281,108 @@
     gap: var(--space-2);
   }
 
-  .levels.tiles {
+  .tiles {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: var(--space-3);
+  }
+
+  .tile {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    padding: 14px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-sm);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  }
+
+  .tile:hover {
+    border-color: var(--primary);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-1px);
+  }
+
+  .tile.overdue {
+    border-left: 3px solid var(--danger);
+  }
+
+  .tile-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .tile-number {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: var(--muted);
+  }
+
+  .tile-date {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .tile-subject {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
+  .tile-status {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .tile-status .status-text {
+    white-space: normal;
+  }
+
+  .tile-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 10px;
+    margin-top: auto;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-secondary);
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  .meta-item {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .meta-count {
+    margin-left: auto;
   }
 
   .card {
@@ -1284,105 +1411,6 @@
 
   .cell-label {
     display: none;
-  }
-
-  .levels.tiles .cell-label {
-    display: inline;
-  }
-
-  .levels.tiles .card {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    grid-template-areas:
-      'number status date'
-      'subject subject subject'
-      'overdue overdue overdue'
-      'client manager count';
-    align-items: center;
-    gap: var(--space-1) var(--space-3);
-  }
-
-  .levels.tiles.compact .card {
-    grid-template-areas:
-      'number status date'
-      'subject subject subject'
-      'overdue overdue overdue'
-      'manager count count';
-  }
-
-  .levels.tiles .col-number {
-    grid-area: number;
-  }
-
-  .levels.tiles .col-status {
-    grid-area: status;
-    display: flex;
-    align-items: center;
-    gap: var(--space-1);
-    flex-wrap: wrap;
-    min-width: 0;
-  }
-
-  .levels.tiles .status-text {
-    white-space: normal;
-  }
-
-  .levels.tiles .col-date {
-    grid-area: date;
-    justify-self: end;
-    margin-left: auto;
-  }
-
-  .levels.tiles .col-overdue {
-    grid-area: overdue;
-  }
-
-  .levels.tiles .col-overdue.empty {
-    display: none;
-  }
-
-  .levels.tiles .col-subject {
-    grid-area: subject;
-    margin-top: var(--space-1);
-  }
-
-  .levels.tiles .col-client {
-    grid-area: client;
-  }
-
-  .levels.tiles .col-manager {
-    grid-area: manager;
-    color: var(--muted);
-    font-size: 13px;
-  }
-
-  .levels.tiles .col-count {
-    grid-area: count;
-    justify-self: end;
-    color: var(--muted);
-    font-size: 13px;
-  }
-
-  @media (max-width: 559.98px) {
-    .levels.tiles .card {
-      grid-template-columns: minmax(0, 1fr) auto;
-      grid-template-areas:
-        'number date'
-        'subject subject'
-        'status overdue'
-        'client manager'
-        'count count';
-    }
-
-    .levels.tiles.compact .card {
-      grid-template-columns: minmax(0, 1fr) auto;
-      grid-template-areas:
-        'number date'
-        'subject subject'
-        'status overdue'
-        'manager manager'
-        'count count';
-    }
   }
 
   @media (min-width: 1200px) {
@@ -1906,6 +1934,12 @@
     border-top: 1px solid var(--border-secondary);
   }
 
+  .filter-hint {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
   .filter-field {
     display: flex;
     flex: 1 1 160px;
@@ -1915,7 +1949,6 @@
     color: var(--text-description);
   }
 
-  .filter-field select,
   .filter-field input {
     height: 32px;
     padding: 0 8px;

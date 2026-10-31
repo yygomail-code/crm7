@@ -166,7 +166,21 @@ final class RequestRepository
     {
         [$where, $params] = $this->scopeConditions($scope);
 
-        if (!empty($filters['status'])) {
+        $statusCodes = is_array($filters['statuses'] ?? null)
+            ? array_values(array_filter(
+                array_map(static fn ($value): string => trim((string) $value), $filters['statuses']),
+                static fn (string $code): bool => $code !== ''
+            ))
+            : [];
+
+        if ($statusCodes !== []) {
+            $placeholders = implode(',', array_fill(0, count($statusCodes), '?'));
+            $where[] = 'r.status_id IN (' . $placeholders . ')';
+
+            foreach ($statusCodes as $code) {
+                $params[] = $code;
+            }
+        } elseif (!empty($filters['status'])) {
             $where[] = 'r.status_id = ?';
             $params[] = $filters['status'];
         }

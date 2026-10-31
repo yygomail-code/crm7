@@ -352,15 +352,7 @@
 
   function toggleStatusDraft(kind: 'active' | 'inactive'): void {
     if (kind === 'active') {
-      if (statusActiveDraft && !statusInactiveDraft) {
-        return;
-      }
-
       statusActiveDraft = !statusActiveDraft;
-      return;
-    }
-
-    if (statusInactiveDraft && !statusActiveDraft) {
       return;
     }
 
@@ -777,7 +769,6 @@
         class="status-opt"
         class:on={statusActiveDraft}
         aria-pressed={statusActiveDraft}
-        disabled={statusActiveDraft && !statusInactiveDraft}
         onclick={() => toggleStatusDraft('active')}
       >
         Активированные
@@ -787,13 +778,13 @@
         class="status-opt"
         class:on={statusInactiveDraft}
         aria-pressed={statusInactiveDraft}
-        disabled={statusInactiveDraft && !statusActiveDraft}
         onclick={() => toggleStatusDraft('inactive')}
       >
         Деактивированные
       </button>
     </div>
   </div>
+  <p class="filter-hint">Ничего не выбрано — показываются все.</p>
   <div class="modal-actions">
     <Button variant="ghost" onclick={() => (viewOpen = false)}>Отмена</Button>
     <Button onclick={applyView}>Применить</Button>
@@ -809,8 +800,9 @@
     <div class="help-block">
       <h3>Список и плитки</h3>
       <p>
-        Кнопка «Вид» переключает таблицу и плитки. В таблице клик по заголовку колонки
-        сортирует, повторный клик меняет направление; кнопка «Сортировка» задаёт несколько условий.
+        Кнопка «Вид и фильтры» переключает таблицу и плитки и задаёт показ активированных и
+        деактивированных складов. В таблице клик по заголовку колонки сортирует, повторный клик
+        меняет направление; кнопка «Сортировка» задаёт несколько условий.
       </p>
     </div>
     <div class="help-block">
@@ -1363,6 +1355,12 @@
     gap: 4px;
     max-height: 340px;
     overflow-y: auto;
+  }
+
+  .filter-hint {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--muted);
   }
 
   .sort-row {

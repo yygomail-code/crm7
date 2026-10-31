@@ -33,6 +33,7 @@ export function addActivity(
 
 export interface RequestFilters {
   status?: string;
+  statuses?: string[];
   manager_scope?: string;
   manager_scopes?: string[];
   q?: string;
@@ -69,6 +70,9 @@ export function listRequests(filters: RequestFilters = {}): Promise<RequestListR
   const query = new URLSearchParams();
 
   if (filters.status) query.set('status', filters.status);
+  if (filters.statuses && filters.statuses.length > 0) {
+    query.set('statuses', filters.statuses.join(','));
+  }
   if (filters.manager_scope) query.set('manager_scope', filters.manager_scope);
   if (filters.manager_scopes && filters.manager_scopes.length > 0) {
     query.set('manager_scopes', filters.manager_scopes.join(','));

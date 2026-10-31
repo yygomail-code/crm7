@@ -337,29 +337,14 @@
   }
 
   function togglePriceTypesDraft(id: number): void {
-    if (priceTypesDraft.includes(id)) {
-      if (priceTypesDraft.length <= 1) {
-        return;
-      }
-
-      priceTypesDraft = priceTypesDraft.filter((value) => value !== id);
-      return;
-    }
-
-    priceTypesDraft = [...priceTypesDraft, id];
+    priceTypesDraft = priceTypesDraft.includes(id)
+      ? priceTypesDraft.filter((value) => value !== id)
+      : [...priceTypesDraft, id];
   }
 
   function toggleStatusDraft(kind: 'active' | 'inactive'): void {
     if (kind === 'active') {
-      if (statusActiveDraft && !statusInactiveDraft) {
-        return;
-      }
-
       statusActiveDraft = !statusActiveDraft;
-      return;
-    }
-
-    if (statusInactiveDraft && !statusActiveDraft) {
       return;
     }
 
@@ -1415,7 +1400,6 @@
               class="status-opt"
               class:on={statusActiveDraft}
               aria-pressed={statusActiveDraft}
-              disabled={statusActiveDraft && !statusInactiveDraft}
               onclick={() => toggleStatusDraft('active')}
             >
               Активированные
@@ -1425,13 +1409,13 @@
               class="status-opt"
               class:on={statusInactiveDraft}
               aria-pressed={statusInactiveDraft}
-              disabled={statusInactiveDraft && !statusActiveDraft}
               onclick={() => toggleStatusDraft('inactive')}
             >
               Деактивированные
             </button>
           </div>
         </div>
+        <p class="filter-hint">Ничего не выбрано — показываются все.</p>
       {/if}
 
       {#if pricesEnabled && availablePriceTypes.length > 1}
@@ -1444,7 +1428,6 @@
                 class="status-opt"
                 class:on={priceTypesDraft.includes(type.id)}
                 aria-pressed={priceTypesDraft.includes(type.id)}
-                disabled={priceTypesDraft.length === 1 && priceTypesDraft.includes(type.id)}
                 onclick={() => togglePriceTypesDraft(type.id)}
               >
                 {type.title}
@@ -1452,6 +1435,7 @@
             {/each}
           </div>
         </div>
+        <p class="filter-hint">Ничего не выбрано — все типы цен.</p>
       {/if}
 
       <div class="modal-actions">
@@ -2155,6 +2139,12 @@
   .status-opt:disabled {
     opacity: 0.55;
     cursor: not-allowed;
+  }
+
+  .filter-hint {
+    margin: 6px 0 0;
+    font-size: 12px;
+    color: var(--muted);
   }
 
   .sort-list {

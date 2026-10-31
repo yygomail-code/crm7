@@ -291,6 +291,12 @@ final class RequestService
             array_map(static fn ($value): string => trim((string) $value), $managerScopesRaw),
             ['none', 'mine', 'others']
         ));
+        $statusCodesRaw = $filters['statuses'] ?? [];
+        $statusCodesRaw = is_array($statusCodesRaw) ? $statusCodesRaw : explode(',', (string) $statusCodesRaw);
+        $statusCodes = array_values(array_filter(
+            array_map(static fn ($value): string => trim((string) $value), $statusCodesRaw),
+            static fn (string $code): bool => $code !== ''
+        ));
         $state = (string) ($filters['state'] ?? '');
         $warehouseIdsRaw = $filters['warehouse_ids'] ?? [];
         $warehouseIdsRaw = is_array($warehouseIdsRaw) ? $warehouseIdsRaw : explode(',', (string) $warehouseIdsRaw);
@@ -301,6 +307,7 @@ final class RequestService
 
         $result = $this->requests->list([
             'status' => trim((string) ($filters['status'] ?? '')),
+            'statuses' => $statusCodes,
             'q' => trim((string) ($filters['q'] ?? '')),
             'manager_scope' => in_array($managerScope, ['all', 'none', 'mine', 'others'], true) ? $managerScope : '',
             'manager_scopes' => $managerScopes,
