@@ -1334,7 +1334,7 @@
               disabled={statusActiveDraft && !statusInactiveDraft}
               onclick={() => toggleStatusDraft('active')}
             >
-              Активные
+              Активированные
             </button>
             <button
               type="button"
@@ -1344,7 +1344,7 @@
               disabled={statusInactiveDraft && !statusActiveDraft}
               onclick={() => toggleStatusDraft('inactive')}
             >
-              Неактивные
+              Деактивированные
             </button>
           </div>
         </div>
