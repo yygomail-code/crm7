@@ -925,7 +925,7 @@
     </div>
 
     <div class="sort-status">
-      <span class="sort-status-label">Статус:</span>
+      <span class="sort-status-label" title="Если ничего не выбрано — все статусы">Статус:</span>
       <div class="status-opts">
         {#each statuses as status (status.code)}
           <button
@@ -940,11 +940,10 @@
         {/each}
       </div>
     </div>
-    <p class="filter-hint">Ничего не выбрано — все статусы.</p>
 
     {#if isStaff}
       <div class="sort-status">
-        <span class="sort-status-label">Менеджер:</span>
+        <span class="sort-status-label" title="Если ничего не выбрано — все заявки">Менеджер:</span>
         <div class="status-opts">
           {#each scopeOptions as option (option.value)}
             <button
@@ -959,7 +958,6 @@
           {/each}
         </div>
       </div>
-      <p class="filter-hint">Ничего не выбрано — все заявки.</p>
     {/if}
 
     <div class="view-period">
@@ -1955,12 +1953,6 @@
     margin-top: var(--space-4);
     padding-top: var(--space-4);
     border-top: 1px solid var(--border-secondary);
-  }
-
-  .filter-hint {
-    margin: 6px 0 0;
-    font-size: 12px;
-    color: var(--muted);
   }
 
   .filter-field {

@@ -762,7 +762,7 @@
     </label>
   </div>
   <div class="sort-status">
-    <span class="sort-status-label">Статус:</span>
+    <span class="sort-status-label" title="Если ничего не выбрано — показываются все">Статус:</span>
     <div class="status-opts">
       <button
         type="button"
@@ -784,7 +784,6 @@
       </button>
     </div>
   </div>
-  <p class="filter-hint">Ничего не выбрано — показываются все.</p>
   <div class="modal-actions">
     <Button variant="ghost" onclick={() => (viewOpen = false)}>Отмена</Button>
     <Button onclick={applyView}>Применить</Button>
@@ -1355,12 +1354,6 @@
     gap: 4px;
     max-height: 340px;
     overflow-y: auto;
-  }
-
-  .filter-hint {
-    margin: 6px 0 0;
-    font-size: 12px;
-    color: var(--muted);
   }
 
   .sort-row {

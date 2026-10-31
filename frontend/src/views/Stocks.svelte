@@ -1393,7 +1393,7 @@
 
       {#if canDeactivate}
         <div class="sort-status">
-          <span class="sort-status-label">Статус:</span>
+          <span class="sort-status-label" title="Если ничего не выбрано — показываются все">Статус:</span>
           <div class="status-opts">
             <button
               type="button"
@@ -1415,12 +1415,11 @@
             </button>
           </div>
         </div>
-        <p class="filter-hint">Ничего не выбрано — показываются все.</p>
       {/if}
 
       {#if pricesEnabled && availablePriceTypes.length > 1}
         <div class="view-prices">
-          <span class="sort-status-label">Цены:</span>
+          <span class="sort-status-label" title="Если ничего не выбрано — все типы цен">Цены:</span>
           <div class="price-filter">
             {#each availablePriceTypes as type (type.id)}
               <button
@@ -1435,7 +1434,6 @@
             {/each}
           </div>
         </div>
-        <p class="filter-hint">Ничего не выбрано — все типы цен.</p>
       {/if}
 
       <div class="modal-actions">
@@ -2139,12 +2137,6 @@
   .status-opt:disabled {
     opacity: 0.55;
     cursor: not-allowed;
-  }
-
-  .filter-hint {
-    margin: 6px 0 0;
-    font-size: 12px;
-    color: var(--muted);
   }
 
   .sort-list {
