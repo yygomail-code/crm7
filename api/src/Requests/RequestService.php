@@ -362,6 +362,12 @@ final class RequestService
             static fn (string $code): bool => $code !== ''
         ));
         $state = (string) ($filters['state'] ?? '');
+        $overdueRaw = $filters['overdue'] ?? [];
+        $overdueRaw = is_array($overdueRaw) ? $overdueRaw : explode(',', (string) $overdueRaw);
+        $overdue = array_values(array_intersect(
+            array_map(static fn ($value): string => trim((string) $value), $overdueRaw),
+            ['yes', 'no']
+        ));
         $warehouseIdsRaw = $filters['warehouse_ids'] ?? [];
         $warehouseIdsRaw = is_array($warehouseIdsRaw) ? $warehouseIdsRaw : explode(',', (string) $warehouseIdsRaw);
         $warehouseIds = array_values(array_filter(
@@ -379,6 +385,7 @@ final class RequestService
             'manager_id' => $filters['manager_id'] ?? null,
             'client_id' => $filters['client_id'] ?? null,
             'state' => in_array($state, ['open', 'closed', 'overdue'], true) ? $state : '',
+            'overdue' => $overdue,
             'warehouse_id' => $filters['warehouse_id'] ?? null,
             'warehouse_ids' => $warehouseIds,
             'from' => trim((string) ($filters['from'] ?? '')),

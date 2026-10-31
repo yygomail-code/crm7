@@ -205,6 +205,26 @@ final class RequestRepository
             $where[] = 's.is_final = 0 AND r.due_at IS NOT NULL AND r.due_at < NOW()';
         }
 
+        $overdueValues = is_array($filters['overdue'] ?? null)
+            ? array_values(array_intersect(
+                array_map(static fn ($value): string => (string) $value, $filters['overdue']),
+                ['yes', 'no']
+            ))
+            : [];
+        $overdueConditions = [];
+
+        foreach ($overdueValues as $overdueValue) {
+            if ($overdueValue === 'yes') {
+                $overdueConditions[] = '(s.is_final = 0 AND r.due_at IS NOT NULL AND r.due_at < NOW())';
+            } elseif ($overdueValue === 'no') {
+                $overdueConditions[] = '(s.is_final = 1 OR r.due_at IS NULL OR r.due_at >= NOW())';
+            }
+        }
+
+        if ($overdueConditions !== []) {
+            $where[] = '(' . implode(' OR ', $overdueConditions) . ')';
+        }
+
         $warehouseIds = is_array($filters['warehouse_ids'] ?? null)
             ? array_values(array_filter(array_map('intval', $filters['warehouse_ids']), static fn (int $id): bool => $id > 0))
             : [];

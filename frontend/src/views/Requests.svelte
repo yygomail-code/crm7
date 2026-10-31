@@ -31,6 +31,7 @@
     statusCodes: [] as string[],
     scopes: [] as string[],
     warehouses: [] as number[],
+    overdue: [] as string[],
     from: defaultPeriod().from,
     to: defaultPeriod().to,
     sort: 'created_desc',
@@ -44,6 +45,11 @@
     { value: 'none', label: 'Без менеджера' },
     { value: 'mine', label: 'В работе у меня' },
     { value: 'others', label: 'В работе у других' }
+  ];
+
+  const overdueOptions = [
+    { value: 'yes', label: 'Просроченные' },
+    { value: 'no', label: 'Без просрочки' }
   ];
 
   const perPageOptions = [20, 50, 100];
@@ -129,6 +135,7 @@
     (filters.statusCodes.length > 0 ? 1 : 0) +
       (filters.scopes.length > 0 ? 1 : 0) +
       (filters.warehouses.length > 0 ? 1 : 0) +
+      (filters.overdue.length > 0 ? 1 : 0) +
       (filters.from !== filterDefaults.from || filters.to !== filterDefaults.to ? 1 : 0)
   );
   const searchActive = $derived(search.trim() !== '');
@@ -173,8 +180,8 @@
   function resetFilters(): void {
     const period = defaultPeriod();
 
-    draft = { ...draft, statusCodes: [], scopes: [], warehouses: [], from: period.from, to: period.to };
-    filters = { ...filters, statusCodes: [], scopes: [], warehouses: [], from: period.from, to: period.to };
+    draft = { ...draft, statusCodes: [], scopes: [], warehouses: [], overdue: [], from: period.from, to: period.to };
+    filters = { ...filters, statusCodes: [], scopes: [], warehouses: [], overdue: [], from: period.from, to: period.to };
     persist();
     void load(true);
   }
@@ -360,6 +367,12 @@
       : [...draft.statusCodes, code];
   }
 
+  function toggleOverdueDraft(value: string): void {
+    draft.overdue = draft.overdue.includes(value)
+      ? draft.overdue.filter((item) => item !== value)
+      : [...draft.overdue, value];
+  }
+
   function applyView(): void {
     viewOpen = false;
 
@@ -368,13 +381,17 @@
     const currentScopes = [...filters.scopes].sort();
     const nextStatuses = [...draft.statusCodes].sort();
     const currentStatuses = [...filters.statusCodes].sort();
+    const nextOverdue = [...draft.overdue].sort();
+    const currentOverdue = [...filters.overdue].sort();
     const filtersChanged =
       period.from !== filters.from ||
       period.to !== filters.to ||
       nextScopes.length !== currentScopes.length ||
       nextScopes.some((value, index) => value !== currentScopes[index]) ||
       nextStatuses.length !== currentStatuses.length ||
-      nextStatuses.some((value, index) => value !== currentStatuses[index]);
+      nextStatuses.some((value, index) => value !== currentStatuses[index]) ||
+      nextOverdue.length !== currentOverdue.length ||
+      nextOverdue.some((value, index) => value !== currentOverdue[index]);
 
     viewMode = viewDraft;
 
@@ -383,6 +400,7 @@
       filters.to = period.to;
       filters.scopes = nextScopes;
       filters.statusCodes = nextStatuses;
+      filters.overdue = nextOverdue;
       persist();
       void load(true);
       return;
@@ -407,6 +425,7 @@
         manager_scopes: filters.scopes.length > 0 ? filters.scopes : undefined,
         q: search,
         warehouse_ids: filters.warehouses.length > 0 ? filters.warehouses : undefined,
+        overdue: filters.overdue.length > 0 ? filters.overdue : undefined,
         from: filters.from,
         to: filters.to,
         sort: filters.sort,
@@ -490,6 +509,7 @@
       manager_scopes: filters.scopes.length > 0 ? filters.scopes : undefined,
       q: search,
       warehouse_ids: filters.warehouses.length > 0 ? filters.warehouses : undefined,
+      overdue: filters.overdue.length > 0 ? filters.overdue : undefined,
       from: filters.from,
       to: filters.to,
       sort: filters.sort
@@ -994,6 +1014,23 @@
             onclick={() => toggleStatusDraft(status.code)}
           >
             {status.title}
+          </button>
+        {/each}
+      </div>
+    </div>
+
+    <div class="sort-status">
+      <span class="sort-status-label" title="Если ничего не выбрано — все заявки">Просрочка:</span>
+      <div class="status-opts">
+        {#each overdueOptions as option (option.value)}
+          <button
+            type="button"
+            class="status-opt"
+            class:on={draft.overdue.includes(option.value)}
+            aria-pressed={draft.overdue.includes(option.value)}
+            onclick={() => toggleOverdueDraft(option.value)}
+          >
+            {option.label}
           </button>
         {/each}
       </div>

@@ -41,6 +41,7 @@ export interface RequestFilters {
   warehouse_ids?: number[];
   client_id?: number;
   state?: string;
+  overdue?: string[];
   from?: string;
   to?: string;
   sort?: string;
@@ -84,6 +85,9 @@ function requestParams(filters: RequestFilters): URLSearchParams {
   }
   if (filters.client_id) query.set('client_id', String(filters.client_id));
   if (filters.state) query.set('state', filters.state);
+  if (filters.overdue && filters.overdue.length > 0) {
+    query.set('overdue', filters.overdue.join(','));
+  }
   if (filters.from) query.set('from', filters.from);
   if (filters.to) query.set('to', filters.to);
   if (filters.sort) query.set('sort', filters.sort);
