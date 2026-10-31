@@ -1594,12 +1594,16 @@
       display: grid;
       grid-template-columns: 140px minmax(0, 1.6fr) minmax(0, 1fr) 140px 110px 180px 120px 140px;
       align-items: center;
-      gap: var(--space-3);
-      padding: 12px var(--space-4);
+      gap: 0;
+      padding: 0;
       border: none;
       border-bottom: 1px solid var(--border-secondary);
       border-radius: 0;
       box-shadow: none;
+    }
+
+    .levels:not(.tiles) .card > .cell {
+      padding: 12px var(--space-4);
     }
 
     .levels:not(.tiles).compact .card {
