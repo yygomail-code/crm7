@@ -1324,7 +1324,7 @@
 
       {#if canDeactivate}
         <div class="sort-status">
-          <span class="sort-status-label">Показывать:</span>
+          <span class="sort-status-label">Статус:</span>
           <div class="status-opts">
             <button
               type="button"
