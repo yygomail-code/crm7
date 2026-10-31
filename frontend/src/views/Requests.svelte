@@ -329,12 +329,6 @@
     warehouseDraft = [];
   }
 
-  function toggleWarehouseDraft(id: number): void {
-    warehouseDraft = warehouseDraft.includes(id)
-      ? warehouseDraft.filter((value) => value !== id)
-      : [...warehouseDraft, id];
-  }
-
   function applyWarehouse(): void {
     warehouseOpen = false;
     const next = [...warehouseDraft].sort((a, b) => a - b);
@@ -870,21 +864,24 @@
   </Modal>
 
   <Modal open={warehouseOpen} title="Склады" onclose={() => (warehouseOpen = false)}>
-    <div class="warehouse-head">
-      <button type="button" class="link-btn" onclick={selectAllWarehouses}>Отметить все</button>
-      <button type="button" class="link-btn" onclick={clearAllWarehouses}>Снять все</button>
-    </div>
-    <p class="sort-hint">В скобках — число активных заявок на складе.</p>
-    <div class="warehouse-list">
+    <div class="sort-options">
+      <div class="options-head">
+        <button type="button" class="link-btn" onclick={selectAllWarehouses}>Отметить все</button>
+        <button type="button" class="link-btn" onclick={clearAllWarehouses}>Снять все</button>
+      </div>
+
       {#each warehouses as warehouse (warehouse.id)}
-        <label class="warehouse-row">
-          <input
-            type="checkbox"
-            checked={warehouseDraft.includes(warehouse.id)}
-            onchange={() => toggleWarehouseDraft(warehouse.id)}
-          />
-          <span class="warehouse-name" title={warehouse.name}>{warehouse.name}</span>
-          <span class="warehouse-count" class:zero={warehouse.count === 0}>({warehouse.count})</span>
+        <label class="sort-option warehouse-option">
+          <input type="checkbox" value={warehouse.id} bind:group={warehouseDraft} />
+          <span class="warehouse-option-name" title={warehouse.name}>{warehouse.name}</span>
+          <span
+            class="count"
+            class:found={warehouse.count > 0}
+            class:zero={warehouse.count === 0}
+            title="Активные заявки"
+          >
+            {warehouse.count}
+          </span>
         </label>
       {/each}
     </div>
@@ -1623,11 +1620,18 @@
     color: var(--text-description);
   }
 
-  .warehouse-head {
+  .sort-options {
     display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    margin-bottom: var(--space-2);
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  .options-head {
+    display: flex;
+    gap: var(--space-4);
+    margin-bottom: var(--space-1);
+    padding-bottom: var(--space-2);
+    border-bottom: 1px solid var(--border-secondary);
   }
 
   .link-btn {
@@ -1641,30 +1645,28 @@
   }
 
   .link-btn:hover {
+    color: var(--primary-hover);
     text-decoration: underline;
   }
 
-  .warehouse-list {
-    display: flex;
-    flex-direction: column;
-    max-height: 340px;
-    overflow-y: auto;
-  }
-
-  .warehouse-row {
+  .sort-option {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: 6px 8px;
-    border-radius: var(--radius-sm);
+    font-size: 14px;
     cursor: pointer;
   }
 
-  .warehouse-row:hover {
-    background: var(--fill-tertiary);
+  .sort-option input[type='checkbox'],
+  .sort-option input[type='radio'] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--primary);
+    cursor: pointer;
   }
 
-  .warehouse-name {
+  .warehouse-option-name {
     flex: 1;
     min-width: 0;
     overflow: hidden;
@@ -1672,16 +1674,21 @@
     white-space: nowrap;
   }
 
-  .warehouse-count {
-    flex: 0 0 auto;
-    min-width: 32px;
-    text-align: right;
-    font-size: 13px;
-    color: var(--text-description);
+  .count {
+    font-size: 12px;
+    color: var(--muted);
   }
 
-  .warehouse-count.zero {
-    color: var(--muted);
+  .count.found {
+    padding: 1px 7px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--primary) 12%, white);
+    color: var(--primary);
+    font-weight: 600;
+  }
+
+  .count.zero {
+    opacity: 0.55;
   }
 
   .sort-list {
