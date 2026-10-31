@@ -667,14 +667,14 @@
           {#each items as item (item.id)}
             <a
               class="tile"
-              class:overdue={item.is_overdue}
+              class:is-overdue={item.is_overdue}
               href={`#/requests/${item.id}`}
             >
               <div class="tile-head">
                 <span class="tile-number">{item.number}</span>
                 <span class="tile-date">{formatDateTime(item.created_at)}</span>
               </div>
-              <div class="tile-subject">{item.subject}</div>
+              <div class="tile-subject" title={item.subject}>{item.subject}</div>
               <div class="tile-status">
                 <span class="status-text" style={`color: ${item.status.color}`}>{item.status.title}</span>
                 {#if item.is_overdue}<span class="overdue">Просрочена</span>{/if}
@@ -1123,7 +1123,7 @@
     margin-inline: auto;
   }
 
-  .page:has(.levels.tiles) {
+  .page:has(.tiles) {
     max-width: 1600px;
   }
 
@@ -1283,7 +1283,7 @@
 
   .tiles {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr));
     gap: var(--space-3);
   }
 
@@ -1308,8 +1308,12 @@
     transform: translateY(-1px);
   }
 
-  .tile.overdue {
-    border-left: 3px solid var(--danger);
+  .tile.is-overdue {
+    box-shadow: inset 3px 0 0 var(--danger), var(--shadow-sm);
+  }
+
+  .tile.is-overdue:hover {
+    box-shadow: inset 3px 0 0 var(--danger), var(--shadow-md);
   }
 
   .tile-head {
@@ -1343,6 +1347,7 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    min-height: 2.7em;
     font-size: 15px;
     font-weight: 600;
     line-height: 1.35;
@@ -1379,6 +1384,12 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .tile-meta .meta-item + .meta-item:not(.meta-count)::before {
+    content: '·';
+    margin-right: 6px;
+    color: var(--muted);
   }
 
   .meta-count {
