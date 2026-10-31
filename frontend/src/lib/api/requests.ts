@@ -36,6 +36,7 @@ export interface RequestFilters {
   manager_scope?: string;
   q?: string;
   warehouse_id?: number;
+  warehouse_ids?: number[];
   client_id?: number;
   state?: string;
   from?: string;
@@ -45,14 +46,20 @@ export interface RequestFilters {
   per_page?: number;
 }
 
+export interface RequestWarehouseOption {
+  id: number;
+  name: string;
+  count: number;
+}
+
 export function requestFilters(): Promise<{
   statuses: RequestStatus[];
-  warehouses: { id: number; name: string }[];
+  warehouses: RequestWarehouseOption[];
   sorts: { code: string; title: string }[];
 }> {
   return apiRequest<{
     statuses: RequestStatus[];
-    warehouses: { id: number; name: string }[];
+    warehouses: RequestWarehouseOption[];
     sorts: { code: string; title: string }[];
   }>('/requests/filters', { auth: true });
 }
@@ -64,6 +71,9 @@ export function listRequests(filters: RequestFilters = {}): Promise<RequestListR
   if (filters.manager_scope) query.set('manager_scope', filters.manager_scope);
   if (filters.q) query.set('q', filters.q);
   if (filters.warehouse_id) query.set('warehouse_id', String(filters.warehouse_id));
+  if (filters.warehouse_ids && filters.warehouse_ids.length > 0) {
+    query.set('warehouse_ids', filters.warehouse_ids.join(','));
+  }
   if (filters.client_id) query.set('client_id', String(filters.client_id));
   if (filters.state) query.set('state', filters.state);
   if (filters.from) query.set('from', filters.from);

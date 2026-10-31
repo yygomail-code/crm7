@@ -191,7 +191,18 @@ final class RequestRepository
             $where[] = 's.is_final = 0 AND r.due_at IS NOT NULL AND r.due_at < NOW()';
         }
 
-        if (!empty($filters['warehouse_id'])) {
+        $warehouseIds = is_array($filters['warehouse_ids'] ?? null)
+            ? array_values(array_filter(array_map('intval', $filters['warehouse_ids']), static fn (int $id): bool => $id > 0))
+            : [];
+
+        if ($warehouseIds !== []) {
+            $placeholders = implode(',', array_fill(0, count($warehouseIds), '?'));
+            $where[] = 'EXISTS (SELECT 1 FROM request_items ri WHERE ri.request_id = r.ID AND ri.warehouse_id IN (' . $placeholders . '))';
+
+            foreach ($warehouseIds as $warehouseId) {
+                $params[] = $warehouseId;
+            }
+        } elseif (!empty($filters['warehouse_id'])) {
             $where[] = 'EXISTS (SELECT 1 FROM request_items ri WHERE ri.request_id = r.ID AND ri.warehouse_id = ?)';
             $params[] = (int) $filters['warehouse_id'];
         }
@@ -376,9 +387,11 @@ final class RequestRepository
         $conditions[] = "ri.warehouse_name IS NOT NULL AND ri.warehouse_name <> ''";
 
         $stmt = Database::pdo()->prepare(
-            'SELECT ri.warehouse_id, MAX(ri.warehouse_name) AS warehouse_name
+            'SELECT ri.warehouse_id, MAX(ri.warehouse_name) AS warehouse_name,
+                    COUNT(DISTINCT CASE WHEN s.is_final = 0 THEN ri.request_id END) AS open_count
              FROM request_items ri
              INNER JOIN requests r ON r.ID = ri.request_id
+             INNER JOIN request_statuses s ON s.code = r.status_id
              WHERE ' . implode(' AND ', $conditions) . '
              GROUP BY ri.warehouse_id
              ORDER BY warehouse_name ASC

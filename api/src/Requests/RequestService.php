@@ -73,6 +73,7 @@ final class RequestService
         $warehouses = array_map(static fn (array $row): array => [
             'id' => (int) $row['warehouse_id'],
             'name' => (string) ($row['warehouse_name'] ?? ''),
+            'count' => (int) ($row['open_count'] ?? 0),
         ], $this->requests->warehousesForScope($this->scopeFor($user, $capabilities)));
 
         return [
@@ -285,6 +286,12 @@ final class RequestService
 
         $managerScope = (string) ($filters['manager_scope'] ?? '');
         $state = (string) ($filters['state'] ?? '');
+        $warehouseIdsRaw = $filters['warehouse_ids'] ?? [];
+        $warehouseIdsRaw = is_array($warehouseIdsRaw) ? $warehouseIdsRaw : explode(',', (string) $warehouseIdsRaw);
+        $warehouseIds = array_values(array_filter(
+            array_map(static fn ($value): int => (int) $value, $warehouseIdsRaw),
+            static fn (int $id): bool => $id > 0
+        ));
 
         $result = $this->requests->list([
             'status' => trim((string) ($filters['status'] ?? '')),
@@ -295,6 +302,7 @@ final class RequestService
             'client_id' => $filters['client_id'] ?? null,
             'state' => in_array($state, ['open', 'closed', 'overdue'], true) ? $state : '',
             'warehouse_id' => $filters['warehouse_id'] ?? null,
+            'warehouse_ids' => $warehouseIds,
             'from' => trim((string) ($filters['from'] ?? '')),
             'to' => trim((string) ($filters['to'] ?? '')),
             'sort' => trim((string) ($filters['sort'] ?? '')),

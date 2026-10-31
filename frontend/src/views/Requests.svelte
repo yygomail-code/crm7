@@ -4,7 +4,8 @@
   import {
     listRequests,
     listStatuses,
-    requestFilters
+    requestFilters,
+    type RequestWarehouseOption
   } from '../lib/api/requests';
   import { listDrafts, deleteDraft, type RequestDraftSummary } from '../lib/api/drafts';
   import type { RequestItem, RequestStatus } from '../lib/api/types';
@@ -26,7 +27,7 @@
   const filterDefaults = {
     status: '',
     scope: '',
-    warehouse: 0,
+    warehouses: [] as number[],
     from: defaultPeriod().from,
     to: defaultPeriod().to,
     sort: 'created_desc',
@@ -39,7 +40,6 @@
   const filterCountDefaults = {
     status: filterDefaults.status,
     scope: filterDefaults.scope,
-    warehouse: filterDefaults.warehouse,
     from: filterDefaults.from,
     to: filterDefaults.to
   };
@@ -61,7 +61,9 @@
   let searchInput = $state(String(initialFilters.q ?? ''));
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
   let loadSeq = 0;
-  let warehouses = $state<{ id: number; name: string }[]>([]);
+  let warehouses = $state<RequestWarehouseOption[]>([]);
+  let warehouseOpen = $state(false);
+  let warehouseDraft = $state<number[]>([]);
 
   $effect(() => {
     const term = searchInput.trim();
@@ -160,8 +162,8 @@
   function resetFilters(): void {
     const period = defaultPeriod();
 
-    draft = { ...draft, status: '', scope: '', warehouse: 0, from: period.from, to: period.to };
-    filters = { ...filters, status: '', scope: '', warehouse: 0, from: period.from, to: period.to };
+    draft = { ...draft, status: '', scope: '', warehouses: [], from: period.from, to: period.to };
+    filters = { ...filters, status: '', scope: '', warehouses: [], from: period.from, to: period.to };
     persist();
     void load(true);
   }
@@ -169,7 +171,7 @@
   function resetFilterDraft(): void {
     const period = defaultPeriod();
 
-    draft = { ...draft, status: '', scope: '', warehouse: 0, from: period.from, to: period.to };
+    draft = { ...draft, status: '', scope: '', warehouses: [], from: period.from, to: period.to };
   }
 
   function resetFiltersAndSearch(): void {
@@ -314,6 +316,38 @@
     applySortTerms(sortDraft);
   }
 
+  function openWarehouse(): void {
+    warehouseDraft = [...filters.warehouses];
+    warehouseOpen = true;
+  }
+
+  function selectAllWarehouses(): void {
+    warehouseDraft = warehouses.map((item) => item.id);
+  }
+
+  function clearAllWarehouses(): void {
+    warehouseDraft = [];
+  }
+
+  function toggleWarehouseDraft(id: number): void {
+    warehouseDraft = warehouseDraft.includes(id)
+      ? warehouseDraft.filter((value) => value !== id)
+      : [...warehouseDraft, id];
+  }
+
+  function applyWarehouse(): void {
+    warehouseOpen = false;
+    const next = [...warehouseDraft].sort((a, b) => a - b);
+
+    if (next.length === filters.warehouses.length && next.every((id, index) => id === filters.warehouses[index])) {
+      return;
+    }
+
+    filters.warehouses = next;
+    persist();
+    void load(true);
+  }
+
   function changeSort(): void {
     persist();
     void load(true);
@@ -345,7 +379,7 @@
         status: filters.status,
         manager_scope: filters.scope || undefined,
         q: search,
-        warehouse_id: filters.warehouse > 0 ? filters.warehouse : undefined,
+        warehouse_ids: filters.warehouses.length > 0 ? filters.warehouses : undefined,
         from: filters.from,
         to: filters.to,
         sort: filters.sort,
@@ -551,18 +585,6 @@
           </label>
         {/if}
 
-        {#if warehouses.length > 0}
-          <label class="filter-field">
-            <span>Склад</span>
-            <select bind:value={draft.warehouse}>
-              <option value={0}>Все склады</option>
-              {#each warehouses as warehouse (`${warehouse.id}|${warehouse.name}`)}
-                <option value={warehouse.id}>{warehouse.name}</option>
-              {/each}
-            </select>
-          </label>
-        {/if}
-
         <label class="filter-field">
           <span>Период с</span>
           <input type="date" bind:value={draft.from} max={draft.to} />
@@ -572,6 +594,24 @@
           <input type="date" bind:value={draft.to} min={draft.from} max={todayIso()} />
         </label>
       </FiltersModal>
+
+      {#if warehouses.length > 0}
+        <button
+          type="button"
+          class="sort-button"
+          class:active={filters.warehouses.length > 0}
+          title="Склады"
+          aria-label={filters.warehouses.length > 0
+            ? `Склады, выбрано: ${filters.warehouses.length}`
+            : 'Склады'}
+          onclick={openWarehouse}
+        >
+          <Icon name="stocks" size={16} />
+          {#if filters.warehouses.length > 0}
+            <span class="icon-badge" aria-hidden="true">{filters.warehouses.length}</span>
+          {/if}
+        </button>
+      {/if}
 
       <button
         type="button"
@@ -826,6 +866,31 @@
         <Button variant="ghost" onclick={() => (sortOpen = false)}>Отмена</Button>
         <Button onclick={applySort}>Применить</Button>
       </div>
+    </div>
+  </Modal>
+
+  <Modal open={warehouseOpen} title="Склады" onclose={() => (warehouseOpen = false)}>
+    <div class="warehouse-head">
+      <button type="button" class="link-btn" onclick={selectAllWarehouses}>Отметить все</button>
+      <button type="button" class="link-btn" onclick={clearAllWarehouses}>Снять все</button>
+    </div>
+    <p class="sort-hint">В скобках — число активных заявок на складе.</p>
+    <div class="warehouse-list">
+      {#each warehouses as warehouse (warehouse.id)}
+        <label class="warehouse-row">
+          <input
+            type="checkbox"
+            checked={warehouseDraft.includes(warehouse.id)}
+            onchange={() => toggleWarehouseDraft(warehouse.id)}
+          />
+          <span class="warehouse-name" title={warehouse.name}>{warehouse.name}</span>
+          <span class="warehouse-count" class:zero={warehouse.count === 0}>({warehouse.count})</span>
+        </label>
+      {/each}
+    </div>
+    <div class="modal-actions">
+      <Button variant="ghost" onclick={() => (warehouseOpen = false)}>Отмена</Button>
+      <Button onclick={applyWarehouse}>Применить</Button>
     </div>
   </Modal>
 
@@ -1556,6 +1621,67 @@
     margin: 0 0 var(--space-2);
     font-size: 13px;
     color: var(--text-description);
+  }
+
+  .warehouse-head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+
+  .link-btn {
+    padding: 0;
+    border: none;
+    background: none;
+    font: inherit;
+    font-size: 13px;
+    color: var(--primary);
+    cursor: pointer;
+  }
+
+  .link-btn:hover {
+    text-decoration: underline;
+  }
+
+  .warehouse-list {
+    display: flex;
+    flex-direction: column;
+    max-height: 340px;
+    overflow-y: auto;
+  }
+
+  .warehouse-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px 8px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+
+  .warehouse-row:hover {
+    background: var(--fill-tertiary);
+  }
+
+  .warehouse-name {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .warehouse-count {
+    flex: 0 0 auto;
+    min-width: 32px;
+    text-align: right;
+    font-size: 13px;
+    color: var(--text-description);
+  }
+
+  .warehouse-count.zero {
+    color: var(--muted);
   }
 
   .sort-list {
