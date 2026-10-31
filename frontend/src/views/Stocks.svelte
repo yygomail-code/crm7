@@ -326,14 +326,16 @@
   }
 
   function togglePriceTypesDraft(id: number): void {
-    const allIds = availablePriceTypes.map((type) => type.id);
-
     if (priceTypesDraft.includes(id)) {
-      const next = priceTypesDraft.filter((value) => value !== id);
-      priceTypesDraft = next.length > 0 ? next : [...allIds];
-    } else {
-      priceTypesDraft = [...priceTypesDraft, id];
+      if (priceTypesDraft.length <= 1) {
+        return;
+      }
+
+      priceTypesDraft = priceTypesDraft.filter((value) => value !== id);
+      return;
     }
+
+    priceTypesDraft = [...priceTypesDraft, id];
   }
 
   function toggleStatusDraft(kind: 'active' | 'inactive'): void {
@@ -1358,6 +1360,7 @@
                 class="status-opt"
                 class:on={priceTypesDraft.includes(type.id)}
                 aria-pressed={priceTypesDraft.includes(type.id)}
+                disabled={priceTypesDraft.length === 1 && priceTypesDraft.includes(type.id)}
                 onclick={() => togglePriceTypesDraft(type.id)}
               >
                 {type.title}
