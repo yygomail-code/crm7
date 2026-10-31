@@ -172,6 +172,15 @@
   const perPageOptions = $derived(viewMode === 'tiles' ? [12, 24, 48, 96] : [10, 20, 50, 100]);
   const pricesEnabled = $derived(appSettings.pricesEnabled);
   const groupsEnabled = $derived(appSettings.groupsEnabled);
+  const sortRows = $derived.by(() => {
+    const available = sortFields.filter((item) => item.field !== 'price' || pricesEnabled);
+    const activeRows = sortDraft
+      .map((term) => available.find((item) => term.startsWith(`${item.field}_`)))
+      .filter((item): item is (typeof available)[number] => item !== undefined);
+    const inactiveRows = available.filter((item) => sortOrderIndex(item.field) === 0);
+
+    return [...activeRows, ...inactiveRows];
+  });
   let priceTypes = $state<{ id: number; title: string }[]>([]);
   let priceTypesLoaded = $state(false);
   const availablePriceTypes = $derived.by((): { id: number; title: string }[] => {
@@ -476,7 +485,8 @@
 
     const next = [...sortDraft];
     const [moved] = next.splice(fromIndex, 1);
-    next.splice(toIndex, 0, moved);
+    const insertAt = fromIndex < toIndex ? toIndex - 1 : toIndex;
+    next.splice(insertAt, 0, moved);
     sortDraft = next;
   }
 
@@ -1245,59 +1255,57 @@
       </p>
 
       <div class="sort-list" role="list">
-        {#each sortFields as item (item.field)}
-          {#if item.field !== 'price' || pricesEnabled}
-            {@const active = sortOrderIndex(item.field) > 0}
-            <div
-              class="sort-row"
-              class:active
-              class:drag-over={dragSortOver === item.field && dragSortField !== item.field}
-              role="listitem"
-              ondragover={(event) => overSortRow(event, item.field)}
-              ondragleave={() => {
-                if (dragSortOver === item.field) {
-                  dragSortOver = null;
-                }
-              }}
-              ondrop={(event) => dropSortRow(event, item.field)}
+        {#each sortRows as item (item.field)}
+          {@const active = sortOrderIndex(item.field) > 0}
+          <div
+            class="sort-row"
+            class:active
+            class:drag-over={dragSortOver === item.field && dragSortField !== item.field}
+            role="listitem"
+            ondragover={(event) => overSortRow(event, item.field)}
+            ondragleave={() => {
+              if (dragSortOver === item.field) {
+                dragSortOver = null;
+              }
+            }}
+            ondrop={(event) => dropSortRow(event, item.field)}
+          >
+            <span
+              class="sort-drag"
+              class:off={!active}
+              draggable={active}
+              title={active ? 'Перетащите, чтобы изменить порядок' : undefined}
+              aria-hidden="true"
+              ondragstart={(event) => startSortDrag(event, item.field)}
+              ondragend={endSortDrag}
             >
-              <span
-                class="sort-drag"
-                class:off={!active}
-                draggable={active}
-                title={active ? 'Перетащите, чтобы изменить порядок' : undefined}
-                aria-hidden="true"
-                ondragstart={(event) => startSortDrag(event, item.field)}
-                ondragend={endSortDrag}
-              >
-                <Icon name="holder" size={14} />
-              </span>
-              {#if active}
-                <span class="sort-order">{sortOrderIndex(item.field)}</span>
-              {/if}
-              <span class="sort-row-label">{item.label}</span>
-              <button
-                type="button"
-                class="dir-btn"
-                class:on={sortDraft.includes(`${item.field}_asc`)}
-                title="По возрастанию"
-                aria-label={`${item.label}: по возрастанию`}
-                onclick={() => toggleSortDir(item.field, 'asc')}
-              >
-                <Icon name="arrow-up" size={16} />
-              </button>
-              <button
-                type="button"
-                class="dir-btn"
-                class:on={sortDraft.includes(`${item.field}_desc`)}
-                title="По убыванию"
-                aria-label={`${item.label}: по убыванию`}
-                onclick={() => toggleSortDir(item.field, 'desc')}
-              >
-                <Icon name="arrow-down" size={16} />
-              </button>
-            </div>
-          {/if}
+              <Icon name="holder" size={14} />
+            </span>
+            {#if active}
+              <span class="sort-order">{sortOrderIndex(item.field)}</span>
+            {/if}
+            <span class="sort-row-label">{item.label}</span>
+            <button
+              type="button"
+              class="dir-btn"
+              class:on={sortDraft.includes(`${item.field}_asc`)}
+              title="По возрастанию"
+              aria-label={`${item.label}: по возрастанию`}
+              onclick={() => toggleSortDir(item.field, 'asc')}
+            >
+              <Icon name="arrow-up" size={16} />
+            </button>
+            <button
+              type="button"
+              class="dir-btn"
+              class:on={sortDraft.includes(`${item.field}_desc`)}
+              title="По убыванию"
+              aria-label={`${item.label}: по убыванию`}
+              onclick={() => toggleSortDir(item.field, 'desc')}
+            >
+              <Icon name="arrow-down" size={16} />
+            </button>
+          </div>
         {/each}
       </div>
       <div class="modal-actions">
