@@ -145,7 +145,7 @@
   const pageItems = $derived(buildPageItems(Math.min(page, pages), pages));
 
   $effect(() => {
-    if (page > pages) {
+    if (!loading && page > pages) {
       page = pages;
       persist();
     }
@@ -175,6 +175,7 @@
       }
 
       items = data;
+      error = '';
     } catch (cause) {
       if (seq === loadSeq && !silent) {
         error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить склады';
@@ -212,6 +213,10 @@
 
   function sortIndex(field: string): number {
     return sort.split(',').findIndex((term) => term.startsWith(`${field}_`)) + 1;
+  }
+
+  function sortDraftIndex(field: string): number {
+    return sortDraft.findIndex((term) => term.startsWith(`${field}_`)) + 1;
   }
 
   function headerSort(field: string): void {
@@ -578,9 +583,9 @@
   </p>
   <div class="sort-list">
     {#each sortFields as column (column.field)}
-      <div class="sort-row" class:active={sortIndex(column.field) > 0}>
-        {#if sortIndex(column.field) > 0}
-          <span class="sort-order">{sortIndex(column.field)}</span>
+      <div class="sort-row" class:active={sortDraftIndex(column.field) > 0}>
+        {#if sortDraftIndex(column.field) > 0}
+          <span class="sort-order">{sortDraftIndex(column.field)}</span>
         {/if}
         <span class="sort-row-label">{column.label}</span>
         <button

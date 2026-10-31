@@ -45,6 +45,12 @@
   });
 
   $effect(() => {
+    if (!auth.isAuthenticated && appSettings.loadedFor !== null) {
+      appSettings.reset();
+    }
+  });
+
+  $effect(() => {
     if (auth.isAuthenticated && appSettings.loadedFor !== auth.user?.id) {
       void appSettings.load();
     }

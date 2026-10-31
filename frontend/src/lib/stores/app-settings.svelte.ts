@@ -93,6 +93,12 @@ class AppSettingsStore {
 
     this.loading = true;
 
+    const safetyTimer = setTimeout(() => {
+      if (this.loadedFor !== userId) {
+        this.loadedFor = userId;
+      }
+    }, 5000);
+
     try {
       const data = await apiRequest<AppSettingsResponse>('/settings/app', { auth: true });
       this.salesEnabled = Boolean(data.sales_enabled);
@@ -121,6 +127,7 @@ class AppSettingsStore {
       // служебная настройка: интерфейс не блокируем при сбое загрузки
       this.loadedFor = userId;
     } finally {
+      clearTimeout(safetyTimer);
       this.loading = false;
     }
   }

@@ -36,11 +36,12 @@
     class="icon-trigger"
     class:active={count > 0}
     title="Фильтры"
-    aria-label="Фильтры"
+    aria-label={count > 0 ? `Фильтры, активно: ${count}` : 'Фильтры'}
+    aria-haspopup="dialog"
     onclick={openModal}
   >
     <Icon name="filter" size={16} />
-    {#if count > 0}<span class="badge">{count}</span>{/if}
+    {#if count > 0}<span class="badge" aria-hidden="true">{count}</span>{/if}
   </button>
 {:else}
   <Button variant="ghost" onclick={openModal}>

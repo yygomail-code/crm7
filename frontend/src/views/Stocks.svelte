@@ -370,7 +370,7 @@
         const valid = new Set(warehouses.map((item) => item.id));
         const preferred = initialWarehouseIds.filter((id) => valid.has(id));
 
-        await setWarehouses(preferred.length > 0 ? preferred : warehouses.map((item) => item.id));
+        await setWarehouses(preferred.length > 0 ? preferred : warehouses.map((item) => item.id), false);
       }
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить склады';
@@ -379,9 +379,13 @@
     }
   }
 
-  async function setWarehouses(ids: number[]): Promise<void> {
+  async function setWarehouses(ids: number[], resetPage = true): Promise<void> {
     selectedIds = [...ids].sort((a, b) => a - b);
-    page = 1;
+
+    if (resetPage) {
+      page = 1;
+    }
+
     query = searchInput.trim();
     saveStockFilters();
     void refreshCounts();
@@ -668,6 +672,7 @@
 
   async function loadLevels(silent = false): Promise<void> {
     if (selectedIds.length === 0 || groupFilterEmpty) {
+      ++loadSeq;
       levels = [];
       total = 0;
       return;
@@ -925,12 +930,14 @@
             class="sort-button"
             class:active={selectedIds.length !== warehouses.length}
             title="Склад"
-            aria-label="Выбрать склад"
+            aria-label={selectedIds.length !== warehouses.length
+              ? `Выбрать склад, выбрано: ${selectedIds.length}`
+              : 'Выбрать склад'}
             onclick={openWarehouse}
           >
             <Icon name="stocks" size={16} />
             {#if selectedIds.length !== warehouses.length}
-              <span class="icon-badge">{selectedIds.length}</span>
+              <span class="icon-badge" aria-hidden="true">{selectedIds.length}</span>
             {/if}
           </button>
         {/if}
@@ -1292,6 +1299,7 @@
                 type="button"
                 class="status-opt"
                 class:on={statusDraft === value}
+                aria-pressed={statusDraft === value}
                 onclick={() => (statusDraft = value)}
               >
                 {label}

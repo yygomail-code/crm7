@@ -18,7 +18,7 @@
   import Modal from '../lib/components/ui/Modal.svelte';
   import SearchInput from '../lib/components/ui/SearchInput.svelte';
   import Spinner from '../lib/components/ui/Spinner.svelte';
-  import { clearFilters, countActive, loadFilters, saveFilters } from '../lib/filters';
+  import { countActive, loadFilters, saveFilters } from '../lib/filters';
   import { formatDateTime } from '../lib/format';
   import { buildPageItems } from '../lib/pagination';
   import { clampPeriod, defaultPeriod, todayIso } from '../lib/period';
@@ -31,6 +31,7 @@
     to: defaultPeriod().to,
     sort: 'created_desc',
     view: 'list',
+    per_page: 20,
     q: '',
     page: 1
   };
@@ -54,7 +55,7 @@
   let filters = $state({ ...initialFilters });
   let draft = $state({ ...initialFilters });
   let page = $state(typeof initialFilters.page === 'number' && initialFilters.page > 0 ? initialFilters.page : 1);
-  let perPage = $state(20);
+  let perPage = $state(perPageOptions.includes(Number(initialFilters.per_page)) ? Number(initialFilters.per_page) : 20);
   let jumpPage = $state<number | null>(null);
   let search = $state(String(initialFilters.q ?? ''));
   let searchInput = $state(String(initialFilters.q ?? ''));
@@ -142,18 +143,22 @@
   }
 
   function persist(): void {
-    saveFilters('requests', { ...filters, view: viewMode, q: search, page });
+    saveFilters('requests', { ...filters, view: viewMode, per_page: perPage, q: search, page });
   }
 
   function resetFilters(): void {
     const period = defaultPeriod();
-    const next = { ...filterDefaults, from: period.from, to: period.to };
 
-    draft = { ...next };
-    filters = { ...next };
-    clearFilters('requests');
+    draft = { ...draft, status: '', scope: '', warehouse: 0, from: period.from, to: period.to };
+    filters = { ...filters, status: '', scope: '', warehouse: 0, from: period.from, to: period.to };
     persist();
     void load(true);
+  }
+
+  function resetFilterDraft(): void {
+    const period = defaultPeriod();
+
+    draft = { ...draft, status: '', scope: '', warehouse: 0, from: period.from, to: period.to };
   }
 
   function resetFiltersAndSearch(): void {
@@ -187,6 +192,10 @@
     return sortTerms().findIndex((term) => term === field || term.startsWith(`${field}_`)) + 1;
   }
 
+  function sortDraftIndex(field: string): number {
+    return sortDraft.findIndex((term) => term.startsWith(`${field}_`)) + 1;
+  }
+
   function sortTerm(field: string): 'asc' | 'desc' | null {
     const terms = sortTerms();
 
@@ -206,12 +215,15 @@
     const asc = `${field}_asc`;
     const desc = `${field}_desc`;
     const isAsc = (term: string): boolean => term === asc || term === field;
+    const isDefault = terms.length === 1 && terms[0] === filterDefaults.sort;
     let next: string[];
 
     if (terms.some(isAsc)) {
       next = terms.map((term) => (isAsc(term) ? desc : term));
     } else if (terms.includes(desc)) {
       next = terms.filter((term) => term !== desc);
+    } else if (isDefault) {
+      next = [asc];
     } else {
       next = [...terms, asc];
     }
@@ -390,12 +402,17 @@
   }
 </script>
 
-<section class="page">
+<section class="page page-wide">
   {#snippet headCell(className: string, label: string, field: string)}
     <button
       type="button"
       class="head-cell {className}"
       class:active={sortTerm(field) !== null}
+      aria-label={sortTerm(field) === 'asc'
+        ? `${label}: по возрастанию`
+        : sortTerm(field) === 'desc'
+          ? `${label}: по убыванию`
+          : `${label}: сортировать`}
       onclick={() => headerSort(field)}
     >
       <span class="head-label">{label}</span>
@@ -450,7 +467,7 @@
         count={countActive(filters, filterCountDefaults)}
         onopen={() => (draft = { ...filters })}
         onapply={applyFilterDraft}
-        onreset={resetFilters}
+        onreset={resetFilterDraft}
       >
         <label class="filter-field">
           <span>Статус</span>
@@ -515,11 +532,11 @@
         class:active={draftCount > 0}
         class:has-badge={draftCount > 0}
         title="Черновики заявок"
-        aria-label="Черновики заявок"
+        aria-label={draftCount > 0 ? `Черновики заявок, ${draftCount}` : 'Черновики заявок'}
         onclick={() => void openDrafts()}
       >
         <Icon name="requests" size={16} />
-        {#if draftCount > 0}<span class="icon-badge">{draftCount}</span>{/if}
+        {#if draftCount > 0}<span class="icon-badge" aria-hidden="true">{draftCount}</span>{/if}
       </button>
 
       <button
@@ -587,6 +604,7 @@
               <span class="cell col-client">{item.client.name}</span>
             {/if}
             <span class="cell col-manager">
+              <span class="cell-label">менеджер: </span>
               {#if item.manager}
                 {item.manager.name}
               {:else}
@@ -594,7 +612,7 @@
               {/if}
             </span>
             <span class="cell col-count">
-              {#if viewMode === 'tiles' && item.items_count > 0}позиций: {/if}{item.items_count}
+              <span class="cell-label">позиций: </span>{item.items_count}
             </span>
             <span class="cell col-status">
               <span class="status-text" style={`color: ${item.status.color}`}>{item.status.title}</span>
@@ -691,9 +709,9 @@
     <div class="sort-list">
       {#each sortFields as column (column.field)}
         {#if !column.staffOnly || isStaff}
-          <div class="sort-row" class:active={sortIndex(column.field) > 0}>
-            {#if sortIndex(column.field) > 0}
-              <span class="sort-order">{sortIndex(column.field)}</span>
+          <div class="sort-row" class:active={sortDraftIndex(column.field) > 0}>
+            {#if sortDraftIndex(column.field) > 0}
+              <span class="sort-order">{sortDraftIndex(column.field)}</span>
             {/if}
             <span class="sort-row-label">{column.label}</span>
             <button
@@ -1080,6 +1098,14 @@
     font-size: 14px;
   }
 
+  .cell-label {
+    display: none;
+  }
+
+  .levels.tiles .cell-label {
+    display: inline;
+  }
+
   .levels.tiles .card {
     display: grid;
     grid-template-columns: auto auto auto minmax(0, 1fr);
@@ -1142,7 +1168,19 @@
     font-size: 13px;
   }
 
-  @media (min-width: 900px) {
+  @media (max-width: 559.98px) {
+    .levels.tiles .card {
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        'number date'
+        'subject subject'
+        'status overdue'
+        'client manager'
+        'count count';
+    }
+  }
+
+  @media (min-width: 1024px) {
     .levels-head {
       position: sticky;
       top: 0;
@@ -1284,9 +1322,17 @@
       white-space: nowrap;
       color: var(--muted);
     }
+
+    .levels:not(.tiles) {
+      border-top: none;
+    }
   }
 
-  @media (max-width: 899.98px) {
+  @media (max-width: 1023.98px) {
+    .levels:not(.tiles) .cell-label {
+      display: inline;
+    }
+
     .levels:not(.tiles) .card {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
