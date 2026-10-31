@@ -713,7 +713,9 @@
               <span class="cell col-number number">{item.number}</span>
               <span class="cell col-subject subject">{item.subject}</span>
               {#if isStaff}
-                <span class="cell col-client">{item.client.name}</span>
+                <span class="cell col-client">
+                  <span class="cell-label">клиент: </span>{item.client.name}
+                </span>
               {/if}
               <span class="cell col-manager">
                 <span class="cell-label">менеджер: </span>
@@ -729,7 +731,7 @@
               <span class="cell col-status">
                 <span class="status-text" style={`color: ${item.status.color}`}>{item.status.title}</span>
               </span>
-              <span class="cell col-overdue" class:empty={!item.is_overdue}>
+              <span class="cell col-overdue" class:is-empty={!item.is_overdue}>
                 {#if item.is_overdue}<span class="overdue">Просрочена</span>{:else}—{/if}
               </span>
               <span class="cell col-date date">{formatDateTime(item.created_at)}</span>
@@ -1424,13 +1426,13 @@
     display: none;
   }
 
-  @media (min-width: 1200px) {
+  @media (min-width: 1280px) {
     .levels-head {
       position: sticky;
       top: 0;
       z-index: 2;
       display: grid;
-      grid-template-columns: 110px minmax(0, 1.6fr) minmax(0, 1fr) 150px 80px 180px 120px 150px;
+      grid-template-columns: 140px minmax(0, 1.6fr) minmax(0, 1fr) 140px 110px 180px 120px 140px;
       align-items: stretch;
       padding: 0;
       background: var(--fill-tertiary);
@@ -1442,7 +1444,7 @@
     }
 
     .levels-head.compact {
-      grid-template-columns: 110px minmax(0, 1.6fr) 150px 80px 180px 120px 150px;
+      grid-template-columns: 140px minmax(0, 1.6fr) 140px 110px 180px 120px 140px;
     }
 
     .head-cell {
@@ -1521,7 +1523,7 @@
 
     .levels:not(.tiles) .card {
       display: grid;
-      grid-template-columns: 110px minmax(0, 1.6fr) minmax(0, 1fr) 150px 80px 180px 120px 150px;
+      grid-template-columns: 140px minmax(0, 1.6fr) minmax(0, 1fr) 140px 110px 180px 120px 140px;
       align-items: center;
       gap: var(--space-3);
       padding: 12px var(--space-4);
@@ -1532,7 +1534,7 @@
     }
 
     .levels:not(.tiles).compact .card {
-      grid-template-columns: 110px minmax(0, 1.6fr) 150px 80px 180px 120px 150px;
+      grid-template-columns: 140px minmax(0, 1.6fr) 140px 110px 180px 120px 140px;
     }
 
     .levels:not(.tiles) .card:last-child {
@@ -1572,7 +1574,7 @@
     }
   }
 
-  @media (max-width: 1199.98px) {
+  @media (max-width: 1279.98px) {
     .levels:not(.tiles) .cell-label {
       display: inline;
     }
@@ -1584,6 +1586,7 @@
         'number date'
         'subject subject'
         'status overdue'
+        'client client'
         'manager count';
       align-items: baseline;
       gap: 4px var(--space-3);
@@ -1630,6 +1633,15 @@
     }
 
     .levels:not(.tiles) .col-client {
+      grid-area: client;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .levels:not(.tiles) .col-overdue.is-empty {
       display: none;
     }
   }
