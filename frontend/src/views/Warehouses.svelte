@@ -175,7 +175,10 @@
       }
 
       items = data;
-      error = '';
+
+      if (!silent) {
+        error = '';
+      }
     } catch (cause) {
       if (seq === loadSeq && !silent) {
         error = cause instanceof ApiError ? cause.message : 'Не удалось загрузить склады';

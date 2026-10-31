@@ -16,6 +16,12 @@ class FilterPrefsStore {
    * чтобы они были доступны синхронно и переносились между устройствами/сессиями.
    */
   async load(userId: number): Promise<void> {
+    const safetyTimer = setTimeout(() => {
+      if (this.loadedFor !== userId) {
+        this.loadedFor = userId;
+      }
+    }, 5000);
+
     try {
       const data = await apiRequest<FiltersResponse>('/preferences/filters', { auth: true });
 
@@ -29,6 +35,7 @@ class FilterPrefsStore {
     } catch {
       // офлайн/сбой — работаем на локальной копии
     } finally {
+      clearTimeout(safetyTimer);
       this.loadedFor = userId;
     }
   }

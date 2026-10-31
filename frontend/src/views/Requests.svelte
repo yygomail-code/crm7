@@ -1178,9 +1178,19 @@
         'client manager'
         'count count';
     }
+
+    .levels.tiles.compact .card {
+      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-areas:
+        'number date'
+        'subject subject'
+        'status overdue'
+        'manager manager'
+        'count count';
+    }
   }
 
-  @media (min-width: 1024px) {
+  @media (min-width: 1200px) {
     .levels-head {
       position: sticky;
       top: 0;
@@ -1328,7 +1338,7 @@
     }
   }
 
-  @media (max-width: 1023.98px) {
+  @media (max-width: 1199.98px) {
     .levels:not(.tiles) .cell-label {
       display: inline;
     }

@@ -183,6 +183,7 @@ class AppSettingsStore {
     this.substitutionsEnabled = true;
     this.managerAssignEnabled = true;
     this.warehousesEnabled = true;
+    this.reportsEnabled = true;
     this.singleName = 'Основной склад';
     this.appTitle = 'CRM7';
     this.clientLabel = 'Клиент';
@@ -190,6 +191,7 @@ class AppSettingsStore {
     this.photoFit = 'contain';
     this.demoMode = false;
     this.loadedFor = null;
+    this.loading = false;
   }
 }
 

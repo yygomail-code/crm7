@@ -675,6 +675,7 @@
       ++loadSeq;
       levels = [];
       total = 0;
+      loadingLevels = false;
       return;
     }
 
