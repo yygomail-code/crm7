@@ -1657,8 +1657,7 @@
     cursor: pointer;
   }
 
-  .sort-option input[type='checkbox'],
-  .sort-option input[type='radio'] {
+  .sort-option input[type='checkbox'] {
     width: 16px;
     height: 16px;
     margin: 0;
