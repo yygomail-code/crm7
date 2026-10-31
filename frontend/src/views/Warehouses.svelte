@@ -1126,6 +1126,10 @@
       justify-content: flex-end;
     }
 
+    .levels-head .col-positions .sort-badge {
+      order: -1;
+    }
+
     .levels:not(.tiles) {
       border-top: none;
       border-radius: 0 0 var(--radius-md) var(--radius-md);

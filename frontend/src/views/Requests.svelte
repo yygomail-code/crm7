@@ -1582,6 +1582,12 @@
       text-align: right;
     }
 
+    .levels-head .col-count .sort-ind,
+    .levels-head .col-overdue .sort-ind,
+    .levels-head .col-date .sort-ind {
+      order: -1;
+    }
+
     .levels:not(.tiles) {
       gap: 0;
       background: var(--surface);

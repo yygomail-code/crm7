@@ -2468,6 +2468,11 @@
       justify-content: flex-end;
     }
 
+    .levels-head .col-stock .sort-badge,
+    .levels-head .col-price .sort-badge {
+      order: -1;
+    }
+
     .levels:not(.tiles) {
       border-top: none;
       border-radius: 0 0 var(--radius-md) var(--radius-md);
