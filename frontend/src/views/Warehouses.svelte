@@ -52,9 +52,19 @@
     view: 'list',
     per_page: 20,
     query: '',
-    page: 1
+    page: 1,
+    active: 'all'
   };
   const initialWarehouseFilters = loadFilters('warehouses', warehouseFilterDefaults);
+
+  const initialStatus = String(initialWarehouseFilters.active ?? 'all');
+  let statusActive = $state(initialStatus !== 'inactive');
+  let statusInactive = $state(initialStatus !== 'active');
+  const activeFilter = $derived(
+    statusActive && !statusInactive ? 'active' : statusInactive && !statusActive ? 'inactive' : 'all'
+  );
+  let statusActiveDraft = $state(true);
+  let statusInactiveDraft = $state(true);
 
   let query = $state(String(initialWarehouseFilters.query));
   let searchInput = $state(String(initialWarehouseFilters.query));
@@ -103,13 +113,25 @@
 
   const emailAllowed = $derived(appSettings.emailExportEnabled && appSettings.mailConfigured);
 
-  const filtered = $derived(
-    query.trim() === ''
-      ? items
-      : items.filter((item) =>
-          `${item.name} ${item.address ?? ''}`.toLowerCase().includes(query.trim().toLowerCase())
-        )
-  );
+  const filtered = $derived.by(() => {
+    const term = query.trim().toLowerCase();
+
+    return items.filter((item) => {
+      if (activeFilter === 'active' && !item.active) {
+        return false;
+      }
+
+      if (activeFilter === 'inactive' && item.active) {
+        return false;
+      }
+
+      if (term === '') {
+        return true;
+      }
+
+      return `${item.name} ${item.address ?? ''}`.toLowerCase().includes(term);
+    });
+  });
 
   const sorted = $derived.by(() => {
     const terms = sort.split(',').filter((term) => term !== '');
@@ -206,7 +228,8 @@
       view: viewMode,
       per_page: perPage,
       query,
-      page
+      page,
+      active: activeFilter
     });
   }
 
@@ -322,12 +345,41 @@
 
   function openView(): void {
     viewDraft = viewMode;
+    statusActiveDraft = statusActive;
+    statusInactiveDraft = statusInactive;
     viewOpen = true;
   }
 
+  function toggleStatusDraft(kind: 'active' | 'inactive'): void {
+    if (kind === 'active') {
+      if (statusActiveDraft && !statusInactiveDraft) {
+        return;
+      }
+
+      statusActiveDraft = !statusActiveDraft;
+      return;
+    }
+
+    if (statusInactiveDraft && !statusActiveDraft) {
+      return;
+    }
+
+    statusInactiveDraft = !statusInactiveDraft;
+  }
+
   function applyView(): void {
+    const statusChanged =
+      statusActiveDraft !== statusActive || statusInactiveDraft !== statusInactive;
+
     viewMode = viewDraft;
     viewOpen = false;
+
+    if (statusChanged) {
+      statusActive = statusActiveDraft;
+      statusInactive = statusInactiveDraft;
+      page = 1;
+    }
+
     persist();
   }
 
@@ -716,6 +768,31 @@
       <input type="radio" name="wh-view" value="tiles" bind:group={viewDraft} />
       Плитками
     </label>
+  </div>
+  <div class="sort-status">
+    <span class="sort-status-label">Статус:</span>
+    <div class="status-opts">
+      <button
+        type="button"
+        class="status-opt"
+        class:on={statusActiveDraft}
+        aria-pressed={statusActiveDraft}
+        disabled={statusActiveDraft && !statusInactiveDraft}
+        onclick={() => toggleStatusDraft('active')}
+      >
+        Активированные
+      </button>
+      <button
+        type="button"
+        class="status-opt"
+        class:on={statusInactiveDraft}
+        aria-pressed={statusInactiveDraft}
+        disabled={statusInactiveDraft && !statusActiveDraft}
+        onclick={() => toggleStatusDraft('inactive')}
+      >
+        Деактивированные
+      </button>
+    </div>
   </div>
   <div class="modal-actions">
     <Button variant="ghost" onclick={() => (viewOpen = false)}>Отмена</Button>
@@ -1382,6 +1459,62 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-3);
+  }
+
+  .sort-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-secondary);
+  }
+
+  .sort-status-label {
+    font-size: 14px;
+    color: var(--text-description);
+  }
+
+  .status-opts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .status-opt {
+    padding: 0 12px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-description);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+
+  .status-opt:hover:not(:disabled) {
+    border-color: var(--primary-hover);
+    color: var(--primary-hover);
+  }
+
+  .status-opt.on {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #fff;
+    font-weight: 500;
+  }
+
+  .status-opt.on:hover:not(:disabled) {
+    border-color: var(--primary-hover);
+    background: var(--primary-hover);
+    color: #fff;
+  }
+
+  .status-opt:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
   }
 
   .radio,
