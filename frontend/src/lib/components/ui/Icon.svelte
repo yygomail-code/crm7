@@ -16,6 +16,7 @@
   import FileTextOutlined from '@ant-design/icons-svg/es/asn/FileTextOutlined';
   import FilterOutlined from '@ant-design/icons-svg/es/asn/FilterOutlined';
   import GroupOutlined from '@ant-design/icons-svg/es/asn/GroupOutlined';
+  import HolderOutlined from '@ant-design/icons-svg/es/asn/HolderOutlined';
   import ImportOutlined from '@ant-design/icons-svg/es/asn/ImportOutlined';
   import InfoCircleOutlined from '@ant-design/icons-svg/es/asn/InfoCircleOutlined';
   import MessageOutlined from '@ant-design/icons-svg/es/asn/MessageOutlined';
@@ -60,6 +61,7 @@
     export: DownloadOutlined,
     filter: FilterOutlined,
     group: GroupOutlined,
+    holder: HolderOutlined,
     help: QuestionCircleOutlined,
     import: ImportOutlined,
     info: InfoCircleOutlined,
