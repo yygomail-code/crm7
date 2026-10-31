@@ -26,7 +26,7 @@
 
   const filterDefaults = {
     status: '',
-    scope: '',
+    scopes: [] as string[],
     warehouses: [] as number[],
     from: defaultPeriod().from,
     to: defaultPeriod().to,
@@ -38,9 +38,14 @@
   };
 
   const filterCountDefaults = {
-    status: filterDefaults.status,
-    scope: filterDefaults.scope
+    status: filterDefaults.status
   };
+
+  const scopeOptions = [
+    { value: 'none', label: 'Без менеджера' },
+    { value: 'mine', label: 'В работе у меня' },
+    { value: 'others', label: 'В работе у других' }
+  ];
 
   const perPageOptions = [20, 50, 100];
 
@@ -160,8 +165,8 @@
   function resetFilters(): void {
     const period = defaultPeriod();
 
-    draft = { ...draft, status: '', scope: '', warehouses: [], from: period.from, to: period.to };
-    filters = { ...filters, status: '', scope: '', warehouses: [], from: period.from, to: period.to };
+    draft = { ...draft, status: '', scopes: [], warehouses: [], from: period.from, to: period.to };
+    filters = { ...filters, status: '', scopes: [], warehouses: [], from: period.from, to: period.to };
     persist();
     void load(true);
   }
@@ -169,7 +174,7 @@
   function resetFilterDraft(): void {
     const period = defaultPeriod();
 
-    draft = { ...draft, status: '', scope: '', warehouses: [], from: period.from, to: period.to };
+    draft = { ...draft, status: '', scopes: [], warehouses: [], from: period.from, to: period.to };
   }
 
   function resetFiltersAndSearch(): void {
@@ -351,17 +356,30 @@
     viewOpen = true;
   }
 
+  function toggleScopeDraft(value: string): void {
+    draft.scopes = draft.scopes.includes(value)
+      ? draft.scopes.filter((item) => item !== value)
+      : [...draft.scopes, value];
+  }
+
   function applyView(): void {
     viewOpen = false;
 
     const period = clampPeriod(draft.from, draft.to);
-    const periodChanged = period.from !== filters.from || period.to !== filters.to;
+    const nextScopes = [...draft.scopes].sort();
+    const currentScopes = [...filters.scopes].sort();
+    const filtersChanged =
+      period.from !== filters.from ||
+      period.to !== filters.to ||
+      nextScopes.length !== currentScopes.length ||
+      nextScopes.some((value, index) => value !== currentScopes[index]);
 
     viewMode = viewDraft;
 
-    if (periodChanged) {
+    if (filtersChanged) {
       filters.from = period.from;
       filters.to = period.to;
+      filters.scopes = nextScopes;
       persist();
       void load(true);
       return;
@@ -383,7 +401,7 @@
     try {
       const data = await listRequests({
         status: filters.status,
-        manager_scope: filters.scope || undefined,
+        manager_scopes: filters.scopes.length > 0 ? filters.scopes : undefined,
         q: search,
         warehouse_ids: filters.warehouses.length > 0 ? filters.warehouses : undefined,
         from: filters.from,
@@ -578,18 +596,6 @@
             {/each}
           </select>
         </label>
-
-        {#if isStaff}
-          <label class="filter-field">
-            <span>Менеджер</span>
-            <select bind:value={draft.scope}>
-              <option value="">Все заявки</option>
-              <option value="none">Без менеджера</option>
-              <option value="mine">В работе у меня</option>
-              <option value="others">В работе у других менеджеров</option>
-            </select>
-          </label>
-        {/if}
       </FiltersModal>
 
       {#if warehouses.length > 0}
@@ -714,7 +720,7 @@
             <span class="cell col-status">
               <span class="status-text" style={`color: ${item.status.color}`}>{item.status.title}</span>
             </span>
-            <span class="cell col-overdue">
+            <span class="cell col-overdue" class:empty={!item.is_overdue}>
               {#if item.is_overdue}<span class="overdue">Просрочена</span>{:else}—{/if}
             </span>
             <span class="cell col-date date">{formatDateTime(item.created_at)}</span>
@@ -905,6 +911,25 @@
         <span>Плитками</span>
       </label>
     </div>
+
+    {#if isStaff}
+      <div class="sort-status">
+        <span class="sort-status-label">Менеджер:</span>
+        <div class="status-opts">
+          {#each scopeOptions as option (option.value)}
+            <button
+              type="button"
+              class="status-opt"
+              class:on={draft.scopes.includes(option.value)}
+              aria-pressed={draft.scopes.includes(option.value)}
+              onclick={() => toggleScopeDraft(option.value)}
+            >
+              {option.label}
+            </button>
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     <div class="view-period">
       <label class="filter-field">
@@ -1267,20 +1292,22 @@
 
   .levels.tiles .card {
     display: grid;
-    grid-template-columns: auto auto auto minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      'number status overdue date'
-      'subject subject subject subject'
-      'client manager count count';
+      'number status date'
+      'subject subject subject'
+      'overdue overdue overdue'
+      'client manager count';
     align-items: center;
     gap: var(--space-1) var(--space-3);
   }
 
   .levels.tiles.compact .card {
     grid-template-areas:
-      'number status overdue date'
-      'subject subject subject subject'
-      'manager count count count';
+      'number status date'
+      'subject subject subject'
+      'overdue overdue overdue'
+      'manager count count';
   }
 
   .levels.tiles .col-number {
@@ -1292,6 +1319,12 @@
     display: flex;
     align-items: center;
     gap: var(--space-1);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .levels.tiles .status-text {
+    white-space: normal;
   }
 
   .levels.tiles .col-date {
@@ -1302,7 +1335,10 @@
 
   .levels.tiles .col-overdue {
     grid-area: overdue;
-    justify-self: end;
+  }
+
+  .levels.tiles .col-overdue.empty {
+    display: none;
   }
 
   .levels.tiles .col-subject {
@@ -1808,6 +1844,57 @@
     gap: var(--space-3);
     max-height: 340px;
     overflow-y: auto;
+  }
+
+  .sort-status {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-secondary);
+  }
+
+  .sort-status-label {
+    font-size: 14px;
+    color: var(--text-description);
+  }
+
+  .status-opts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  .status-opt {
+    padding: 0 12px;
+    height: 28px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-description);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+
+  .status-opt:hover:not(:disabled) {
+    border-color: var(--primary-hover);
+    color: var(--primary-hover);
+  }
+
+  .status-opt.on {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #fff;
+    font-weight: 500;
+  }
+
+  .status-opt.on:hover:not(:disabled) {
+    border-color: var(--primary-hover);
+    background: var(--primary-hover);
+    color: #fff;
   }
 
   .view-period {

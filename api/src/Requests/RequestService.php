@@ -285,6 +285,12 @@ final class RequestService
         $perPage = min(100, max(5, (int) ($filters['per_page'] ?? 20)));
 
         $managerScope = (string) ($filters['manager_scope'] ?? '');
+        $managerScopesRaw = $filters['manager_scopes'] ?? [];
+        $managerScopesRaw = is_array($managerScopesRaw) ? $managerScopesRaw : explode(',', (string) $managerScopesRaw);
+        $managerScopes = array_values(array_intersect(
+            array_map(static fn ($value): string => trim((string) $value), $managerScopesRaw),
+            ['none', 'mine', 'others']
+        ));
         $state = (string) ($filters['state'] ?? '');
         $warehouseIdsRaw = $filters['warehouse_ids'] ?? [];
         $warehouseIdsRaw = is_array($warehouseIdsRaw) ? $warehouseIdsRaw : explode(',', (string) $warehouseIdsRaw);
@@ -297,6 +303,7 @@ final class RequestService
             'status' => trim((string) ($filters['status'] ?? '')),
             'q' => trim((string) ($filters['q'] ?? '')),
             'manager_scope' => in_array($managerScope, ['all', 'none', 'mine', 'others'], true) ? $managerScope : '',
+            'manager_scopes' => $managerScopes,
             'manager_scope_user' => (int) $user['ID'],
             'manager_id' => $filters['manager_id'] ?? null,
             'client_id' => $filters['client_id'] ?? null,

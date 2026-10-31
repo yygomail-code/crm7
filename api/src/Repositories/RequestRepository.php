@@ -223,18 +223,38 @@ final class RequestRepository
             array_push($params, $like, $like, $like, $like, $like);
         }
 
-        $managerScope = (string) ($filters['manager_scope'] ?? '');
+        $managerScopes = is_array($filters['manager_scopes'] ?? null) ? $filters['manager_scopes'] : [];
+        $managerScopes = array_values(array_intersect(
+            array_map(static fn ($value): string => (string) $value, $managerScopes),
+            ['none', 'mine', 'others']
+        ));
         $scopeUserId = (int) ($filters['manager_scope_user'] ?? 0);
 
-        if ($scopeUserId > 0) {
-            if ($managerScope === 'none') {
-                $where[] = 'r.manager_id IS NULL AND s.is_final = 0';
-            } elseif ($managerScope === 'mine') {
-                $where[] = 'r.manager_id = ?';
-                $params[] = $scopeUserId;
-            } elseif ($managerScope === 'others') {
-                $where[] = 'r.manager_id IS NOT NULL AND r.manager_id <> ?';
-                $params[] = $scopeUserId;
+        if ($managerScopes === []) {
+            $managerScope = (string) ($filters['manager_scope'] ?? '');
+
+            if ($managerScope !== '') {
+                $managerScopes = [$managerScope];
+            }
+        }
+
+        if ($scopeUserId > 0 && $managerScopes !== []) {
+            $scopeConditions = [];
+
+            foreach ($managerScopes as $managerScope) {
+                if ($managerScope === 'none') {
+                    $scopeConditions[] = '(r.manager_id IS NULL AND s.is_final = 0)';
+                } elseif ($managerScope === 'mine') {
+                    $scopeConditions[] = 'r.manager_id = ?';
+                    $params[] = $scopeUserId;
+                } elseif ($managerScope === 'others') {
+                    $scopeConditions[] = '(r.manager_id IS NOT NULL AND r.manager_id <> ?)';
+                    $params[] = $scopeUserId;
+                }
+            }
+
+            if ($scopeConditions !== []) {
+                $where[] = '(' . implode(' OR ', $scopeConditions) . ')';
             }
         }
 

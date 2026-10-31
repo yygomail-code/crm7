@@ -34,6 +34,7 @@ export function addActivity(
 export interface RequestFilters {
   status?: string;
   manager_scope?: string;
+  manager_scopes?: string[];
   q?: string;
   warehouse_id?: number;
   warehouse_ids?: number[];
@@ -69,6 +70,9 @@ export function listRequests(filters: RequestFilters = {}): Promise<RequestListR
 
   if (filters.status) query.set('status', filters.status);
   if (filters.manager_scope) query.set('manager_scope', filters.manager_scope);
+  if (filters.manager_scopes && filters.manager_scopes.length > 0) {
+    query.set('manager_scopes', filters.manager_scopes.join(','));
+  }
   if (filters.q) query.set('q', filters.q);
   if (filters.warehouse_id) query.set('warehouse_id', String(filters.warehouse_id));
   if (filters.warehouse_ids && filters.warehouse_ids.length > 0) {
