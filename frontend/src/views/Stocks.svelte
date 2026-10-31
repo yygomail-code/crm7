@@ -1310,8 +1310,10 @@
       </div>
       <div class="modal-actions">
         <Button variant="ghost" onclick={() => (sortDraft = ['name_asc'])}>Сбросить</Button>
-        <Button variant="ghost" onclick={() => (sortOpen = false)}>Отмена</Button>
-        <Button onclick={applySort}>Применить</Button>
+        <div class="modal-buttons">
+          <Button variant="ghost" onclick={() => (sortOpen = false)}>Отмена</Button>
+          <Button onclick={applySort}>Применить</Button>
+        </div>
       </div>
     </Modal>
 
@@ -2159,6 +2161,13 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
+    max-height: 340px;
+    overflow-y: auto;
+  }
+
+  .sort-row.active .sort-row-label {
+    color: var(--text);
+    font-weight: 600;
   }
 
   .sort-order {
@@ -2265,9 +2274,18 @@
 
   .modal-actions {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     justify-content: flex-end;
     gap: var(--space-2);
-    margin-top: var(--space-3);
+    margin-top: var(--space-4);
+  }
+
+  .modal-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-left: auto;
   }
 
   .help-intro {

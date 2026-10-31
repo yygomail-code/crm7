@@ -699,8 +699,10 @@
   </div>
   <div class="modal-actions">
     <Button variant="ghost" onclick={() => (sortDraft = ['name_asc'])}>Сбросить</Button>
-    <Button variant="ghost" onclick={() => (sortOpen = false)}>Отмена</Button>
-    <Button onclick={applySort}>Применить</Button>
+    <div class="modal-buttons">
+      <Button variant="ghost" onclick={() => (sortOpen = false)}>Отмена</Button>
+      <Button onclick={applySort}>Применить</Button>
+    </div>
   </div>
 </Modal>
 
@@ -1281,14 +1283,23 @@
   .sort-list {
     display: flex;
     flex-direction: column;
-    gap: var(--space-2);
+    gap: 4px;
+    max-height: 340px;
+    overflow-y: auto;
   }
 
   .sort-row {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    padding: 6px 0;
+    padding: 6px 8px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+  }
+
+  .sort-row.active {
+    border-color: var(--primary-border);
+    background: var(--primary-bg);
   }
 
   .sort-row.active .sort-row-label {
@@ -1297,7 +1308,8 @@
   }
 
   .sort-row.drag-over {
-    box-shadow: 0 -2px 0 var(--primary);
+    border-color: var(--primary);
+    box-shadow: inset 0 2px 0 var(--primary);
   }
 
   .sort-drag {
@@ -1321,22 +1333,23 @@
   }
 
   .sort-row-label {
-    flex: 1 1 auto;
+    flex: 1;
     min-width: 0;
-    color: var(--text-description);
+    font-size: 14px;
   }
 
   .sort-order {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 20px;
-    height: 20px;
-    flex: 0 0 auto;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
     border-radius: 999px;
     background: var(--primary);
     color: #fff;
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 600;
   }
 
   .dir-btn {
@@ -1349,13 +1362,20 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
-    color: var(--text-description);
+    color: var(--text);
     cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+
+  .dir-btn:hover {
+    border-color: var(--primary);
+    color: var(--primary);
   }
 
   .dir-btn.on {
     border-color: var(--primary);
     color: var(--primary);
+    background: var(--primary-bg);
   }
 
   .view-options {
@@ -1402,9 +1422,18 @@
 
   .modal-actions {
     display: flex;
+    flex-wrap: wrap;
+    align-items: center;
     justify-content: flex-end;
     gap: var(--space-2);
     margin-top: var(--space-4);
+  }
+
+  .modal-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-left: auto;
   }
 
   .alert,
