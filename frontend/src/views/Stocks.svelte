@@ -1586,7 +1586,15 @@
               </span>
             {/if}
           </button>
-          <span class="levels-head-cell col-meta" aria-hidden="true"></span>
+          <span class="levels-head-cell col-meta">
+            {#if warehousesEnabled && groupsEnabled}
+              <span class="levels-head-label">Склад / группа</span>
+            {:else if warehousesEnabled}
+              <span class="levels-head-label">Склад</span>
+            {:else if groupsEnabled}
+              <span class="levels-head-label">Группа</span>
+            {/if}
+          </span>
           {#if pricesEnabled}
             <button type="button" class="levels-head-cell col-price" onclick={() => headerSort('price')}>
               <span class="levels-head-label">Цена</span>
