@@ -39,9 +39,7 @@
 
   const filterCountDefaults = {
     status: filterDefaults.status,
-    scope: filterDefaults.scope,
-    from: filterDefaults.from,
-    to: filterDefaults.to
+    scope: filterDefaults.scope
   };
 
   const perPageOptions = [20, 50, 100];
@@ -349,12 +347,26 @@
 
   function openView(): void {
     viewDraft = viewMode;
+    draft = { ...filters };
     viewOpen = true;
   }
 
   function applyView(): void {
-    viewMode = viewDraft;
     viewOpen = false;
+
+    const period = clampPeriod(draft.from, draft.to);
+    const periodChanged = period.from !== filters.from || period.to !== filters.to;
+
+    viewMode = viewDraft;
+
+    if (periodChanged) {
+      filters.from = period.from;
+      filters.to = period.to;
+      persist();
+      void load(true);
+      return;
+    }
+
     persist();
   }
 
@@ -578,15 +590,6 @@
             </select>
           </label>
         {/if}
-
-        <label class="filter-field">
-          <span>Период с</span>
-          <input type="date" bind:value={draft.from} max={draft.to} />
-        </label>
-        <label class="filter-field">
-          <span>Период по</span>
-          <input type="date" bind:value={draft.to} min={draft.from} max={todayIso()} />
-        </label>
       </FiltersModal>
 
       {#if warehouses.length > 0}
@@ -891,7 +894,7 @@
     </div>
   </Modal>
 
-  <Modal open={viewOpen} title="Вид" onclose={() => (viewOpen = false)}>
+  <Modal open={viewOpen} title="Вид и фильтры" onclose={() => (viewOpen = false)}>
     <div class="view-options">
       <label class="radio">
         <input type="radio" name="req-view" value="list" bind:group={viewDraft} />
@@ -900,6 +903,17 @@
       <label class="radio">
         <input type="radio" name="req-view" value="tiles" bind:group={viewDraft} />
         <span>Плитками</span>
+      </label>
+    </div>
+
+    <div class="view-period">
+      <label class="filter-field">
+        <span>Период с</span>
+        <input type="date" bind:value={draft.from} max={draft.to} />
+      </label>
+      <label class="filter-field">
+        <span>Период по</span>
+        <input type="date" bind:value={draft.to} min={draft.from} max={todayIso()} />
       </label>
     </div>
     <div class="modal-actions">
@@ -1794,6 +1808,36 @@
     gap: var(--space-3);
     max-height: 340px;
     overflow-y: auto;
+  }
+
+  .view-period {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border-secondary);
+  }
+
+  .filter-field {
+    display: flex;
+    flex: 1 1 160px;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--text-description);
+  }
+
+  .filter-field select,
+  .filter-field input {
+    height: 32px;
+    padding: 0 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
   }
 
   .radio {

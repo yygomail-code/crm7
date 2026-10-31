@@ -706,7 +706,7 @@
   </div>
 </Modal>
 
-<Modal open={viewOpen} title="Вид" onclose={() => (viewOpen = false)}>
+<Modal open={viewOpen} title="Вид и фильтры" onclose={() => (viewOpen = false)}>
   <div class="view-options">
     <label class="radio">
       <input type="radio" name="wh-view" value="list" bind:group={viewDraft} />
