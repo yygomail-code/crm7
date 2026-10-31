@@ -2040,21 +2040,29 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     background: var(--surface);
-    color: var(--text);
+    color: var(--text-description);
     font: inherit;
-    font-size: 14px;
+    font-size: 13px;
     cursor: pointer;
+    transition: color 0.12s ease, border-color 0.12s ease, background 0.12s ease;
   }
 
-  .status-opt:hover {
+  .status-opt:hover:not(:disabled) {
     border-color: var(--primary-hover);
     color: var(--primary-hover);
   }
 
   .status-opt.on {
     border-color: var(--primary);
-    color: var(--primary);
+    background: var(--primary);
+    color: #fff;
     font-weight: 500;
+  }
+
+  .status-opt.on:hover:not(:disabled) {
+    border-color: var(--primary-hover);
+    background: var(--primary-hover);
+    color: #fff;
   }
 
   .status-opt:disabled {
