@@ -662,8 +662,8 @@
       <button
         type="button"
         class="sort-button"
-        title="Новая заявка"
-        aria-label="Новая заявка"
+        title="Добавить заявку"
+        aria-label="Добавить заявку"
         disabled={!appSettings.salesEnabled || !auth.can('requests.create')}
         onclick={() => router.navigate('/requests/new')}
       >
