@@ -1375,7 +1375,7 @@
       </div>
     </Modal>
 
-    <Modal open={viewOpen} title="Вид" onclose={() => (viewOpen = false)}>
+    <Modal open={viewOpen} title="Вид и фильтры" onclose={() => (viewOpen = false)}>
       <div class="view-columns">
         <div class="view-column">
           <p class="sort-hint">Вид</p>
