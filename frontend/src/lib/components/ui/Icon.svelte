@@ -7,6 +7,7 @@
   import BellOutlined from '@ant-design/icons-svg/es/asn/BellOutlined';
   import CameraOutlined from '@ant-design/icons-svg/es/asn/CameraOutlined';
   import CheckCircleFilled from '@ant-design/icons-svg/es/asn/CheckCircleFilled';
+  import CheckOutlined from '@ant-design/icons-svg/es/asn/CheckOutlined';
   import CloseCircleFilled from '@ant-design/icons-svg/es/asn/CloseCircleFilled';
   import CloseOutlined from '@ant-design/icons-svg/es/asn/CloseOutlined';
   import DatabaseOutlined from '@ant-design/icons-svg/es/asn/DatabaseOutlined';
@@ -29,6 +30,7 @@
   import ShopOutlined from '@ant-design/icons-svg/es/asn/ShopOutlined';
   import ShoppingCartOutlined from '@ant-design/icons-svg/es/asn/ShoppingCartOutlined';
   import SortAscendingOutlined from '@ant-design/icons-svg/es/asn/SortAscendingOutlined';
+  import SearchOutlined from '@ant-design/icons-svg/es/asn/SearchOutlined';
   import SwapOutlined from '@ant-design/icons-svg/es/asn/SwapOutlined';
   import TableOutlined from '@ant-design/icons-svg/es/asn/TableOutlined';
   import TagsOutlined from '@ant-design/icons-svg/es/asn/TagsOutlined';
@@ -54,6 +56,7 @@
     cart: ShoppingCartOutlined,
     chat: MessageOutlined,
     'check-circle': CheckCircleFilled,
+    check: CheckOutlined,
     clients: TeamOutlined,
     close: CloseOutlined,
     'close-circle': CloseCircleFilled,
@@ -67,6 +70,7 @@
     info: InfoCircleOutlined,
     'my-reports': PieChartOutlined,
     picture: PictureOutlined,
+    search: SearchOutlined,
     plus: PlusOutlined,
     reports: BarChartOutlined,
     requests: FileTextOutlined,

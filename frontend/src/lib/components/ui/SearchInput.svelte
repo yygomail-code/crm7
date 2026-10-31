@@ -6,6 +6,7 @@
     value?: string;
     placeholder?: string;
     historyKey?: string;
+    icon?: boolean;
     onclear?: () => void;
     onpick?: () => void;
   }
@@ -14,6 +15,7 @@
     value = $bindable(''),
     placeholder = '',
     historyKey = '',
+    icon = false,
     onclear,
     onpick
   }: Props = $props();
@@ -48,7 +50,10 @@
   }
 </script>
 
-<span class="wrap">
+<span class="wrap" class:with-icon={icon}>
+  {#if icon}
+    <span class="lead"><Icon name="search" size={14} /></span>
+  {/if}
   <input
     type="search"
     bind:value
@@ -139,6 +144,20 @@
     background: var(--surface);
     outline: none;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .wrap.with-icon input {
+    padding-left: 30px;
+  }
+
+  .lead {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    display: inline-flex;
+    transform: translateY(-50%);
+    color: var(--muted);
+    pointer-events: none;
   }
 
   input:focus {

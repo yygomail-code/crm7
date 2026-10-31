@@ -712,17 +712,37 @@
               Состав заявки{#if itemRows.length > 0} — {itemRows.length}{/if}
             </span>
 
-            {#if itemRows.length > 1}
-              <select class="items-sort" bind:value={itemsSort} aria-label="Сортировка позиций">
-                {#each ITEMS_SORT_OPTIONS as option (option.value)}
-                  <option value={option.value}>{option.label}</option>
-                {/each}
-              </select>
-            {/if}
+            <div class="items-head-actions">
+              {#if itemRows.length > 1}
+                <select class="items-sort" bind:value={itemsSort} aria-label="Сортировка позиций">
+                  {#each ITEMS_SORT_OPTIONS as option (option.value)}
+                    <option value={option.value}>{option.label}</option>
+                  {/each}
+                </select>
+              {/if}
+
+              <Button
+                variant="ghost"
+                disabled={!appSettings.salesEnabled}
+                onclick={() => (pickerOpen = true)}
+              >
+                <Icon name="plus" size={14} />
+                Добавить позицию
+              </Button>
+            </div>
           </div>
 
           {#if itemRows.length === 0}
-            <p class="muted">Позиций пока нет — нажмите «Добавить позицию»</p>
+            <div class="items-empty">
+              <p class="muted">Позиций пока нет</p>
+              <Button
+                disabled={!appSettings.salesEnabled}
+                onclick={() => (pickerOpen = true)}
+              >
+                <Icon name="plus" size={14} />
+                Добавить позицию
+              </Button>
+            </div>
           {:else}
             <div class="item-rows">
               {#each sortItems(itemRows, itemsSort) as row (itemRows.indexOf(row))}
@@ -808,9 +828,6 @@
         {/if}
 
         <div class="modal-actions">
-          <Button variant="ghost" disabled={!appSettings.salesEnabled} onclick={() => (pickerOpen = true)}>
-            Добавить позицию
-          </Button>
           <div class="modal-buttons">
             {#if draftStatusText}
               <span class="draft-status">{draftStatusText}</span>
@@ -1035,9 +1052,29 @@
 
   .items-head {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: var(--space-2);
+  }
+
+  .items-head-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+
+  .items-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-5) var(--space-3);
+    border: 1px dashed var(--border);
+    border-radius: var(--radius-md);
+    text-align: center;
   }
 
   .items-sort {
